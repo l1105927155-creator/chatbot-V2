@@ -19,7 +19,7 @@ investigation are verified. Controlled QQ tests are recorded in the
 Phase 2 builds the V2-owned canonical journal. It starts with a live capture-boundary
 experiment: test OneBot self-message feedback first, then investigate an AstrBot
 unified send boundary only if platform feedback is unsuitable. Do not integrate
-DSH or MCP yet. The target runtime is an Ubuntu host.
+DSH or MCP yet.
 
 ## Phase 1: bootstrap AstrBot
 
