@@ -8,13 +8,18 @@ Before development, read:
 
 - [`PLAN.md`](PLAN.md) — architecture baseline and phased roadmap.
 - [`AGENTS.md`](AGENTS.md) — repository development constraints.
-- [`docs/phases/phase-1.md`](docs/phases/phase-1.md) — current implementation scope.
+- [`docs/phases/phase-1.md`](docs/phases/phase-1.md) — completed AstrBot baseline.
+- [`docs/phases/phase-2.md`](docs/phases/phase-2.md) — current implementation scope.
 
-Current status: **Phase 1 implemented and verified.** The pinned AstrBot
-checkout, LLM gate, deterministic command, and seven-path history investigation
-are implemented. Controlled QQ tests confirm the group/private paths in the
-[Phase 1 findings](docs/phases/phase-1-findings.md). The observed history gaps
-are inputs to the Phase 2 journal decision.
+Current status: **Phase 1 completed; Phase 2 ready for implementation.** The
+pinned AstrBot checkout, LLM gate, deterministic command, and seven-path history
+investigation are verified. Controlled QQ tests are recorded in the
+[Phase 1 findings](docs/phases/phase-1-findings.md).
+
+Phase 2 builds the V2-owned canonical journal. It starts with a live capture-boundary
+experiment: test OneBot self-message feedback first, then investigate an AstrBot
+unified send boundary only if platform feedback is unsuitable. Do not integrate
+DSH or MCP yet. The target runtime is an Ubuntu host.
 
 ## Phase 1: bootstrap AstrBot
 
@@ -67,9 +72,14 @@ setting. The remaining settings disable built-in conversation features for
 pure @-mentions and group context, and enable existing group history for
 Phase 1 coverage. A message consisting only of a wake prefix is still consumed
 before the group history hook; see the
-[Phase 1 findings](docs/phases/phase-1-findings.md). Keep the gate enabled in
-every session. Do not edit upstream AstrBot source to install V2 integration
-code.
+[Phase 1 findings](docs/phases/phase-1-findings.md).
+
+The current gate is a **Phase 1 safety mechanism**, not a permanently frozen V2
+design. Its unconditional `on_llm_request` stop also blocks future plugin-local
+LLM use. Keep it unchanged through the Phase 2 journal work unless it directly
+interferes with the capture experiment; reconsider its final scope only when a
+later phase requires selected plugin-local LLM capability. Do not edit upstream
+AstrBot source to install V2 integration code.
 
 The test plugin exposes `/v2probe` for a direct deterministic reply and
 `/v2push` to exercise `Context.send_message` back to the same conversation.
