@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Verify the pinned AstrBot baseline and the Phase 2 journal contract.
+# Verify the pinned AstrBot baseline and Phase 2/2.1 journal contracts.
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"

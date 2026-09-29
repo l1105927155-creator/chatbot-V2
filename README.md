@@ -10,14 +10,15 @@ Before development, read:
 - [`AGENTS.md`](AGENTS.md) — repository development constraints.
 - [`docs/phases/phase-1.md`](docs/phases/phase-1.md) — completed AstrBot baseline.
 - [`docs/phases/phase-2.md`](docs/phases/phase-2.md) — completed journal scope.
-- [`docs/phases/phase-2.1.md`](docs/phases/phase-2.1.md) — current ordering-contract scope.
+- [`docs/phases/phase-2.1.md`](docs/phases/phase-2.1.md) — completed ordering contract.
 
-Current status: **Phase 1 and Phase 2 completed; Phase 2.1 ready for implementation.** The pinned AstrBot baseline
+Current status: **Phases 1, 2, and 2.1 completed.** The pinned AstrBot baseline
 and V2-owned canonical journal are verified with controlled group/private QQ
-messages. Before DSH integration, Phase 2.1 must prove that `journal_id` preserves
-OneBot observation order under concurrent event handling. See the [Phase 1 findings](docs/phases/phase-1-findings.md),
+messages. Concurrent event-bus tests establish that `journal_id` preserves
+V2 capture-callback order for one client. See the [Phase 1 findings](docs/phases/phase-1-findings.md),
 [capture findings](docs/phases/phase-2-capture-findings.md), and
-[journal verification](docs/phases/phase-2-journal-findings.md).
+[journal verification](docs/phases/phase-2-journal-findings.md), and
+[ordering findings](docs/phases/phase-2.1-findings.md).
 
 The journal records OneBot inbound messages and platform-confirmed Bot
 `message_sent` feedback. DSH and MCP are not integrated yet.
@@ -152,7 +153,7 @@ The SQLite journal lives in AstrBot's ignored runtime
 `before`, and `by_message_id`. Use a `Conversation` with the V2 platform ID,
 Bot ID, and `group:<id>` or `private:<peer_qq>` key. No MCP endpoint is exposed.
 
-Run the pinned source, plugin-hook, storage, and Phase 1 regression checks:
+Run the pinned source, capture-order, storage, and Phase 1 regression checks:
 
 ```bash
 ./scripts/check-phase2.sh

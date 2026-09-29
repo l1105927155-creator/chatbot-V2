@@ -1,8 +1,9 @@
 # Phase 2.1 — Journal Ordering Contract
 
-> Status: ready for implementation  
+> Status: completed — 2026-09-29
 > Parent plan: [PLAN.md](../../PLAN.md)  
 > Input evidence: [Phase 2 journal findings](phase-2-journal-findings.md)
+> Verification: [Phase 2.1 findings](phase-2.1-findings.md)
 
 ## Goal
 

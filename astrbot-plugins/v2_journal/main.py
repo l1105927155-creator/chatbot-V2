@@ -25,11 +25,15 @@ class V2Journal(star.Star):
         data_dir = star.StarTools.get_data_dir("v2_journal")
         self.store = JournalStore(Path(data_dir) / "journal.sqlite3")
         self._write_lock = asyncio.Lock()
+        self._pending_writes: set[asyncio.Task] = set()
         self._bindings: dict[str, tuple[object, Callable]] = {}
         self.capture_errors = 0
+        self._closing = False
         self._bind_platforms()
 
     def _bind_platforms(self) -> None:
+        if self._closing:
+            return
         for platform in self.context.platform_manager.get_insts():
             metadata = platform.meta()
             if metadata.name != "aiocqhttp":
@@ -44,6 +48,13 @@ class V2Journal(star.Star):
 
             async def observe(raw, platform_id=metadata.id):
                 if raw.get("post_type") not in ("message", "message_sent"):
+                    return
+                if self._closing:
+                    self.capture_errors += 1
+                    self.logger.error(
+                        "V2 journal rejected event during shutdown platform=%s id=%s; history is incomplete",
+                        platform_id, raw.get("message_id"),
+                    )
                     return
                 try:
                     message = message_from_onebot(platform_id, raw)
@@ -75,8 +86,27 @@ class V2Journal(star.Star):
         self._bind_platforms()
 
     async def _append(self, message) -> None:
-        async with self._write_lock:
-            _row, inserted = await asyncio.to_thread(self.store.append, message)
+        # Schedule the writer before the callback's first suspension. A task
+        # cancelled while waiting for the lock must not make its row disappear.
+        task = asyncio.create_task(self._write_ordered(message))
+        self._pending_writes.add(task)
+        cancelled = False
+        try:
+            while True:
+                try:
+                    _row, inserted = await asyncio.shield(task)
+                    break
+                except asyncio.CancelledError:
+                    cancelled = True
+                    # Keep awaiting the writer even if this event task is
+                    # cancelled again. Its SQLite thread may still be active.
+                    if task.done():
+                        _row, inserted = task.result()
+                        break
+        finally:
+            self._pending_writes.discard(task)
+        if cancelled:
+            raise asyncio.CancelledError
         if not inserted:
             self.logger.debug(
                 "V2 journal duplicate %s %s %s",
@@ -85,8 +115,34 @@ class V2Journal(star.Star):
                 message.message_id,
             )
 
+    async def _write_ordered(self, message):
+        async with self._write_lock:
+            write = asyncio.create_task(asyncio.to_thread(self.store.append, message))
+            while True:
+                try:
+                    return await asyncio.shield(write)
+                except asyncio.CancelledError:
+                    # Releasing the lock before the worker thread finishes
+                    # would let a later event overtake this SQLite insert.
+                    if write.done():
+                        return write.result()
+
     async def terminate(self) -> None:
+        self._closing = True
         for client, callback in self._bindings.values():
             for event_name in ("message", "message_sent"):
                 client.unhook_before(event_name, callback)
         self._bindings.clear()
+        if self._pending_writes:
+            draining = asyncio.gather(*tuple(self._pending_writes), return_exceptions=True)
+            cancelled = False
+            while True:
+                try:
+                    await asyncio.shield(draining)
+                    break
+                except asyncio.CancelledError:
+                    cancelled = True
+                    if draining.done():
+                        break
+            if cancelled:
+                raise asyncio.CancelledError
