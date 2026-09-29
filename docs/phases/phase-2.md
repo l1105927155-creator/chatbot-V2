@@ -1,8 +1,10 @@
 # Phase 2 — Canonical Journal
 
-> Status: ready for implementation  
-> Parent plan: [PLAN.md](../../PLAN.md)  
+> Status: completed — 2026-09-29
+> Parent plan: [PLAN.md](../../PLAN.md)
 > Input evidence: [Phase 1 findings](phase-1-findings.md)
+> Verification: [capture findings](phase-2-capture-findings.md) and
+> [journal findings](phase-2-journal-findings.md)
 
 ## Goal
 

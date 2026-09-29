@@ -1,0 +1,5 @@
+name: v2_journal
+desc: Capture QQ messages in a V2-owned canonical SQLite journal
+version: 0.1.0
+author: chatbot-V2
+astrbot_version: "==4.28.2"

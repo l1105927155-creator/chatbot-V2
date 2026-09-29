@@ -9,17 +9,16 @@ Before development, read:
 - [`PLAN.md`](PLAN.md) — architecture baseline and phased roadmap.
 - [`AGENTS.md`](AGENTS.md) — repository development constraints.
 - [`docs/phases/phase-1.md`](docs/phases/phase-1.md) — completed AstrBot baseline.
-- [`docs/phases/phase-2.md`](docs/phases/phase-2.md) — current implementation scope.
+- [`docs/phases/phase-2.md`](docs/phases/phase-2.md) — completed journal scope.
 
-Current status: **Phase 1 completed; Phase 2 ready for implementation.** The
-pinned AstrBot checkout, LLM gate, deterministic command, and seven-path history
-investigation are verified. Controlled QQ tests are recorded in the
-[Phase 1 findings](docs/phases/phase-1-findings.md).
+Current status: **Phase 1 and Phase 2 completed.** The pinned AstrBot baseline
+and V2-owned canonical journal are verified with controlled group/private QQ
+messages. See the [Phase 1 findings](docs/phases/phase-1-findings.md),
+[capture findings](docs/phases/phase-2-capture-findings.md), and
+[journal verification](docs/phases/phase-2-journal-findings.md).
 
-Phase 2 builds the V2-owned canonical journal. It starts with a live capture-boundary
-experiment: test OneBot self-message feedback first, then investigate an AstrBot
-unified send boundary only if platform feedback is unsuitable. Do not integrate
-DSH or MCP yet.
+The journal records OneBot inbound messages and platform-confirmed Bot
+`message_sent` feedback. DSH and MCP are not integrated yet.
 
 ## Phase 1: bootstrap AstrBot
 
@@ -125,3 +124,39 @@ This command refuses a missing or mismatched AstrBot checkout and runs the
 bootstrap, AI gate, and history checks against the pinned version. The
 seven-path matrix and verification limits are in the
 [Phase 1 findings](docs/phases/phase-1-findings.md).
+
+## Phase 2: canonical QQ journal
+
+Link the V2 journal plugin into the isolated AstrBot runtime:
+
+```bash
+repo_root="$(pwd)"
+ln -sfn "$repo_root/astrbot-plugins/v2_journal" \
+  "$repo_root/.runtime/astrbot/data/plugins/v2_journal"
+```
+
+Include `v2_journal` in V2's `plugin_set`. Configure V2's own NapCat
+WebSocket client with `reportSelfMessage=true` and array message format.
+The V2 aiocqhttp adapter must receive that client on its own reverse
+WebSocket port. Keep `platform_settings.ignore_bot_self_message=true`: the
+journal uses aiocqhttp before hooks for ordinary inbound `message` and
+confirmed outbound `message_sent` events. This records inbound events before
+AstrBot's conversion and pipeline filters. A private
+outbound event's `target_id` identifies its peer.
+
+The SQLite journal lives in AstrBot's ignored runtime
+`data/plugin_data/v2_journal/journal.sqlite3`. The Python read API is in
+[`journal.py`](astrbot-plugins/v2_journal/journal.py): `recent`, `after`,
+`before`, and `by_message_id`. Use a `Conversation` with the V2 platform ID,
+Bot ID, and `group:<id>` or `private:<peer_qq>` key. No MCP endpoint is exposed.
+
+Run the pinned source, plugin-hook, storage, and Phase 1 regression checks:
+
+```bash
+./scripts/check-phase2.sh
+```
+
+The [capture experiment](docs/phases/phase-2-capture-findings.md) documents
+the selected boundary and its constraints. The
+[journal verification](docs/phases/phase-2-journal-findings.md) records the
+live QQ ordering, message IDs, restart check, and remaining limits.
