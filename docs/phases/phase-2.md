@@ -321,9 +321,15 @@ Phase 2 is complete only when:
 - no AstrBot core source is modified;
 - no DSH/MCP/permission architecture is implemented.
 
+## Handoff to Phase 2.1
+
+Phase 2 establishes the capture boundary and durable journal, but its findings leave high-volume concurrent ordering unverified.
+
+Before Phase 3 uses `journal_id` as a DSH cursor, complete [Phase 2.1](phase-2.1.md) and prove the ordering contract under concurrent OneBot delivery.
+
 ## Handoff to Phase 3
 
-Phase 3 may begin only after the journal contract is stable.
+Phase 3 may begin only after Phase 2.1 is complete and the journal cursor contract is stable.
 
 Its first end-to-end target will be:
 
