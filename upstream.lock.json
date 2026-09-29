@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "updated_at": "2026-09-29",
+  "astrbot": {
+    "repository": "https://github.com/AstrBotDevs/AstrBot.git",
+    "ref": "v4.28.2",
+    "tag_object_sha": "408caa414f3feb7f6d98707e2bb9d38c39838f93",
+    "strategy": "bootstrap checkout; do not vendor upstream source"
+  },
+  "deepseek_harness": {
+    "repository": "https://github.com/deepseek-ai/deepseek-harness.git",
+    "ref": "4878cdabd87d4041bdaff61d04c966883b9fd07a",
+    "version": "0.2.0-rc.1",
+    "strategy": "bootstrap/install pinned runtime; do not vendor upstream source"
+  },
+  "legacy_reference": {
+    "repository": "https://github.com/l1105927155-creator/chatbot",
+    "policy": "read-only reference; migrate selectively, never copy wholesale"
+  }
+}
