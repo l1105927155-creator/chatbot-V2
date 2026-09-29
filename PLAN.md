@@ -257,6 +257,19 @@ chatbot-V2/
 - 用固定测试序列证明 QQ 实际看到的文本与 journal 顺序一致。
 - 重启后 cursor 可恢复。
 
+### Phase 2.1 — Journal Ordering Contract
+
+任务：
+- 对 aiocqhttp 并发事件进行可控测试，验证 OneBot 观测顺序与 `journal_id` 顺序一致。
+- 若当前异步任务 + write lock 可能重排，则只在 raw capture 边界增加最小的进程内顺序化机制。
+- 明确 `journal_id` 的 cursor 语义并加入回归测试。
+
+验收：
+- 并发入站/出站事件不能使后到事件获得更小的 `journal_id`。
+- 入站事件进入 AstrBot 后续 pipeline 前，其 journal row 已提交。
+- `after(journal_id)` 在重启后仍可作为可靠增量读取边界。
+- 不引入 DSH、MCP、delivery ledger 或分布式排序机制。
+
 ### Phase 3 — DSH 最小聊天闭环
 
 任务：
