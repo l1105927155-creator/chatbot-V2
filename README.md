@@ -11,11 +11,14 @@ Before development, read:
 - [`docs/phases/phase-1.md`](docs/phases/phase-1.md) — completed AstrBot baseline.
 - [`docs/phases/phase-2.md`](docs/phases/phase-2.md) — completed journal scope.
 - [`docs/phases/phase-2.1.md`](docs/phases/phase-2.1.md) — completed ordering contract.
+- [`docs/phases/phase-3.md`](docs/phases/phase-3.md) — current DSH chat-loop scope.
 
-Current status: **Phases 1, 2, and 2.1 completed.** The pinned AstrBot baseline
+Current status: **Phases 1, 2, and 2.1 completed; Phase 3 ready for implementation.** The pinned AstrBot baseline
 and V2-owned canonical journal are verified with controlled group/private QQ
 messages. Concurrent event-bus tests establish that `journal_id` preserves
-V2 capture-callback order for one client. See the [Phase 1 findings](docs/phases/phase-1-findings.md),
+V2 capture-callback order for one client. Phase 3 now connects the pinned DSH
+runtime to unhandled AstrBot conversations using persistent session mapping and
+journal cursors. See the [Phase 1 findings](docs/phases/phase-1-findings.md),
 [capture findings](docs/phases/phase-2-capture-findings.md), and
 [journal verification](docs/phases/phase-2-journal-findings.md), and
 [ordering findings](docs/phases/phase-2.1-findings.md).
