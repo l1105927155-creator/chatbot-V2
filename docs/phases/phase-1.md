@@ -1,6 +1,6 @@
 # Phase 1 — Minimal AstrBot Baseline
 
-> Status: ready for implementation  
+> Status: completed — 2026-09-29  
 > Parent plan: [PLAN.md](../../PLAN.md)
 
 ## Goal
@@ -185,8 +185,12 @@ Phase 1 is complete only when all of the following are true:
 
 ## Handoff to Phase 2
 
-Phase 2 begins with one decision only:
+Phase 1 evidence establishes that AstrBot's existing `PlatformMessageHistory` is not sufficient as V2's canonical journal: it misses private paths, normal plugin replies, platform message IDs, and useful provenance.
 
-> Can AstrBot's existing history storage satisfy the V2 canonical journal contract through a thin adapter, or does V2 need its own journal table?
+Phase 2 therefore uses V2-owned journal storage. Its remaining architectural decision is narrower:
 
-That decision must be based on Phase 1 evidence.
+> Which shared observation boundary can capture every relevant QQ inbound/outbound message without modifying AstrBot core?
+
+Phase 2 must test OneBot self-message feedback first, then investigate an AstrBot unified send boundary only if the platform-feedback approach is unsuitable. See [`phase-2.md`](phase-2.md).
+
+The current `v2_ai_gate` should also be treated as a Phase 1 safety mechanism rather than a permanently frozen V2 design: its unconditional `on_llm_request -> event.stop_event()` blocks plugin-local LLM requests as well as AstrBot conversational requests. Do not broaden it in Phase 2; reconsider its final shape only when a later phase actually needs selected plugin-local LLM use.
