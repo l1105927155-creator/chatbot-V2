@@ -10,10 +10,12 @@ Before development, read:
 - [`AGENTS.md`](AGENTS.md) — repository development constraints.
 - [`docs/phases/phase-1.md`](docs/phases/phase-1.md) — completed AstrBot baseline.
 - [`docs/phases/phase-2.md`](docs/phases/phase-2.md) — completed journal scope.
+- [`docs/phases/phase-2.1.md`](docs/phases/phase-2.1.md) — current ordering-contract scope.
 
-Current status: **Phase 1 and Phase 2 completed.** The pinned AstrBot baseline
+Current status: **Phase 1 and Phase 2 completed; Phase 2.1 ready for implementation.** The pinned AstrBot baseline
 and V2-owned canonical journal are verified with controlled group/private QQ
-messages. See the [Phase 1 findings](docs/phases/phase-1-findings.md),
+messages. Before DSH integration, Phase 2.1 must prove that `journal_id` preserves
+OneBot observation order under concurrent event handling. See the [Phase 1 findings](docs/phases/phase-1-findings.md),
 [capture findings](docs/phases/phase-2-capture-findings.md), and
 [journal verification](docs/phases/phase-2-journal-findings.md).
 
