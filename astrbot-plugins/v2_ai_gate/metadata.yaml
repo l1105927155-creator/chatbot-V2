@@ -1,0 +1,6 @@
+name: v2_ai_gate
+display_name: V2 AI Gate
+author: chatbot-V2
+desc: Disable AstrBot's default conversational LLM path for V2.
+version: 0.1.0
+astrbot_version: "==4.28.2"

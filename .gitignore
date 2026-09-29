@@ -1,0 +1,5 @@
+# Reproducible upstream source checkouts created by scripts/bootstrap.sh.
+/.runtime/
+__pycache__/
+*.py[cod]
+.pytest_cache/
