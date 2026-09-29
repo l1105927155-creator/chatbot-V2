@@ -1,6 +1,6 @@
 # chatbot-V2 实施计划大纲
 
-> 状态：Architecture baseline / Phase 0  
+> 状态：Phase 3 ready for implementation  
 > 目标：在开始搬运旧代码前冻结职责边界与验收标准，避免再次通过局部修补把集成层扩展成第三个平台。
 
 ## 1. 产品目标
@@ -273,18 +273,19 @@ chatbot-V2/
 ### Phase 3 — DSH 最小聊天闭环
 
 任务：
-- 固定 DSH profile。
-- AstrBot 只将“未被确定性能力处理且需要 AI”的事件唤醒 DSH。
-- 建立 QQ conversation ↔ DSH session 映射。
-- 每轮仅注入 journal cursor 之后的增量。
-- DSH 回复经 AstrBot 发送。
+- 按 lock 启动固定版本 DSH。
+- 建立 QQ conversation ↔ DSH session 的持久映射。
+- AstrBot 将未被确定性能力处理的普通聊天事件交给 DSH。
+- 每个 DSH session 保存 `last_seen_journal_id`，每轮只注入新的 journal delta。
+- 同一 conversation 的 DSH turn 串行执行。
+- DSH 回复经 AstrBot 发送，并由现有 `message_sent` 路径进入 canonical journal。
 
 验收：
-- 场景：
-  1. 用户聊天 → DSH 回复；
-  2. 用户执行 AstrBot 命令 → AstrBot 回复；
-  3. 用户继续聊天 → DSH 能看到前两轮全部内容并正确引用 AstrBot 的输出。
-- 不需要旧 bridge policy ledger 即可完成。
+- 用户普通聊天 → DSH 回复。
+- 用户执行 AstrBot 命令 → AstrBot 直接回复。
+- 用户随后继续聊天 → DSH 能看到中间的用户命令和 AstrBot 回复。
+- 重启后恢复同一 session mapping 和 cursor，不重复注入已消费历史。
+- 详细实施边界见 `docs/phases/phase-3.md`。
 
 ### Phase 4 — AstrBot MCP
 
