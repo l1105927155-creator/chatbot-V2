@@ -16,11 +16,13 @@ class V2Phase1Probe(star.Star):
     @filter.command("v2probe")
     async def v2probe(self, event: AstrMessageEvent):
         """Return the Phase 1 deterministic response."""
+        event.set_extra("v2_deterministic_handled", True)
         yield event.plain_result("v2 phase 1 probe: ok")
 
     @filter.command("v2push")
     async def v2push(self, event: AstrMessageEvent):
         """Exercise AstrBot's proactive send path in the origin conversation."""
+        event.set_extra("v2_deterministic_handled", True)
         sent = await self.context.send_message(
             event.unified_msg_origin,
             MessageChain().message("v2 phase 1 proactive: ok"),

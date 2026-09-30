@@ -1,0 +1,6 @@
+name: v2_dsh_router
+display_name: V2 DSH Router
+author: chatbot-V2
+desc: Route unhandled QQ text through the canonical journal to pinned DSH.
+version: 0.1.0
+astrbot_version: "==4.28.2"

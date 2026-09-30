@@ -13,18 +13,20 @@ Before development, read:
 - [`docs/phases/phase-2.1.md`](docs/phases/phase-2.1.md) — completed ordering contract.
 - [`docs/phases/phase-3.md`](docs/phases/phase-3.md) — current DSH chat-loop scope.
 
-Current status: **Phases 1, 2, and 2.1 completed; Phase 3 ready for implementation.** The pinned AstrBot baseline
+Current status: **Phases 1, 2, 2.1, and 3 completed; Phase 4 has not started.** The pinned AstrBot baseline
 and V2-owned canonical journal are verified with controlled group/private QQ
-messages. Concurrent event-bus tests establish that `journal_id` preserves
-V2 capture-callback order for one client. Phase 3 now connects the pinned DSH
+messages, including DSH replies and restart continuity. Concurrent event-bus tests establish that `journal_id` preserves
+V2 capture-callback order for one client. Phase 3 connects the pinned DSH
 runtime to unhandled AstrBot conversations using persistent session mapping and
 journal cursors. See the [Phase 1 findings](docs/phases/phase-1-findings.md),
 [capture findings](docs/phases/phase-2-capture-findings.md), and
 [journal verification](docs/phases/phase-2-journal-findings.md), and
-[ordering findings](docs/phases/phase-2.1-findings.md).
+[ordering findings](docs/phases/phase-2.1-findings.md), and
+[DSH chat-loop findings](docs/phases/phase-3-findings.md).
 
 The journal records OneBot inbound messages and platform-confirmed Bot
-`message_sent` feedback. DSH and MCP are not integrated yet.
+`message_sent` feedback. Phase 3 adds the V2-owned DSH router; MCP is not
+integrated yet.
 
 ## Phase 1: bootstrap AstrBot
 
@@ -166,3 +168,46 @@ The [capture experiment](docs/phases/phase-2-capture-findings.md) documents
 the selected boundary and its constraints. The
 [journal verification](docs/phases/phase-2-journal-findings.md) records the
 live QQ ordering, message IDs, restart check, and remaining limits.
+
+## Phase 3: DSH chat loop
+
+Bootstrap the DSH commit and npm version pinned in `upstream.lock.json` after
+creating the isolated AstrBot `.venv`:
+
+```bash
+./scripts/bootstrap-dsh.sh
+```
+
+This installs DSH under `.runtime/dsh-runtime`, its pinned Python SDK source
+under `.runtime/dsh-source`, and the SDK into the V2 AstrBot environment.
+The official commit archive SHA256 and extracted source files are verified;
+`npm ci` uses the tracked dependency lock.
+Keep `DEEPSEEK_API_KEY` in the V2 process environment; do not put credentials
+in this repository. The V2 profile in `dsh/profile` disables local shell
+tools and supplies only the conversational instructions and journal delta.
+
+Set `V2_QQ_ALLOWED_CONVERSATIONS` for the QQ conversations admitted to DSH,
+for example `group:<group_id>,private:<peer_qq>`. An unset or empty value
+leaves the router idle. This keeps a test connection from replying in other
+groups.
+
+Link `astrbot-plugins/v2_dsh_router` into V2's
+`.runtime/astrbot/data/plugins` and include `v2_dsh_router` in the V2
+`plugin_set`, after `v2_journal` has been configured. The router owns a small
+SQLite mapping under `data/plugin_data/v2_dsh_router`. Each ordinary QQ wake
+is bounded at its own journal row, and each conversation is serialized. A
+failed or interrupted DSH turn leaves a durable pending marker because the
+stdio transport cannot prove whether a lost request was accepted; inspect that
+conversation before manually resolving it.
+
+Run the pinned-source and Phase 3 contracts with:
+
+```bash
+./scripts/check-phase3.sh
+```
+
+The router uses the pinned native ACP `session/new`, `session/resume`, and
+`session/prompt` APIs through the official Python JSON-RPC transport. The
+default SDK create-session entry point cannot resume an existing session.
+No upstream core patch is required. See the
+[Phase 3 findings](docs/phases/phase-3-findings.md) for live evidence and limits.

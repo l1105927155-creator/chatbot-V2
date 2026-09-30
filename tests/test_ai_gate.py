@@ -105,6 +105,9 @@ class _Event:
     def plain_result(self, text):
         return text
 
+    def set_extra(self, key, value):
+        setattr(self, key, value)
+
 
 class AIGateTests(unittest.TestCase):
     def test_gate_sets_the_suppressing_call_llm_value(self):
@@ -132,6 +135,7 @@ class AIGateTests(unittest.TestCase):
         response = asyncio.run(_first(module.V2Phase1Probe().v2probe(event)))
 
         self.assertEqual(response, "v2 phase 1 probe: ok")
+        self.assertTrue(event.v2_deterministic_handled)
 
     def test_proactive_probe_uses_the_origin_conversation(self):
         module = _load_plugin(
@@ -147,6 +151,7 @@ class AIGateTests(unittest.TestCase):
         origin, chain = plugin.context.send_message.await_args.args
         self.assertEqual(origin, event.unified_msg_origin)
         self.assertEqual(chain.text, "v2 phase 1 proactive: ok")
+        self.assertTrue(event.v2_deterministic_handled)
 
     def test_pinned_process_stage_uses_the_inverted_call_llm_flag(self):
         source_root = os.environ.get("ASTRBOT_SOURCE")

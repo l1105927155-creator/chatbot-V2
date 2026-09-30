@@ -1,6 +1,6 @@
 # chatbot-V2 实施计划大纲
 
-> 状态：Phase 3 ready for implementation  
+> 状态：Phase 3 completed（2026-09-30）；Phase 4 尚未开始
 > 目标：在开始搬运旧代码前冻结职责边界与验收标准，避免再次通过局部修补把集成层扩展成第三个平台。
 
 ## 1. 产品目标

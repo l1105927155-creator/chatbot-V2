@@ -1,0 +1,19 @@
+# Applied after the pinned sdk-minimal profile for V2 QQ conversations.
+# The model receives journal deltas and returns text; it has no local tools.
+- id: persistent-bash
+  disabled: true
+- id: persistent-pwsh
+  disabled: true
+- id: sdk-app-startup
+  disabled: true
+- id: sdk-jsonrpc-server
+  disabled: true
+- insert:
+    - id: v2-acp-startup
+      name: '@deepseek-ai/dsh-acp-app'
+    - id: v2-acp
+      name: '@deepseek-ai/dsh-acp'
+      inject: [acpAppStartup, loader]
+      config:
+        provider: deepseek-official
+        model: deepseek-v4-flash

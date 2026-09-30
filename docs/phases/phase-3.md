@@ -1,8 +1,9 @@
 # Phase 3 — DSH Minimal Chat Loop
 
-> Status: ready for implementation  
-> Parent plan: [PLAN.md](../../PLAN.md)  
+> Status: completed (2026-09-30)
+> Parent plan: [PLAN.md](../../PLAN.md)
 > Input evidence: [Phase 2.1 findings](phase-2.1-findings.md)
+> Acceptance evidence: [Phase 3 findings](phase-3-findings.md)
 
 ## Goal
 
@@ -66,7 +67,7 @@ A message should reach DSH when:
 - it has not already been handled by an AstrBot command/plugin;
 - it represents normal conversational input.
 
-The router should preserve the successful idea from the old project—deterministic AstrBot behavior first, free-form reasoning second—but use the current V2 journal/session model rather than the old bridge architecture.
+The router should implement deterministic AstrBot behavior first and free-form reasoning second, using only the current V2 journal/session model and the pinned upstream interfaces. The old `chatbot` project is not a source for implementation or runtime assets.
 
 ## 4. Journal delta into each DSH turn
 
