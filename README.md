@@ -11,9 +11,10 @@ Before development, read:
 - [`docs/phases/phase-1.md`](docs/phases/phase-1.md) — completed AstrBot baseline.
 - [`docs/phases/phase-2.md`](docs/phases/phase-2.md) — completed journal scope.
 - [`docs/phases/phase-2.1.md`](docs/phases/phase-2.1.md) — completed ordering contract.
-- [`docs/phases/phase-3.md`](docs/phases/phase-3.md) — current DSH chat-loop scope.
+- [`docs/phases/phase-3.md`](docs/phases/phase-3.md) — completed DSH chat-loop scope.
+- [`docs/phases/phase-3-remediation.md`](docs/phases/phase-3-remediation.md) — current implementation-alignment work.
 
-Current status: **Phases 1, 2, 2.1, and 3 completed; Phase 4 has not started.** The pinned AstrBot baseline
+Current status: **Phase 3 functional acceptance is complete; implementation remediation is current before Phase 4.** The pinned AstrBot baseline
 and V2-owned canonical journal are verified with controlled group/private QQ
 messages, including DSH replies and restart continuity. Concurrent event-bus tests establish that `journal_id` preserves
 V2 capture-callback order for one client. Phase 3 connects the pinned DSH
