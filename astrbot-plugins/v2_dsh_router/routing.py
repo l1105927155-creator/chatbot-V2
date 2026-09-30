@@ -1,4 +1,4 @@
-"""Conservative admission policy for V2's ordinary QQ chat path."""
+"""Admission policy for V2's ordinary QQ chat path."""
 
 from __future__ import annotations
 
@@ -6,18 +6,15 @@ from collections.abc import Mapping
 from typing import Any
 
 
-_OBSERVERS = {
-    ("astrbot.builtin_stars.astrbot.main", "handle_session_control_agent"),
-    ("astrbot.builtin_stars.astrbot.main", "handle_empty_mention"),
-    ("astrbot.builtin_stars.astrbot.main", "persist_group_message"),
-    ("astrbot.builtin_stars.astrbot.main", "on_message"),
-    ("data.plugins.v2_ai_gate.main", "block_default_llm"),
-    ("data.plugins.v2_dsh_router.main", "route_chat"),
-}
-
-
 def should_route(event: Any, raw: Any) -> bool:
-    """Admit text only when no other activated handler can own the event."""
+    """Admit ordinary text unless a deterministic V2 handler claimed it.
+
+    Pinned AstrBot clears each plugin handler's result before running the next
+    one, so ``event.get_result()`` is not a reliable ownership signal at the
+    late-priority router. Deterministic handlers instead claim the event with
+    the V2-owned ``v2_deterministic_handled`` marker. Passive observers need no
+    registration here and cannot accidentally suppress DSH chat.
+    """
     if event.get_platform_name() != "aiocqhttp" or event.is_stopped():
         return False
     if not isinstance(raw, Mapping) or raw.get("post_type") != "message":
@@ -39,8 +36,4 @@ def should_route(event: Any, raw: Any) -> bool:
     ).strip()
     if not plain or plain.startswith("/") or event.get_extra("v2_deterministic_handled", False):
         return False
-    for handler in event.get_extra("activated_handlers", []) or []:
-        identity = (handler.handler_module_path, handler.handler_name)
-        if identity not in _OBSERVERS:
-            return False
     return True

@@ -15,5 +15,5 @@
       name: '@deepseek-ai/dsh-acp'
       inject: [acpAppStartup, loader]
       config:
-        provider: deepseek-official
-        model: deepseek-v4-flash
+        provider: !!js process.env.V2_DSH_PROVIDER
+        model: !!js process.env.V2_DSH_MODEL

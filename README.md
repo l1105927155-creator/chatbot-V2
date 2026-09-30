@@ -12,9 +12,9 @@ Before development, read:
 - [`docs/phases/phase-2.md`](docs/phases/phase-2.md) — completed journal scope.
 - [`docs/phases/phase-2.1.md`](docs/phases/phase-2.1.md) — completed ordering contract.
 - [`docs/phases/phase-3.md`](docs/phases/phase-3.md) — completed DSH chat-loop scope.
-- [`docs/phases/phase-3-remediation.md`](docs/phases/phase-3-remediation.md) — current implementation-alignment work.
+- [`docs/phases/phase-3-remediation.md`](docs/phases/phase-3-remediation.md) — completed implementation-alignment work.
 
-Current status: **Phase 3 functional acceptance is complete; implementation remediation is current before Phase 4.** The pinned AstrBot baseline
+Current status: **Phase 3 and its remediation are complete; Phase 4 has not started.** The pinned AstrBot baseline
 and V2-owned canonical journal are verified with controlled group/private QQ
 messages, including DSH replies and restart continuity. Concurrent event-bus tests establish that `journal_id` preserves
 V2 capture-callback order for one client. Phase 3 connects the pinned DSH
@@ -23,7 +23,8 @@ journal cursors. See the [Phase 1 findings](docs/phases/phase-1-findings.md),
 [capture findings](docs/phases/phase-2-capture-findings.md), and
 [journal verification](docs/phases/phase-2-journal-findings.md), and
 [ordering findings](docs/phases/phase-2.1-findings.md), and
-[DSH chat-loop findings](docs/phases/phase-3-findings.md).
+[DSH chat-loop findings](docs/phases/phase-3-findings.md), and
+[remediation findings](docs/phases/phase-3-remediation-findings.md).
 
 The journal records OneBot inbound messages and platform-confirmed Bot
 `message_sent` feedback. Phase 3 adds the V2-owned DSH router; MCP is not
@@ -183,8 +184,14 @@ This installs DSH under `.runtime/dsh-runtime`, its pinned Python SDK source
 under `.runtime/dsh-source`, and the SDK into the V2 AstrBot environment.
 The official commit archive SHA256 and extracted source files are verified;
 `npm ci` uses the tracked dependency lock.
-Keep `DEEPSEEK_API_KEY` in the V2 process environment; do not put credentials
-in this repository. The V2 profile in `dsh/profile` disables local shell
+Set `V2_DSH_PROVIDER` and `V2_DSH_MODEL` explicitly in the V2 process
+environment. For example, the live acceptance used `deepseek-official` and
+`deepseek-v4-flash`; these are test selections, not structural profile defaults.
+Keep provider credentials (for example `DEEPSEEK_API_KEY`) in the process
+environment; do not put them in this repository. Startup sends one short
+provider request in an isolated validation session, then closes it. Invalid
+configuration rejects router initialization. This check incurs model usage and
+leaves an independent persisted DSH session; it sends nothing to QQ. The V2 profile in `dsh/profile` disables local shell
 tools and supplies only the conversational instructions and journal delta.
 
 Set `V2_QQ_ALLOWED_CONVERSATIONS` for the QQ conversations admitted to DSH,
@@ -195,7 +202,9 @@ groups.
 Link `astrbot-plugins/v2_dsh_router` into V2's
 `.runtime/astrbot/data/plugins` and include `v2_dsh_router` in the V2
 `plugin_set`, after `v2_journal` has been configured. The router owns a small
-SQLite mapping under `data/plugin_data/v2_dsh_router`. Each ordinary QQ wake
+SQLite mapping under `data/plugin_data/v2_dsh_router`. One ACP process hosts
+all conversation sessions, with independent prompt locks and session-scoped
+notification subscriptions. Each ordinary QQ wake
 is bounded at its own journal row, and each conversation is serialized. A
 failed or interrupted DSH turn leaves a durable pending marker because the
 stdio transport cannot prove whether a lost request was accepted; inspect that
@@ -212,3 +221,9 @@ The router uses the pinned native ACP `session/new`, `session/resume`, and
 default SDK create-session entry point cannot resume an existing session.
 No upstream core patch is required. See the
 [Phase 3 findings](docs/phases/phase-3-findings.md) for live evidence and limits.
+
+Deterministic V2 handlers that own an ordinary-text message must set
+`event.set_extra("v2_deterministic_handled", True)` before replying. Passive
+observers leave the marker unset. Routing uses this handling outcome instead
+of handler-name classification. See the
+[remediation findings](docs/phases/phase-3-remediation-findings.md).

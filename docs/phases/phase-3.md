@@ -220,7 +220,7 @@ Phase 3 is complete when:
 
 ## Implementation review before Phase 4
 
-The chat-loop acceptance story is complete. Before Phase 4, apply the implementation-alignment review in [Phase 3 remediation](phase-3-remediation.md).
+The chat-loop acceptance story and implementation-alignment corrections are complete. See [Phase 3 remediation](phase-3-remediation.md) and its [verification](phase-3-remediation-findings.md).
 
 ## Handoff to Phase 4
 

@@ -2,6 +2,8 @@
 
 > Status: completed, 2026-09-30
 > Scope: [Phase 3](phase-3.md); no MCP, memory migration, or owner tools.
+> Historical baseline: process ownership, routing and model configuration below
+> were corrected by [Phase 3 remediation](phase-3-remediation-findings.md).
 
 ## Implementation
 

@@ -40,20 +40,21 @@ def handler(module_path, name):
     return SimpleNamespace(handler_module_path=module_path, handler_name=name)
 
 
-def test_ordinary_group_and_private_text_are_admitted_with_only_known_observers():
-    observers = [
-        handler("astrbot.builtin_stars.astrbot.main", "handle_session_control_agent"),
-        handler("data.plugins.v2_ai_gate.main", "block_default_llm"),
-        handler("data.plugins.v2_dsh_router.main", "route_chat"),
+def test_ordinary_group_and_private_text_are_admitted_with_passive_handlers():
+    passive_handlers = [
+        handler("astrbot.builtin_stars.astrbot.main", "on_message"),
+        handler("data.plugins.unrelated.main", "observe_every_message"),
     ]
-    assert module.should_route(Event(handlers=observers), raw())
-    assert module.should_route(Event(handlers=observers), raw(message_type="private"))
+    assert module.should_route(Event(handlers=passive_handlers), raw())
+    assert module.should_route(Event(handlers=passive_handlers), raw(message_type="private"))
 
 
-def test_command_marker_and_unknown_handler_block_dsh():
+def test_command_and_deterministic_outcome_marker_block_dsh():
     assert not module.should_route(Event(), raw("/v2probe"))
     assert not module.should_route(Event(handled=True), raw("hello"))
-    assert not module.should_route(
+    # Activated handlers alone do not imply ownership: AstrBot runs passive
+    # observers and clears their handler result before the late router runs.
+    assert module.should_route(
         Event(handlers=[handler("data.plugins.other.main", "answer")]), raw("hello")
     )
 

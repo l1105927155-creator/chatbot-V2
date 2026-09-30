@@ -10,7 +10,7 @@ from pathlib import Path
 from astrbot.api import star
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 
-from .dsh_client import DshClient
+from .dsh_client import start_client
 from .routing import should_route
 from .service import ChatService, PendingTurnError
 from .state import StateStore
@@ -33,7 +33,11 @@ class V2DshRouter(star.Star):
 
         journal_dir = Path(star.StarTools.get_data_dir("v2_journal"))
         own_dir = Path(star.StarTools.get_data_dir("v2_dsh_router"))
-        self.dsh = DshClient(
+        # Open stores before launching ACP so failed storage initialization
+        # cannot leave an unowned process behind.
+        journal = JournalStore(journal_dir / "journal.sqlite3")
+        state = StateStore(own_dir / "state.sqlite3")
+        self.dsh = await start_client(
             dsh_bin=runtime / "dsh-runtime/node_modules/.bin/dsh",
             dsh_home=runtime / "dsh-home",
             workspace=runtime / "dsh-workspace",
@@ -41,8 +45,8 @@ class V2DshRouter(star.Star):
             instructions=repo / "dsh/profile/qq-agent.md",
         )
         self.service = ChatService(
-            JournalStore(journal_dir / "journal.sqlite3"),
-            StateStore(own_dir / "state.sqlite3"),
+            journal,
+            state,
             self.dsh,
         )
         self.allowed_conversations = frozenset(

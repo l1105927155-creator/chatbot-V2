@@ -1,6 +1,7 @@
 # Phase 3 remediation — align the DSH integration with V2 goals
 
-> Status: ready for implementation  
+> Status: completed (2026-09-30)
+> Verification: [remediation findings](phase-3-remediation-findings.md)
 > Review target: commit `ce9075c58854c167a0b45a065df3ed1985415d9d`  
 > Parent plan: [PLAN.md](../../PLAN.md)  
 > Phase 3 evidence: [phase-3-findings.md](phase-3-findings.md)
