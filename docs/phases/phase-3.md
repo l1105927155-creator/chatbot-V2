@@ -218,9 +218,13 @@ Phase 3 is complete when:
 - restart restores session mapping and cursor;
 - the end-to-end acceptance story passes.
 
+## Implementation review before Phase 4
+
+The chat-loop acceptance story is complete. Before Phase 4, apply the implementation-alignment review in [Phase 3 remediation](phase-3-remediation.md).
+
 ## Handoff to Phase 4
 
-Once the minimal chat loop is stable, Phase 4 adds the first MCP boundary:
+After that remediation is complete, Phase 4 adds the first MCP boundary:
 
 - journal/history reads;
 - one typed AstrBot capability;
