@@ -14,6 +14,7 @@ from .dsh_client import start_client
 from .routing import should_route
 from .service import ChatService, PendingTurnError
 from .state import StateStore
+from .mcp_server import McpServer
 
 
 @star.register(
@@ -37,17 +38,24 @@ class V2DshRouter(star.Star):
         # cannot leave an unowned process behind.
         journal = JournalStore(journal_dir / "journal.sqlite3")
         state = StateStore(own_dir / "state.sqlite3")
-        self.dsh = await start_client(
-            dsh_bin=runtime / "dsh-runtime/node_modules/.bin/dsh",
-            dsh_home=runtime / "dsh-home",
-            workspace=runtime / "dsh-workspace",
-            patch=repo / "dsh/profile/v2-qq.patch.yml",
-            instructions=repo / "dsh/profile/qq-agent.md",
-        )
+        self.mcp = McpServer(journal, logger=self.logger)
+        await self.mcp.start(port=int(os.environ.get("V2_MCP_PORT", "6210")))
+        try:
+            self.dsh = await start_client(
+                dsh_bin=runtime / "dsh-runtime/node_modules/.bin/dsh",
+                dsh_home=runtime / "dsh-home",
+                workspace=runtime / "dsh-workspace",
+                patch=repo / "dsh/profile/v2-qq.patch.yml",
+                instructions=repo / "dsh/profile/qq-agent.md",
+            )
+        except BaseException:
+            await self.mcp.close()
+            raise
         self.service = ChatService(
             journal,
             state,
             self.dsh,
+            self.mcp,
         )
         self.allowed_conversations = frozenset(
             part.strip() for part in os.environ.get("V2_QQ_ALLOWED_CONVERSATIONS", "").split(",")
@@ -76,7 +84,10 @@ class V2DshRouter(star.Star):
             task = asyncio.current_task()
             self._active.add(task)
             try:
-                await self.service.handle(message.conversation, message.message_id, send)
+                await self.service.handle(
+                    message.conversation, message.message_id, send,
+                    get_group=event.get_group,
+                )
             finally:
                 self._active.discard(task)
         except PendingTurnError as exc:
@@ -93,5 +104,9 @@ class V2DshRouter(star.Star):
                     await asyncio.shield(draining)
                 except asyncio.CancelledError:
                     continue
-        if hasattr(self, "dsh"):
-            await asyncio.to_thread(self.dsh.close)
+        try:
+            if hasattr(self, "dsh"):
+                await asyncio.to_thread(self.dsh.close)
+        finally:
+            if hasattr(self, "mcp"):
+                await self.mcp.close()

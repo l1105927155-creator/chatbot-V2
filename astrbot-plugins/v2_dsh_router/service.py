@@ -13,10 +13,11 @@ class PendingTurnError(RuntimeError):
 
 
 class ChatService:
-    def __init__(self, journal: Any, state: Any, dsh: Any) -> None:
+    def __init__(self, journal: Any, state: Any, dsh: Any, mcp: Any = None) -> None:
         self.journal = journal
         self.state = state
         self.dsh = dsh
+        self.mcp = mcp
         self._locks: dict[tuple[str, str, str], asyncio.Lock] = {}
 
     @staticmethod
@@ -80,41 +81,49 @@ class ChatService:
         conversation,
         inbound_message_id: str,
         send: Callable[[str], Awaitable[None]],
+        get_group=None,
     ) -> str | None:
         """Run a turn once, then send through AstrBot while holding this chat's lock."""
         async with self._lock(conversation):
-            identity = (conversation.platform_id, conversation.bot_id, conversation.key)
-            state = await asyncio.to_thread(self.state.get, *identity)
-            if state is None:
-                session_id = await self._dsh_call(self.dsh.create_session)
-                state = await asyncio.to_thread(self.state.get_or_create, *identity, session_id)
-            if state.pending_upper_cursor is not None:
-                raise PendingTurnError(
-                    f"DSH turn outcome is uncertain for {conversation.key}; manual recovery required"
-                )
-            matches = await asyncio.to_thread(
-                self.journal.by_message_id,
-                conversation.platform_id, conversation.bot_id, inbound_message_id,
+            if self.mcp is not None:
+                async with self.mcp.turn(conversation, send, get_group) as servers:
+                    return await self._handle_locked(conversation, inbound_message_id, send, servers)
+            return await self._handle_locked(conversation, inbound_message_id, send)
+
+    async def _handle_locked(self, conversation, inbound_message_id, send, servers=None):
+        mcp_args = () if servers is None else (servers,)
+        identity = (conversation.platform_id, conversation.bot_id, conversation.key)
+        state = await asyncio.to_thread(self.state.get, *identity)
+        if state is None:
+            session_id = await self._dsh_call(self.dsh.create_session, *mcp_args)
+            state = await asyncio.to_thread(self.state.get_or_create, *identity, session_id)
+        if state.pending_upper_cursor is not None:
+            raise PendingTurnError(
+                f"DSH turn outcome is uncertain for {conversation.key}; manual recovery required"
             )
-            wake = next((row for row in matches if
-                         row.message.conversation_key == conversation.key and
-                         row.message.direction == "inbound"), None)
-            if wake is None:
-                raise RuntimeError("inbound wake message is missing from the canonical journal")
-            if wake.journal_id <= state.last_seen_journal_id:
-                return None
-            # End this turn at its own wake row. A later ordinary message may
-            # already be queued while we wait for the lock; consuming it here
-            # would silently swallow that message's separate wake attempt.
-            upper = wake.journal_id
-            rows = await self._delta(conversation, state.last_seen_journal_id, upper)
-            if not any(row.journal_id == wake.journal_id for row in rows):
-                raise RuntimeError("inbound wake message is absent from journal delta")
-            prompt = self._prompt(conversation, rows, wake.journal_id)
-            await asyncio.to_thread(self.state.begin_turn, *identity, state.session_id, upper)
-            # Any error after begin_turn leaves a durable pending marker. The
-            # SDK stdio protocol cannot prove whether a lost call was accepted.
-            reply = await self._dsh_call(self.dsh.run, state.session_id, prompt)
-            await send(reply)
-            await asyncio.to_thread(self.state.complete_turn, *identity, state.session_id, upper)
-            return reply
+        matches = await asyncio.to_thread(
+            self.journal.by_message_id,
+            conversation.platform_id, conversation.bot_id, inbound_message_id,
+        )
+        wake = next((row for row in matches if
+                     row.message.conversation_key == conversation.key and
+                     row.message.direction == "inbound"), None)
+        if wake is None:
+            raise RuntimeError("inbound wake message is missing from the canonical journal")
+        if wake.journal_id <= state.last_seen_journal_id:
+            return None
+        # End this turn at its own wake row. A later ordinary message may
+        # already be queued while we wait for the lock; consuming it here
+        # would silently swallow that message's separate wake attempt.
+        upper = wake.journal_id
+        rows = await self._delta(conversation, state.last_seen_journal_id, upper)
+        if not any(row.journal_id == wake.journal_id for row in rows):
+            raise RuntimeError("inbound wake message is absent from journal delta")
+        prompt = self._prompt(conversation, rows, wake.journal_id)
+        await asyncio.to_thread(self.state.begin_turn, *identity, state.session_id, upper)
+        # Any error after begin_turn leaves a durable pending marker. The
+        # SDK stdio protocol cannot prove whether a lost call was accepted.
+        reply = await self._dsh_call(self.dsh.run, state.session_id, prompt, *mcp_args)
+        await send(reply)
+        await asyncio.to_thread(self.state.complete_turn, *identity, state.session_id, upper)
+        return reply

@@ -151,3 +151,27 @@ def test_acp_startup_and_restart_do_not_create_sessions_or_prompt(tmp_path, monk
     assert len(transports)==2
     assert all(t.methods==['initialize'] and t.closed for t in transports)
     assert all(t.config.env['V2_DSH_MODEL']=='test-model' for t in transports)
+
+
+def test_native_mcp_bindings_follow_session_create_and_restart_resume(tmp_path):
+    runtimes=[]
+    class McpRuntime(Runtime):
+        def __init__(self,**kwargs):super().__init__(**kwargs);runtimes.append(self)
+        def new_session(self,servers=None):
+            sid=super().new_session();self.calls.append(('new_mcp',sid,servers));return sid
+        def resume(self,sid,servers=None):self.calls.append(('resume_mcp',sid,servers))
+    a=[{'type':'http','name':'astrbot','url':'http://127.0.0.1:6210/mcp',
+        'headers':[{'name':'Authorization','value':'Bearer scope-a'}]}]
+    b=[{**a[0],'headers':[{'name':'Authorization','value':'Bearer scope-b'}]}]
+    client=module.DshClient(**settings(tmp_path,McpRuntime))
+    sid_a=client.create_session(a);sid_b=client.create_session(b)
+    assert client.run(sid_a,'delta',a)==sid_a
+    assert client.run(sid_b,'delta',b)==sid_b
+    with pytest.raises(ValueError,match='binding changed'):
+        client.run(sid_a,'wrong conversation',b)
+    client.close()
+    restarted=module.DshClient(**settings(tmp_path,McpRuntime))
+    fresh=[{**a[0],'headers':[{'name':'Authorization','value':'Bearer fresh-scope-a'}]}]
+    assert restarted.run(sid_a,'next delta',fresh)==sid_a
+    assert runtimes[1].calls[0]==('resume_mcp',sid_a,fresh)
+    restarted.close()

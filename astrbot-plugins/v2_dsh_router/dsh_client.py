@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import asyncio
 import threading
+import copy
 from pathlib import Path
 from typing import Any
 
@@ -41,12 +42,12 @@ class AcpRuntime:
         return self.client.request(method, params, response_model=self.response_model,
                                    **kwargs).model_dump()
 
-    def new_session(self):
-        return self.request("session/new", {"cwd": self.workspace, "mcpServers": []})["sessionId"]
+    def new_session(self, mcp_servers=None):
+        return self.request("session/new", {"cwd": self.workspace, "mcpServers": mcp_servers or []})["sessionId"]
 
-    def resume(self, session_id):
+    def resume(self, session_id, mcp_servers=None):
         self.request("session/resume", {
-            "sessionId": session_id, "cwd": self.workspace, "mcpServers": [],
+            "sessionId": session_id, "cwd": self.workspace, "mcpServers": mcp_servers or [],
         })
 
     def run(self, session_id, delta):
@@ -97,6 +98,7 @@ class DshClient:
         self._lock = threading.Lock()
         self._session_locks = {}
         self._sessions = set()
+        self._session_servers = {}
         self._closed = False
         # Initialize the shared transport without creating a session or running
         # inference. Provider availability is established by real turns.
@@ -108,29 +110,38 @@ class DshClient:
                 raise RuntimeError("V2 DSH client is closed")
             return self._session_locks.setdefault(session_id, threading.Lock())
 
-    def create_session(self):
+    def create_session(self, mcp_servers=None):
         with self._lock:
             if self._closed:
                 raise RuntimeError("V2 DSH client is closed")
-        session_id = self.runtime.new_session()
+        servers = copy.deepcopy(mcp_servers or [])
+        session_id = self.runtime.new_session(servers) if servers else self.runtime.new_session()
         if not isinstance(session_id, str) or not session_id:
             raise RuntimeError("DSH did not return a session ID")
         with self._lock:
             self._sessions.add(session_id)
+            self._session_servers[session_id] = servers
         return session_id
 
-    def run(self, session_id, journal_delta):
+    def run(self, session_id, journal_delta, mcp_servers=None):
         if not session_id or not journal_delta:
             raise ValueError("session ID and journal delta are required")
+        servers = copy.deepcopy(mcp_servers or [])
         with self._session_lock(session_id):
             with self._lock:
                 ready = session_id in self._sessions
+                if ready and self._session_servers[session_id] != servers:
+                    raise ValueError("MCP binding changed for an active DSH session")
             if not ready:
                 # Failure affects only this session; never replace its saved ID
                 # or close the shared process used by other conversations.
-                self.runtime.resume(session_id)
+                if servers:
+                    self.runtime.resume(session_id, servers)
+                else:
+                    self.runtime.resume(session_id)
                 with self._lock:
                     self._sessions.add(session_id)
+                    self._session_servers[session_id] = servers
             return self.runtime.run(session_id, journal_delta)
 
     def close_session(self, session_id):
@@ -138,6 +149,7 @@ class DshClient:
             self.runtime.close_session(session_id)
             with self._lock:
                 self._sessions.discard(session_id)
+                self._session_servers.pop(session_id, None)
 
     def close(self):
         # Router shutdown drains admitted turns before calling this lifecycle
@@ -148,6 +160,7 @@ class DshClient:
             self._closed = True
             entries = tuple(self._sessions)
             self._sessions.clear()
+            self._session_servers.clear()
         failures = []
         for session_id in entries:
             try:

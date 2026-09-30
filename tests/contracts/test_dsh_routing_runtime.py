@@ -79,7 +79,7 @@ def test_pinned_builtin_observers_and_probe_do_not_block_or_duplicate_dsh(tmp_pa
                 router=star_map['data.plugins.v2_dsh_router.main'].star_cls
                 calls=[];sent=[]
                 class Service:
-                    async def handle(self,conversation,message_id,send):
+                    async def handle(self,conversation,message_id,send,**kwargs):
                         calls.append(message_id);await send('fake DSH reply')
                 router.service=Service()
                 ctx=PipelineContext(astrbot_config=config,plugin_manager=manager,astrbot_config_id='v2-phase3-contract')
@@ -107,6 +107,7 @@ def test_pinned_builtin_observers_and_probe_do_not_block_or_duplicate_dsh(tmp_pa
                 assert calls==['in-1'] and sent==['fake DSH reply','deterministic plugin reply','v2 phase 1 probe: ok']
                 await router.terminate()
                 # Storage failure is checked before eager ACP startup.
+                original_state=router_module.StateStore
                 def bad_state(*args):raise RuntimeError('unsupported state schema')
                 async def must_not_start(**kwargs):raise AssertionError('ACP started before storage validation')
                 router_module.StateStore=bad_state
@@ -116,12 +117,22 @@ def test_pinned_builtin_observers_and_probe_do_not_block_or_duplicate_dsh(tmp_pa
                 except RuntimeError as exc:
                     assert str(exc)=='unsupported state schema'
                 else:raise AssertionError('bad storage accepted')
+                # A failed ACP handshake closes the already started MCP listener.
+                router_module.StateStore=original_state
+                async def bad_handshake(**kwargs):raise RuntimeError('ACP handshake failed')
+                router_module.start_client=bad_handshake
+                try:
+                    await router.initialize()
+                except RuntimeError as exc:
+                    assert str(exc)=='ACP handshake failed'
+                else:raise AssertionError('bad handshake accepted')
+                assert router.mcp._socket is None and router.mcp._task is None
             print('V2_PHASE3_PIPELINE_OK')
         asyncio.run(main())
     ''')
     result = subprocess.run([str(runtime/'.venv/bin/python'),'-c',script],cwd=runtime,
         env={**os.environ,'ASTRBOT_ROOT':str(runtime),'V2_REPO_ROOT':str(root),'V2_QQ_ALLOWED_CONVERSATIONS':'private:900002',
-             'V2_DSH_PROVIDER':'test-provider','V2_DSH_MODEL':'test-model'},
+             'V2_MCP_PORT':'0','V2_DSH_PROVIDER':'test-provider','V2_DSH_MODEL':'test-model'},
         capture_output=True,text=True,timeout=45)
     assert result.returncode==0,result.stdout+result.stderr
     assert 'V2_PHASE3_PIPELINE_OK' in result.stdout

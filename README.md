@@ -14,9 +14,9 @@ Before development, read:
 - [`docs/phases/phase-3.md`](docs/phases/phase-3.md) — completed DSH chat-loop scope.
 - [`docs/phases/phase-3-remediation.md`](docs/phases/phase-3-remediation.md) — completed implementation-alignment work.
 - [`docs/phases/phase-3-startup-validation.md`](docs/phases/phase-3-startup-validation.md) — completed Phase 3 follow-up.
-- [`docs/phases/phase-4.md`](docs/phases/phase-4.md) — next MCP capability phase.
+- [`docs/phases/phase-4.md`](docs/phases/phase-4.md) — completed MCP capability phase.
 
-Current status: **Phase 3 and its follow-ups are complete; Phase 4 is ready for implementation.** The pinned AstrBot baseline
+Current status: **Phases 1–4 and the Phase 3 follow-ups are complete; Phase 5 has not started.** The pinned AstrBot baseline
 and V2-owned canonical journal are verified with controlled group/private QQ
 messages, including DSH replies and restart continuity. Concurrent event-bus tests establish that `journal_id` preserves
 V2 capture-callback order for one client. Phase 3 connects the pinned DSH
@@ -29,8 +29,8 @@ journal cursors. See the [Phase 1 findings](docs/phases/phase-1-findings.md),
 [remediation findings](docs/phases/phase-3-remediation-findings.md).
 
 The journal records OneBot inbound messages and platform-confirmed Bot
-`message_sent` feedback. Phase 3 adds the V2-owned DSH router; MCP is not
-integrated yet.
+`message_sent` feedback. Phase 3 adds the V2-owned DSH router; Phase 4 attaches scoped AstrBot MCP
+capabilities to its native DSH sessions.
 
 ## Phase 1: bootstrap AstrBot
 
@@ -231,3 +231,32 @@ Deterministic V2 handlers that own an ordinary-text message must set
 observers leave the marker unset. Routing uses this handling outcome instead
 of handler-name classification. See the
 [remediation findings](docs/phases/phase-3-remediation-findings.md).
+
+## Phase 4: AstrBot MCP capabilities
+
+Install the router's direct MCP runtime dependencies in the V2 environment:
+
+```bash
+.runtime/astrbot/.venv/bin/python -m pip install -r astrbot-plugins/v2_dsh_router/requirements.txt
+```
+
+The router now owns a loopback MCP listener in the AstrBot process.
+`V2_MCP_PORT` defaults to 6210; use an available V2-specific port. The existing
+provider/model and allowed-conversation settings remain required. Startup does
+not create DSH sessions or run model probes.
+
+Each active QQ turn attaches current-conversation HTTP MCP declarations through
+native ACP session creation/resume. The tools are `history_recent`,
+`history_before`, `history_search`, `current_group_info`, and `qq_send_origin`.
+Their inputs contain no destination ID; history and sends are bound by the
+runtime to the source conversation. Group information uses AstrBot's native
+`get_group` query. Normal final text is sent automatically; `qq_send_origin`
+provides a separate workflow output when needed. Only platform feedback creates
+its canonical outbound journal row and real message ID.
+
+```bash
+./scripts/check-phase4.sh
+```
+
+Contracts, real QQ tool calls, message IDs, restart evidence and limits are in
+[Phase 4 findings](docs/phases/phase-4-findings.md).

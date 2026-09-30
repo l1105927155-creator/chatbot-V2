@@ -1,6 +1,7 @@
 # Phase 4 — AstrBot MCP capability boundary
 
-> Status: ready for implementation; Phase 3 startup follow-up completed
+> Status: completed (2026-09-30)
+> Evidence: [Phase 4 findings](phase-4-findings.md)
 > Parent plan: [PLAN.md](../../PLAN.md)
 
 ## Product goal

@@ -325,6 +325,47 @@ class JournalStore:
             ).fetchall()
         return [self._row(row) for row in reversed(rows)]
 
+    def search(
+        self,
+        conversation: Conversation,
+        query: str,
+        *,
+        before_id: int | None = None,
+        limit: int = 100,
+    ) -> list[JournalRow]:
+        """Search text in one conversation, returning rows in journal order.
+
+        Search is a literal, case-insensitive substring match over normalized
+        message text. The query is always a bound SQL parameter.
+        """
+        if not isinstance(query, str) or not query.strip():
+            raise ValueError("query must not be empty")
+        if len(query) > 200:
+            raise ValueError("query must be at most 200 characters")
+        if before_id is not None and (not isinstance(before_id, int) or before_id <= 0):
+            raise ValueError("before_id must be a positive integer")
+        limit = self._limit(limit)
+        clauses = [
+            "platform_id=?", "bot_id=?", "conversation_key=?",
+            "lower(json_extract(content_json, '$.text')) LIKE lower(?) ESCAPE '\\'",
+        ]
+        escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        params: list[Any] = [
+            conversation.platform_id, conversation.bot_id, conversation.key,
+            f"%{escaped}%",
+        ]
+        if before_id is not None:
+            clauses.append("journal_id<?")
+            params.append(before_id)
+        params.append(limit)
+        with self._db() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM journal WHERE {' AND '.join(clauses)} "
+                "ORDER BY journal_id DESC LIMIT ?",
+                params,
+            ).fetchall()
+        return [self._row(row) for row in reversed(rows)]
+
     def by_message_id(self, platform_id: str, bot_id: str, message_id: str) -> list[JournalRow]:
         with self._db() as conn:
             rows = conn.execute(
