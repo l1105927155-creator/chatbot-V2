@@ -1,6 +1,6 @@
 # chatbot-V2 实施计划大纲
 
-> 状态：Phase 4 完成；Phase 5 尚未开始
+> 状态：Phase 4 完成；Phase 5 前冻结 orchestration / capability 职责边界
 > 目标：在开始搬运旧代码前冻结职责边界与验收标准，避免再次通过局部修补把集成层扩展成第三个平台。
 
 ## 1. 产品目标
@@ -29,6 +29,9 @@ V2 的目标不是“把 DSH 接到 QQ”，而是形成一个长期可维护的
 
 4. **正常 QQ 收发必须经过 AstrBot**  
    DSH 不把直接调用 NapCat/OneBot 当成正常聊天路径。这样所有输出都能被 AstrBot 观察并写入 journal；直接 OneBot 只保留为受限运维/故障诊断能力。
+
+5. **集成编排与能力提供分离**  
+   DSH router 负责 conversation → session 的调度、turn 串行、journal cursor 与恢复语义。MCP boundary 负责把 AstrBot 能力以稳定 contract 提供给 DSH。新增业务能力不应要求 router 理解该能力的业务语义。详细审查原则见 `docs/architecture/orchestration-capability-boundary.md`。
 
 ## 3. 初始上游基线
 
@@ -321,6 +324,16 @@ Phase 3 的端到端功能已经通过，但进入 MCP 前先收敛三个实现�
 - 旧历史查询、真实 AstrBot 能力调用、当前会话发送三条故事均通过。
 - 重启后原 conversation ↔ DSH session 关系继续成立，并仍可使用 MCP 能力。
 - 详细验收见 `docs/phases/phase-4.md`。
+
+### Phase 4.1 — Architecture boundary freeze
+
+目标：
+- 固定“router 负责会话编排，MCP boundary 负责能力提供”的长期边界。
+- 后续新增业务能力时，router 不成为默认承载点。
+
+验收：
+- Phase 5/6 的设计可在不扩大 router 业务知识的前提下继续演进。
+- 审查原则见 `docs/architecture/orchestration-capability-boundary.md`。
 
 ### Phase 5 — 程序化权限
 
