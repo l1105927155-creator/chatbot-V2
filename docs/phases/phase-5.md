@@ -1,89 +1,63 @@
-# Phase 5 — DSH native capability boundaries and minimal integration
+# Phase 5 — 会话授权范围名单与原生能力接入
 
-> Status: remediation-first; native validation must precede minimal integration  
-> Parent plan: [PLAN.md](../../PLAN.md)  
-> Required development entry: [Phase 5 remediation](phase-5-remediation.md)  
-> Architecture boundary: [orchestration vs capability](../architecture/orchestration-capability-boundary.md)
+> 状态：需求已确认；先验证固定版本原生机制，再实现与验收  
+> 主计划：[PLAN.md](../../PLAN.md)  
+> 授权规则：[会话授权范围名单](../architecture/conversation-authorization-scope.md)  
+> 实施要求：[整改意见](phase-5-remediation.md)  
+> 架构边界：[编排与能力提供](../architecture/orchestration-capability-boundary.md)
 
-## Product goal
+## 产品目标
 
-Use the pinned DSH runtime's native tool restrictions, execution guards, sandbox
-and approval mechanisms to enforce the capabilities intended for each QQ turn.
-Retain owner-scoped system operations. Keep AstrBot's capabilities available
-through MCP and guides without rebuilding DSH execution in V2.
+按会话独立、持久维护授权范围名单。DSH 实际系统操作执行前，程序依据本轮真实请求者与最新已提交名单判断允许或拒绝。
+普通成员仅使用明确允许的操作和资源；owner 允许部署已启用的全部系统操作，并可编辑本会话名单。
+本阶段没有 QQ 逐次审批、等待状态或批准后恢复执行。
 
-Authority comes from trusted inbound source facts and explicit configuration,
-not model judgment, prompt wording, nicknames, quoted history or remembered
-identity. A group conversation/session is not permanently an owner identity.
+名单控制文件等实际操作，不限制自然语言回复内容，不承诺收回已进入上下文的信息。
+“读取 persona.md”的授权仅增加普通成员分支中的具体可读文件，不开放任意文件读取或写入/删除。
 
-Current Phase 4 tools and disabled shell profile describe the implemented
-baseline, not the final product capability ceiling.
+## 实施顺序
 
-## Required sequence
+1. 验证固定版本原生工具、restrict、pre-execute、guard 与 sandbox 的真实边界，记录 `docs/phases/phase-5-native-findings.md`。
+2. 在最小原生扩展中接入可信当前请求者、会话名单的逐次检查及 owner 配置修改；保留 DSH 原生工具执行。
+3. 原生机制无法满足必须的操作检查时记录可复现缺口；若需改变架构，回到需求评审，不能自行建设替代平台。
 
-1. Follow the remediation document's native verification requirements. Record
-   actual behavior, failures and scope limits in
-   `docs/phases/phase-5-native-findings.md`.
-2. After evidence establishes feasibility, connect only the missing source,
-   action-correlation and one-shot confirmation pieces through thin adapters.
-   Preserve native DSH tool execution.
-3. If satisfying a requirement needs a different authorization architecture,
-   record the reproducible upstream gap and return to requirements review.
-   Do not build an alternative policy/approval platform during this phase.
+`tools.restrict()` 仅限制全局工具，Agent 本地注册及 MCP 工具需分别验证。
+不得缓存上轮放行状态作为本轮权限。同一轮多次操作也分别读取最新名单。
+不得为了更新名单重建 DSH session 或丢失已有 cursor/context。
 
-The existence of an API is not proof that the current integration enforces it.
-In particular, `tools.restrict()` masks global tools; scope-local registrations
-remain visible. Native, Agent-local and MCP execution paths need separate
-verification. ACP has one-shot permission requests, but the current V2 client
-does not implement that interaction.
+## 职责与范围
 
-## Responsibilities and limits
+- Router 负责调度、session、turn 串行、cursor 和恢复，只传递必要可信事件事实。
+- 原生执行边界检查请求者、操作和真实目标资源；普通成员无法确定范围时拒绝。
+- 名单以现有 platform/bot/conversation 标识持久保存，普通成员分支按会话共享，不新增逐成员授权体系。
+- owner `1105927155` 为已确认部署/验收身份，不能从 prompt/记忆推断，不硬编码进通用业务工具。
+- owner 无逐次确认；不突破已有系统沙箱/操作系统权限，不改变当前来源发送等工具契约。
+- 普通成员不能编辑名单；owner 更新须原子持久化并处理保存失败、并发覆盖。
+- 拒绝请求直接结束，不创建待批准动作；是否向 owner 转述由 DSH 自行决定。
+- 不默认把原生文件/shell 能力重做为 V2 MCP 工具，不新增权限数据库平台、policy ledger、execution claim 或审批服务。
+- 现有五个 MCP 工具契约、参数与当前来源校验保持成立。新增能力不能扩大 Router 业务知识。
 
-- Router owns turn admission, session mapping, serialization, cursor and
-  recovery. It may transport trusted event facts but does not own business
-  capability definitions or an expanding permission platform.
-- DSH native mechanisms own system-tool execution and the enforced capability
-  boundary. A QQ approval adapter correlates the exact native action and
-  returns a one-shot decision; it does not reimplement file/shell tools.
-- MCP providers retain argument, current-origin and active-turn checks.
-  Conversation-scoped transport tokens are not owner roles or approvals.
-- Preserve the five Phase 4 MCP tool contracts. Do not add V2 workspace
-  mutation MCP tools by default, a role database, policy ledger, execution
-  claims, HMAC execution context or a separate approval service.
-- Packaging follows actual lifecycle needs; no forced plugin/process split.
-- Retain owner `1105927155` as the already confirmed deployment/test identity.
-  Owner workspace write/delete remain required sensitive acceptance actions
-  through the native DSH capability chain. Other system tools are opened only
-  as required by verified scenarios; owner status is not unlimited authority.
+## 验收
 
-## Required acceptance
+完整操作与名单语义以[授权规则文档](../architecture/conversation-authorization-scope.md)为准：
 
-- Ordinary users retain chat, scoped history, existing AstrBot queries and
-  current-conversation output.
-- Direct invocation tests independently of model compliance prove denied
-  dangerous operations have no side effects; injection cannot expand authority.
-- Owner writes and deletes only disposable content in an isolated DSH workspace
-  through native tools, with no side effect before exact-action confirmation.
-- Reject, cancel, timeout, disconnect, mismatched correlation and replay cannot
-  authorize execution. Changed action/path/content requires its own decision.
-- Same-group sender changes, concurrent conversations and restart do not
-  transfer capability grants or one-shot approvals.
-- Existing sessions, cursors, deterministic-command interleaving, MCP output
-  journal capture and startup without inference/session probes remain valid.
+- 普通聊天、现有 MCP 与 scoped history 保持可用。
+- 直接调用验证范围内允许、范围外拒绝，不以模型配合作为安全证据。
+- persona 精确读取授权不扩展到其它文件或写入/删除；实际路径与间接入口无法绕过。
+- owner 编辑名单后普通成员重新请求成功；撤销后下次操作拒绝；重启保持规则。
+- 同轮两次操作间名单变化、同群身份切换和跨会话并发均使用正确最新规则。
+- owner 在隔离工作区通过原生工具写入/删除一次性测试内容，无 QQ 确认流程。
+- 拒绝后会话可继续，无审批挂起或被拒动作自动重放。
+- 保存失败不虚报成功；并发修改不静默覆盖新规则。
+- 保持原 session/cursor、命令穿插、MCP 输出入 journal 和无模型调用启动行为。
 
-Only one controllable QQ account is available: the already authorized temporary
-owner-config removal/restoration in isolated acceptance may prove ordinary and
-owner behavior. Direct programmatic tests must separately cover same-group
-different-sender isolation. Do not narrow permanent product behavior to simplify
-live testing.
+只有一个可控 QQ 账号时，沿用已授权的隔离测试方式暂时移除 owner 配置验证普通成员，再恢复验证 owner；
+同群不同发送者必须有独立程序测试，不为测试便利永久收窄产品行为。
 
-Record actual implementation and test evidence, including limitations, in
-`docs/phases/phase-5-findings.md`. Historical Phase 4 tests are not Phase 5
-permission/approval acceptance. Full details and evidence requirements are in
-[the remediation document](phase-5-remediation.md).
+将实际验收、失败和未验证项写入 `docs/phases/phase-5-findings.md`。
+既有 Phase 4 测试不证明本阶段已完成。本次文档更新没有运行开发验收。
 
-## Handoff to Phase 6
+## Phase 6 前置条件
 
-Business migration starts after native boundaries and minimal integration pass
-acceptance while keeping Router business knowledge stable. A generic V2
-authority platform is not a prerequisite.
+名单逐次检查、持久化与 owner 修改已验收，原生能力接入没有引入第三个平台，
+新增 AstrBot 能力可独立演进；不要求先建立通用权限或审批平台。

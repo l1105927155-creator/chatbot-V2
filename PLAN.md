@@ -1,6 +1,6 @@
 # chatbot-V2 实施计划大纲
 
-> 状态：Phase 4 与职责边界冻结完成；Phase 5 按整改路线先验证原生机制，再做最小接入
+> 状态：Phase 4 与职责边界冻结完成；Phase 5 按会话授权范围名单路线验证与实施，无 QQ 逐次审批
 > 目标：在开始搬运旧代码前冻结职责边界与验收标准，避免再次通过局部修补把集成层扩展成第三个平台。
 
 ## 1. 产品目标
@@ -25,7 +25,7 @@ V2 的目标不是“把 DSH 接到 QQ”，而是形成一个长期可维护的
    AstrBot 保留平台、插件、WebUI 和确定性自动化能力，但关闭默认 LLM 回复。需要自然语言推理的消息交给 DSH。
 
 3. **DSH 是认知主体，不是权限来源**  
-   AGENTS.md / MCP instructions 用于告诉 DSH 如何使用能力；真正权限由 DSH 的 tool restriction、`tools/pre-execute`、monotonic guard、sandbox/approval 与 MCP 服务端校验共同执行。
+   AGENTS.md / MCP instructions 用于告诉 DSH 如何使用能力；真正权限由 DSH 的 tool restriction、`tools/pre-execute`、monotonic guard、sandbox 与 MCP 服务端校验共同执行；Phase 5 按本轮可信请求者和最新会话授权范围名单直接允许或拒绝，不引入 QQ 行为审批。
 
 4. **正常 QQ 收发必须经过 AstrBot**  
    DSH 不把直接调用 NapCat/OneBot 当成正常聊天路径。这样所有输出都能被 AstrBot 观察并写入 journal；直接 OneBot 只保留为受限运维/故障诊断能力。
@@ -156,29 +156,25 @@ created_at
 
 AstrBot 4.28.x 已有 `PlatformMessageHistory`，Phase 1 会验证它对上述矩阵的覆盖度。若能满足 contract，则通过 adapter 复用；若不能，建立 V2 自己的 journal 表。**不会为了复用上游表而牺牲 contract。**
 
-## 7. 原生能力边界与最小接入
+## 7. 会话授权范围名单与原生能力边界
 
-权限来自可信入站发送者与程序配置，DSH 负责认知，不自行授予权限。
-V2 优先复用 DSH 原生工具执行、限制、sandbox 与审批，不自建通用角色、权限或执行平台。
-[Phase 5 整改意见](docs/phases/phase-5-remediation.md)是本阶段必读入口。
+完整规则见[会话授权范围名单](docs/architecture/conversation-authorization-scope.md)，实施入口见[整改意见](docs/phases/phase-5-remediation.md)。
 
-固定版本能力的源码事实与验证要求：
+- 名单按现有 platform/bot/conversation 标识独立持久保存，普通成员分支明确允许的操作和资源。
+- 每个实际系统操作前依据本轮真实请求者与最新已提交名单判断，不复用上下文/session/上一轮放行；同轮多操作也逐次检查。
+- 普通成员明确命中才放行，未命中或无法判定范围时拒绝。添加 persona 读取只允许指定文件，不开放任意读取或写入/删除。
+- owner `1105927155` 是已确认部署/验收身份，可编辑本会话名单并执行部署已启用的全部系统操作，无逐次确认。
+- owner 不突破操作系统权限、已有沙箱或工具自身契约；普通成员不能靠正文声称、昵称、引用或记忆获得 owner 身份。
+- 名单更新须原子持久化、避免并发静默覆盖，成功后对后续检查生效，重启继续有效；不追溯取消已开始操作。
+- 无审批等待/恢复队列；被拒操作直接返回拒绝结果，不自动重放。是否转述给 owner 由 DSH 自行决定。
+- 名单控制实际系统操作与新的数据访问，不控制 DSH 回复内容，也不承诺撤销模型已知信息。
 
-- Agent 级 `tools.restrict()` 只限制全局工具，作用域本地注册工具仍可见；全局、Agent 本地和 MCP 工具须分别验证可见性与直接执行拒绝。
-- `tools/pre-execute` 与单调 `ctx.tools.guard()` 提供执行控制入口，实际组合与隔离效果须验证。
-- permission preset / sandbox 用于原生文件与 shell 边界，不因机制存在就宣称已安全接入。
-- ACP 提供一次性权限请求，但当前 V2 客户端尚未接入其处理；先验证动作关联与失败行为，再做最薄 QQ 确认适配。
-- MCP 服务端继续校验自身参数、当前来源和活跃 turn；会话 token 不表示 owner 身份或动作批准。
-
-普通 QQ 用户保留 history 只读、安全 AstrBot 查询及当前来源输出，不获得 shell、文件写入、任意 HTTP/OneBot 管理、跨会话发送或 AstrBot 管理配置权限。
-这些是程序必须验证的边界，不仅是指南中的要求。
-
-Owner 受限系统操作目标继续保留。已确认部署/验收 owner 为 `1105927155`；工作区写入、删除通过原生能力链与逐次确认验收，不默认重做为 V2 MCP 工具。
-其它原生系统工具按实际需求和验证结果开放，owner 不等于无限权限。
-
-群内不同发送者共享 session，权限必须依据可信当前发送者执行，不能永久绑定到群/session 或从历史文本推断。
-一次性确认必须关联实际动作；拒绝、取消、超时、断连、重启或关联失败不能产生授权副作用。
-只有证实原生机制不足时才提出最小补充；若需要改变架构，记录证据并回到需求评审。
+优先复用 DSH 原生执行、restrict、pre-execute、单调 guard 与 sandbox。
+restrict 仅限制全局工具，作用域本地注册与 MCP 工具必须分别验证直接执行边界；
+普通成员无法可靠判定副作用的 shell/代码执行默认拒绝，已启用间接入口不能绕过文件范围。
+不默认重做 DSH 文件/shell MCP 工具，不迁移旧通用权限体系，不新增 QQ 审批适配。
+群内身份逐轮绑定，不能因 owner 曾执行操作就给共享 session 永久权限。
+遇到需改变架构的原生缺口，记录证据并回到需求评审。
 
 ## 8. 仓库规划
 
@@ -323,20 +319,22 @@ Phase 3 的端到端功能已经通过，但进入 MCP 前先收敛三个实现�
 - Phase 5/6 的设计可在不扩大 router 业务知识的前提下继续演进。
 - 审查原则见 `docs/architecture/orchestration-capability-boundary.md`。
 
-### Phase 5 — 原生能力边界验证与最小接入
+### Phase 5 — 会话授权范围名单与原生能力接入
 
 顺序：
-1. 固定上游验证工具作用域、直接执行拒绝、guard、sandbox、审批与 ACP，记录 `docs/phases/phase-5-native-findings.md`。
-2. 原生机制可满足要求后，只接入可信来源事实和必要的一次性确认交互，保留原生系统工具执行。
-3. 需改变架构的缺口回到需求评审，不自行建设权限/审批/执行平台。
+
+1. 固定上游验证原生工具作用域、执行前限制与逐次检查，记录 `docs/phases/phase-5-native-findings.md`。
+2. 最小接入可信请求者、会话名单持久化和 owner 配置编辑，保留原生系统工具执行。
+3. 无 QQ 逐次审批。需改变架构的缺口回到需求评审，不自行建设替代平台。
 
 验收：
-- 普通聊天与现有 MCP 能力继续可用；直接调用和提示词注入不能扩权。
-- owner 原生工作区写入、删除逐次确认；拒绝、取消和失去动作关联时不执行。
-- 同群发送者切换、跨会话并发及重启不继承权限或一次性批准。
-- 既有 session、cursor、命令穿插、journal 输出与无模型调用启动行为保持通过。
-- Router 不增加业务能力知识，不默认把 DSH 文件/shell 能力重做为 MCP 工具。
-- 开发范围见 [Phase 5](docs/phases/phase-5.md)，实施要求见[整改意见](docs/phases/phase-5-remediation.md)。
+
+- 普通成员按操作与资源范围允许或拒绝；精确 persona 读取不放宽其它文件或写入/删除。
+- owner 更新后重新请求生效，撤销和重启后正确判断；每次操作以最新名单为准。
+- 同轮配置变化、同群身份切换与并发会话不复用旧权限。
+- owner 原生工作区写入/删除无确认流程；拒绝后聊天继续，无自动重放。
+- 保持 session、cursor、命令穿插、journal 输出和无模型调用启动行为。
+- 完整规则见[授权范围名单](docs/architecture/conversation-authorization-scope.md)，范围见 [Phase 5](docs/phases/phase-5.md)，要求见[整改意见](docs/phases/phase-5-remediation.md)。
 
 ### Phase 6 — 功能迁移
 

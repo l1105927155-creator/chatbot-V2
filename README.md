@@ -16,12 +16,14 @@ Before development, read:
 - [`docs/phases/phase-3-remediation.md`](docs/phases/phase-3-remediation.md) — completed implementation-alignment work.
 - [`docs/phases/phase-3-startup-validation.md`](docs/phases/phase-3-startup-validation.md) — completed Phase 3 follow-up.
 - [`docs/phases/phase-4.md`](docs/phases/phase-4.md) — completed MCP capability phase.
-- [`docs/phases/phase-5.md`](docs/phases/phase-5.md) — current native-boundary validation and minimal-integration phase.
+- [`docs/phases/phase-5.md`](docs/phases/phase-5.md) — current conversation authorization-scope and native-integration phase.
 - [`docs/phases/phase-5-remediation.md`](docs/phases/phase-5-remediation.md) — required current development entry, code evidence and acceptance requirements.
 
-Current status: **Phases 1–4 are complete; Phase 5 follows the remediation-first route: verify pinned DSH native boundaries, then implement minimal integration.**
-Owner-scoped system operations remain a product goal. Native permission/approval
-acceptance has not been established by Phase 4 tests. Read the
+Current status: **Phases 1–4 are complete; Phase 5 implements persistent per-conversation authorization scopes through verified native DSH execution boundaries, without QQ per-action approval.**
+Read the confirmed [authorization-scope rules](docs/architecture/conversation-authorization-scope.md).
+Every system operation checks the current requester and latest committed scope;
+owner may edit the scope and use all enabled system operations. Scope rules govern
+operations, not natural-language replies. Phase 4 tests do not establish Phase 5 acceptance. Read the
 [remediation requirements](docs/phases/phase-5-remediation.md) before development;
 do not resume the previous permission-wrapper design. The pinned AstrBot baseline
 and V2-owned canonical journal are verified with controlled group/private QQ
