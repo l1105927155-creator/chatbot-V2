@@ -1,6 +1,6 @@
 # Phase 5 — 待远程评审的架构问题
 
-> 状态：待反馈；产品接入尚未开始
+> 状态：反馈已记录；见[架构评审反馈](phase-5-architecture-feedback.md)，产品接入尚未验收
 > 日期：2026-09-30
 > 需求基线：`5fd1503`
 > 运行证据：[原生验证记录](phase-5-native-findings.md)

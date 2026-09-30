@@ -4,6 +4,7 @@
 > 主计划：[PLAN.md](../../PLAN.md)  
 > 授权规则：[会话授权范围名单](../architecture/conversation-authorization-scope.md)  
 > 实施要求：[整改意见](phase-5-remediation.md)  
+> 评审决定：[架构评审反馈](phase-5-architecture-feedback.md)  
 > 架构边界：[编排与能力提供](../architecture/orchestration-capability-boundary.md)
 
 ## 产品目标
@@ -14,6 +15,13 @@
 
 名单控制文件等实际操作，不限制自然语言回复内容，不承诺收回已进入上下文的信息。
 “读取 persona.md”的授权仅增加普通成员分支中的具体可读文件，不开放任意文件读取或写入/删除。
+
+## 已确认评审边界
+
+按[评审反馈](phase-5-architecture-feedback.md)继续最小接入。owner 为可信本人；
+不要求防御可信 owner/本机进程在检查与 I/O 之间主动替换路径，不以对象级竞态修复阻塞本阶段。
+普通成员路径与静态链接越界仍需阻止。公开原生扩展优先，不批准直接修改上游 core。
+overwrite/edit 附带读取分别鉴权；私有运行期来源文件可作为候选，但可信 turn 绑定必须实测通过。
 
 ## 实施顺序
 
