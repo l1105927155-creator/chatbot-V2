@@ -7,6 +7,7 @@ The repository intentionally does **not** copy the old `chatbot` codebase or ven
 Before development, read:
 
 - [`PLAN.md`](PLAN.md) — architecture baseline and phased roadmap.
+- [`docs/architecture/orchestration-capability-boundary.md`](docs/architecture/orchestration-capability-boundary.md) — frozen integration responsibility boundary.
 - [`AGENTS.md`](AGENTS.md) — repository development constraints.
 - [`docs/phases/phase-1.md`](docs/phases/phase-1.md) — completed AstrBot baseline.
 - [`docs/phases/phase-2.md`](docs/phases/phase-2.md) — completed journal scope.
