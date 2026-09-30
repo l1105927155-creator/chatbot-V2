@@ -33,14 +33,6 @@ class AcpRuntime:
             })
             if "resume" not in initialized.get("agentCapabilities", {}).get("sessionCapabilities", {}):
                 raise RuntimeError("pinned DSH ACP runtime did not advertise session resume")
-            # Native model discovery accepts unlisted model IDs. A short,
-            # isolated prompt validates the actual configured provider route;
-            # no result is delivered to QQ or bound to a conversation.
-            validation = self.new_session()
-            try:
-                self.run(validation, "Startup configuration check. Reply only OK.")
-            finally:
-                self.close_session(validation)
         except BaseException:
             self.client.close()
             raise
@@ -106,8 +98,8 @@ class DshClient:
         self._session_locks = {}
         self._sessions = set()
         self._closed = False
-        # Initialize once before concurrent callers use the transport. Native
-        # startup also validates the configured provider/model with a short probe.
+        # Initialize the shared transport without creating a session or running
+        # inference. Provider availability is established by real turns.
         self.runtime = (harness_factory or AcpRuntime)(**self.settings)
 
     def _session_lock(self, session_id):

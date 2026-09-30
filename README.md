@@ -13,10 +13,10 @@ Before development, read:
 - [`docs/phases/phase-2.1.md`](docs/phases/phase-2.1.md) — completed ordering contract.
 - [`docs/phases/phase-3.md`](docs/phases/phase-3.md) — completed DSH chat-loop scope.
 - [`docs/phases/phase-3-remediation.md`](docs/phases/phase-3-remediation.md) — completed implementation-alignment work.
-- [`docs/phases/phase-3-startup-validation.md`](docs/phases/phase-3-startup-validation.md) — current Phase 3 follow-up.
+- [`docs/phases/phase-3-startup-validation.md`](docs/phases/phase-3-startup-validation.md) — completed Phase 3 follow-up.
 - [`docs/phases/phase-4.md`](docs/phases/phase-4.md) — next MCP capability phase.
 
-Current status: **Phase 3 functional work is complete; one startup-side-effect correction remains before Phase 4.** The pinned AstrBot baseline
+Current status: **Phase 3 and its follow-ups are complete; Phase 4 is ready for implementation.** The pinned AstrBot baseline
 and V2-owned canonical journal are verified with controlled group/private QQ
 messages, including DSH replies and restart continuity. Concurrent event-bus tests establish that `journal_id` preserves
 V2 capture-callback order for one client. Phase 3 connects the pinned DSH
@@ -190,10 +190,12 @@ Set `V2_DSH_PROVIDER` and `V2_DSH_MODEL` explicitly in the V2 process
 environment. For example, the live acceptance used `deepseek-official` and
 `deepseek-v4-flash`; these are test selections, not structural profile defaults.
 Keep provider credentials (for example `DEEPSEEK_API_KEY`) in the process
-environment; do not put them in this repository. Startup sends one short
-provider request in an isolated validation session, then closes it. Invalid
-configuration rejects router initialization. This check incurs model usage and
-leaves an independent persisted DSH session; it sends nothing to QQ. The V2 profile in `dsh/profile` disables local shell
+environment; do not put them in this repository. Startup initializes the ACP
+transport without creating sessions or invoking
+inference. Missing or malformed provider/model selection fails clearly; provider
+availability is established by actual conversation turns. A failed turn is
+reported without committing successful cursor progress. The V2 profile in
+`dsh/profile` disables local shell
 tools and supplies only the conversational instructions and journal delta.
 
 Set `V2_QQ_ALLOWED_CONVERSATIONS` for the QQ conversations admitted to DSH,

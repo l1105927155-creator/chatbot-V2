@@ -1,6 +1,6 @@
 # Phase 4 — AstrBot MCP capability boundary
 
-> Status: ready after the Phase 3 startup-validation follow-up  
+> Status: ready for implementation; Phase 3 startup follow-up completed
 > Parent plan: [PLAN.md](../../PLAN.md)
 
 ## Product goal

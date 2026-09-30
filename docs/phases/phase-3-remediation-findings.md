@@ -3,6 +3,8 @@
 > Status: completed, 2026-09-30
 > Requirements: [Phase 3 remediation](phase-3-remediation.md)
 > Original functional evidence: [Phase 3 findings](phase-3-findings.md)
+> Historical startup validation below was removed by the completed
+> [startup follow-up](phase-3-startup-validation.md).
 
 ## Changes
 

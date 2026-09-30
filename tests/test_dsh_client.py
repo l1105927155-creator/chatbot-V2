@@ -110,10 +110,10 @@ def test_missing_or_malformed_model_configuration_fails_before_launch(tmp_path,m
     with pytest.raises(ValueError,match='V2_DSH_'):module.DshClient(**kw)
 
 
-def test_native_configuration_failure_propagates_at_startup(tmp_path):
+def test_transport_initialization_failure_propagates_at_startup(tmp_path):
     class Invalid(Runtime):
-        def __init__(self,**kw):raise RuntimeError('unknown model')
-    with pytest.raises(RuntimeError,match='unknown model'):module.DshClient(**settings(tmp_path,Invalid))
+        def __init__(self,**kw):raise RuntimeError('handshake failed')
+    with pytest.raises(RuntimeError,match='handshake failed'):module.DshClient(**settings(tmp_path,Invalid))
 
 @pytest.mark.asyncio
 async def test_cancelled_startup_drains_and_closes_eventual_shared_process(tmp_path):
@@ -130,3 +130,24 @@ async def test_cancelled_startup_drains_and_closes_eventual_shared_process(tmp_p
     release.set()
     with pytest.raises(asyncio.CancelledError):await task
     assert len(created)==1 and created[0].closed
+
+
+def test_acp_startup_and_restart_do_not_create_sessions_or_prompt(tmp_path, monkeypatch):
+    import deepseek_harness.client
+    transports=[]
+    class Transport:
+        def __init__(self,config):
+            self.config=config;self.methods=[];self.closed=False;transports.append(self)
+        def start(self):pass
+        def request(self,method,params,*,response_model,**kwargs):
+            self.methods.append(method)
+            assert method=='initialize', 'startup must not create or prompt a session'
+            return response_model(agentCapabilities={'sessionCapabilities':{'resume':{}}})
+        def close(self):self.closed=True
+    monkeypatch.setattr(deepseek_harness.client,'HarnessClient',Transport)
+    kw=settings(tmp_path);kw.pop('harness_factory')
+    for _ in range(2):
+        client=module.DshClient(**kw);client.close()
+    assert len(transports)==2
+    assert all(t.methods==['initialize'] and t.closed for t in transports)
+    assert all(t.config.env['V2_DSH_MODEL']=='test-model' for t in transports)

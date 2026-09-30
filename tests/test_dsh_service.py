@@ -93,7 +93,8 @@ def test_intervening_command_reply_and_prior_dsh_reply_arrive_in_next_delta(tmp_
     assert len(dsh.calls) == 2
 
 
-def test_outcome_uncertainty_survives_restart_without_replay(tmp_path):
+@pytest.mark.parametrize("failure", [ConnectionError("outcome unknown"), RuntimeError("provider rejected model")])
+def test_outcome_uncertainty_survives_restart_without_replay(tmp_path, failure):
     j = journal.JournalStore(tmp_path / "journal.sqlite3")
     s = state.StateStore(tmp_path / "state.sqlite3")
     chat = journal.Conversation("qq", "1", "private:2")
@@ -107,18 +108,20 @@ def test_outcome_uncertainty_survives_restart_without_replay(tmp_path):
 
         def run(self, *_args):
             self.calls += 1
-            raise ConnectionError("outcome unknown")
+            raise failure
 
     dsh = FailedDsh()
 
     async def send(_reply):
         raise AssertionError("send must not run")
 
-    with pytest.raises(ConnectionError):
+    with pytest.raises(type(failure), match=str(failure)):
         asyncio.run(service.ChatService(j, s, dsh).handle(chat, "in-1", send))
     with pytest.raises(service.PendingTurnError):
         asyncio.run(service.ChatService(j, state.StateStore(s.path), dsh).handle(chat, "in-1", send))
     assert dsh.calls == 1
+    saved = s.get("qq", "1", "private:2")
+    assert saved.last_seen_journal_id == 0 and saved.pending_upper_cursor == 1
 
 
 def test_same_conversation_serialized_and_other_conversation_independent(tmp_path):
