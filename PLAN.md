@@ -1,6 +1,6 @@
 # chatbot-V2 实施计划大纲
 
-> 状态：Phase 4 完成；Phase 5 前冻结 orchestration / capability 职责边界
+> 状态：Phase 4 与职责边界冻结完成；Phase 5 ready for implementation
 > 目标：在开始搬运旧代码前冻结职责边界与验收标准，避免再次通过局部修补把集成层扩展成第三个平台。
 
 ## 1. 产品目标
@@ -337,17 +337,16 @@ Phase 3 的端到端功能已经通过，但进入 MCP 前先收敛三个实现�
 
 ### Phase 5 — 程序化权限
 
-任务：
-- 普通 QQ Agent tool restriction。
-- owner profile 权限。
-- `tools/pre-execute` / guard。
-- workspace sandbox 和 approval。
-- MCP 目标校验。
+目标：
+- 权限来自可信 QQ 身份与程序化上下文，而不是模型、提示词或记忆。
+- 普通 QQ conversation 只能使用其明确授权的能力；owner conversation 可获得额外能力。
+- 高副作用动作按实际风险要求确认。
+- 权限能力与 router 的 conversation/session 编排职责保持分离。
 
-验收至少覆盖：
-- 普通用户不能调用 shell/fs/admin/cross-session send。
-- 提示词注入不能扩大工具可见性。
-- owner 可在明确审批后完成一个受限系统操作。
+验收：
+- 普通用户、owner、提示词注入、敏感动作确认、并发 conversation 隔离五条故事通过。
+- 重启后身份与能力边界保持一致。
+- 详细范围见 `docs/phases/phase-5.md`。
 
 ### Phase 6 — 功能迁移
 
