@@ -159,3 +159,10 @@ QQ
 with one shared DSH ACP runtime managing the conversation sessions and a routing contract based on actual message ownership rather than a growing catalog of plugin identities.
 
 After that baseline is stable, Phase 4 can add the MCP boundary without inheriting these Phase 3 implementation choices.
+
+
+## Follow-up review
+
+A later review found one side effect in the model-configuration validation added by this remediation: router startup performs a real model request and leaves a persistent validation-only DSH session.
+
+That issue is tracked separately in [Phase 3 startup-validation follow-up](phase-3-startup-validation.md). The three architecture corrections in this document remain accepted.
