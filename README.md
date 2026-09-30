@@ -13,8 +13,10 @@ Before development, read:
 - [`docs/phases/phase-2.1.md`](docs/phases/phase-2.1.md) — completed ordering contract.
 - [`docs/phases/phase-3.md`](docs/phases/phase-3.md) — completed DSH chat-loop scope.
 - [`docs/phases/phase-3-remediation.md`](docs/phases/phase-3-remediation.md) — completed implementation-alignment work.
+- [`docs/phases/phase-3-startup-validation.md`](docs/phases/phase-3-startup-validation.md) — current Phase 3 follow-up.
+- [`docs/phases/phase-4.md`](docs/phases/phase-4.md) — next MCP capability phase.
 
-Current status: **Phase 3 and its remediation are complete; Phase 4 has not started.** The pinned AstrBot baseline
+Current status: **Phase 3 functional work is complete; one startup-side-effect correction remains before Phase 4.** The pinned AstrBot baseline
 and V2-owned canonical journal are verified with controlled group/private QQ
 messages, including DSH replies and restart continuity. Concurrent event-bus tests establish that `journal_id` preserves
 V2 capture-callback order for one client. Phase 3 connects the pinned DSH
