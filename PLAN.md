@@ -1,6 +1,6 @@
 # chatbot-V2 实施计划大纲
 
-> 状态：Phase 3 及整改完成（2026-09-30）；Phase 4 尚未开始
+> 状态：Phase 3 主体整改完成；启动校验副作用待收敛，随后进入 Phase 4
 > 目标：在开始搬运旧代码前冻结职责边界与验收标准，避免再次通过局部修补把集成层扩展成第三个平台。
 
 ## 1. 产品目标
@@ -297,18 +297,30 @@ Phase 3 的端到端功能已经通过，但进入 MCP 前先收敛三个实现�
 
 详细整改要求与验收见 `docs/phases/phase-3-remediation.md`。
 
-### Phase 4 — AstrBot MCP
+### Phase 3 follow-up — startup validation
 
-任务：
-- 只读 history tools。
-- 一个真实 AstrBot 功能以 typed MCP tool 暴露。
-- `qq_send_origin`。
-- MCP instructions + DSH AGENTS.md 明确职责和使用规则。
+目标：
+- 启动只完成运行时配置与集成初始化，不因重启产生模型调用和无业务归属的持久会话。
+- 真实 provider/model 可用性由真实 DSH turn 验证；失败 turn 不推进为成功消费的上下文。
 
 验收：
-- DSH 能按需查询旧历史。
-- DSH 能调用一个 AstrBot 能力后继续自然语言回复。
-- MCP 服务不可用于任意 handler 反射执行。
+- 重启无模型调用、无额外 DSH session。
+- 配置错误仍能明确失败。
+- Phase 3 会话、cursor、重启和 QQ 闭环保持不变。
+
+详细整改见 `docs/phases/phase-3-startup-validation.md`。
+
+### Phase 4 — AstrBot MCP
+
+目标：
+- DSH 可按需读取 canonical journal 的更早上下文。
+- DSH 可调用一个真实、确定性的 AstrBot 能力，并把结果继续用于自然语言对话。
+- DSH 的工具工作流可通过 AstrBot 向当前 QQ 会话产生可观察、可入 journal 的输出。
+
+验收：
+- 旧历史查询、真实 AstrBot 能力调用、当前会话发送三条故事均通过。
+- 重启后原 conversation ↔ DSH session 关系继续成立，并仍可使用 MCP 能力。
+- 详细验收见 `docs/phases/phase-4.md`。
 
 ### Phase 5 — 程序化权限
 
