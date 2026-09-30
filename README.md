@@ -16,9 +16,14 @@ Before development, read:
 - [`docs/phases/phase-3-remediation.md`](docs/phases/phase-3-remediation.md) — completed implementation-alignment work.
 - [`docs/phases/phase-3-startup-validation.md`](docs/phases/phase-3-startup-validation.md) — completed Phase 3 follow-up.
 - [`docs/phases/phase-4.md`](docs/phases/phase-4.md) — completed MCP capability phase.
-- [`docs/phases/phase-5.md`](docs/phases/phase-5.md) — current programmatic-permissions phase.
+- [`docs/phases/phase-5.md`](docs/phases/phase-5.md) — current native-boundary validation and minimal-integration phase.
+- [`docs/phases/phase-5-remediation.md`](docs/phases/phase-5-remediation.md) — required current development entry, code evidence and acceptance requirements.
 
-Current status: **Phases 1–4 are complete, the orchestration/capability boundary is frozen, and Phase 5 is ready for implementation.** The pinned AstrBot baseline
+Current status: **Phases 1–4 are complete; Phase 5 follows the remediation-first route: verify pinned DSH native boundaries, then implement minimal integration.**
+Owner-scoped system operations remain a product goal. Native permission/approval
+acceptance has not been established by Phase 4 tests. Read the
+[remediation requirements](docs/phases/phase-5-remediation.md) before development;
+do not resume the previous permission-wrapper design. The pinned AstrBot baseline
 and V2-owned canonical journal are verified with controlled group/private QQ
 messages, including DSH replies and restart continuity. Concurrent event-bus tests establish that `journal_id` preserves
 V2 capture-callback order for one client. Phase 3 connects the pinned DSH

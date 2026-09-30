@@ -1,6 +1,6 @@
 # chatbot-V2 实施计划大纲
 
-> 状态：Phase 4 与职责边界冻结完成；Phase 5 ready for implementation
+> 状态：Phase 4 与职责边界冻结完成；Phase 5 按整改路线先验证原生机制，再做最小接入
 > 目标：在开始搬运旧代码前冻结职责边界与验收标准，避免再次通过局部修补把集成层扩展成第三个平台。
 
 ## 1. 产品目标
@@ -16,7 +16,7 @@ V2 的目标不是“把 DSH 接到 QQ”，而是形成一个长期可维护的
 
 ## 2. 冻结的架构原则
 
-以下四条在 V2 第一阶段视为不可随实现细节改变的约束：
+以下五条在 V2 第一阶段视为不可随实现细节改变的约束：
 
 1. **一个逻辑上的 canonical journal**  
    QQ 实际发生过的入站与出站都必须可从一个统一历史接口观察。DSH 不直接读取多个数据库、bridge history 或插件私有状态来拼接聊天历史。
@@ -156,41 +156,29 @@ created_at
 
 AstrBot 4.28.x 已有 `PlatformMessageHistory`，Phase 1 会验证它对上述矩阵的覆盖度。若能满足 contract，则通过 adapter 复用；若不能，建立 V2 自己的 journal 表。**不会为了复用上游表而牺牲 contract。**
 
-## 7. 权限模型
+## 7. 原生能力边界与最小接入
 
-不再迁移旧 bridge 的通用 policy ledger、execution claim、delivery ledger 和 HMAC execution-context 体系作为默认架构。
+权限来自可信入站发送者与程序配置，DSH 负责认知，不自行授予权限。
+V2 优先复用 DSH 原生工具执行、限制、sandbox 与审批，不自建通用角色、权限或执行平台。
+[Phase 5 整改意见](docs/phases/phase-5-remediation.md)是本阶段必读入口。
 
-V2 先使用 DSH 原生能力：
+固定版本能力的源码事实与验证要求：
 
-- Agent 级 `tools.restrict()`：不可用工具从模型可见性与执行面同时移除。
-- `tools/pre-execute`：allow / deny / ask。
-- `ctx.tools.guard()`：不可被后续监听器撤销的最终 deny。
-- DSH permission preset / sandbox：限制文件和 shell。
-- MCP 服务端仍做参数与目标校验，不能只信模型。
+- Agent 级 `tools.restrict()` 只限制全局工具，作用域本地注册工具仍可见；全局、Agent 本地和 MCP 工具须分别验证可见性与直接执行拒绝。
+- `tools/pre-execute` 与单调 `ctx.tools.guard()` 提供执行控制入口，实际组合与隔离效果须验证。
+- permission preset / sandbox 用于原生文件与 shell 边界，不因机制存在就宣称已安全接入。
+- ACP 提供一次性权限请求，但当前 V2 客户端尚未接入其处理；先验证动作关联与失败行为，再做最薄 QQ 确认适配。
+- MCP 服务端继续校验自身参数、当前来源和活跃 turn；会话 token 不表示 owner 身份或动作批准。
 
-初始角色：
+普通 QQ 用户保留 history 只读、安全 AstrBot 查询及当前来源输出，不获得 shell、文件写入、任意 HTTP/OneBot 管理、跨会话发送或 AstrBot 管理配置权限。
+这些是程序必须验证的边界，不仅是指南中的要求。
 
-### 普通 QQ Agent
-允许：
-- journal/history 只读
-- 明确列出的安全 AstrBot 查询工具
-- 仅当前来源会话的回复发送
+Owner 受限系统操作目标继续保留。已确认部署/验收 owner 为 `1105927155`；工作区写入、删除通过原生能力链与逐次确认验收，不默认重做为 V2 MCP 工具。
+其它原生系统工具按实际需求和验证结果开放，owner 不等于无限权限。
 
-禁止：
-- shell
-- filesystem write
-- 任意 HTTP/OneBot 管理
-- 跨会话发送
-- AstrBot 管理配置
-
-### Owner QQ Agent
-在上述基础上按需开放：
-- workspace-write
-- selected admin MCP tools
-- 对危险副作用使用 `ask`
-- 必要的系统维护工具
-
-会话身份与当前 QQ source 由路由程序绑定。目标限制由程序校验，不从昵称、正文、长期记忆或模型参数推断。
+群内不同发送者共享 session，权限必须依据可信当前发送者执行，不能永久绑定到群/session 或从历史文本推断。
+一次性确认必须关联实际动作；拒绝、取消、超时、断连、重启或关联失败不能产生授权副作用。
+只有证实原生机制不足时才提出最小补充；若需要改变架构，记录证据并回到需求评审。
 
 ## 8. 仓库规划
 
@@ -335,18 +323,20 @@ Phase 3 的端到端功能已经通过，但进入 MCP 前先收敛三个实现�
 - Phase 5/6 的设计可在不扩大 router 业务知识的前提下继续演进。
 - 审查原则见 `docs/architecture/orchestration-capability-boundary.md`。
 
-### Phase 5 — 程序化权限
+### Phase 5 — 原生能力边界验证与最小接入
 
-目标：
-- 权限来自可信 QQ 身份与程序化上下文，而不是模型、提示词或记忆。
-- 普通 QQ conversation 只能使用其明确授权的能力；owner conversation 可获得额外能力。
-- 高副作用动作按实际风险要求确认。
-- 权限能力与 router 的 conversation/session 编排职责保持分离。
+顺序：
+1. 固定上游验证工具作用域、直接执行拒绝、guard、sandbox、审批与 ACP，记录 `docs/phases/phase-5-native-findings.md`。
+2. 原生机制可满足要求后，只接入可信来源事实和必要的一次性确认交互，保留原生系统工具执行。
+3. 需改变架构的缺口回到需求评审，不自行建设权限/审批/执行平台。
 
 验收：
-- 普通用户、owner、提示词注入、敏感动作确认、并发 conversation 隔离五条故事通过。
-- 重启后身份与能力边界保持一致。
-- 详细范围见 `docs/phases/phase-5.md`。
+- 普通聊天与现有 MCP 能力继续可用；直接调用和提示词注入不能扩权。
+- owner 原生工作区写入、删除逐次确认；拒绝、取消和失去动作关联时不执行。
+- 同群发送者切换、跨会话并发及重启不继承权限或一次性批准。
+- 既有 session、cursor、命令穿插、journal 输出与无模型调用启动行为保持通过。
+- Router 不增加业务能力知识，不默认把 DSH 文件/shell 能力重做为 MCP 工具。
+- 开发范围见 [Phase 5](docs/phases/phase-5.md)，实施要求见[整改意见](docs/phases/phase-5-remediation.md)。
 
 ### Phase 6 — 功能迁移
 
