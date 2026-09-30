@@ -1,6 +1,6 @@
 # chatbot-V2 实施计划大纲
 
-> 状态：Phase 3 completed（2026-09-30）；Phase 4 尚未开始
+> 状态：Phase 3 functional acceptance completed（2026-09-30）；Phase 3 remediation required before Phase 4
 > 目标：在开始搬运旧代码前冻结职责边界与验收标准，避免再次通过局部修补把集成层扩展成第三个平台。
 
 ## 1. 产品目标
@@ -286,6 +286,16 @@ chatbot-V2/
 - 用户随后继续聊天 → DSH 能看到中间的用户命令和 AstrBot 回复。
 - 重启后恢复同一 session mapping 和 cursor，不重复注入已消费历史。
 - 详细实施边界见 `docs/phases/phase-3.md`。
+
+### Phase 3 remediation — implementation alignment
+
+Phase 3 的端到端功能已经通过，但进入 MCP 前先收敛三个实现偏差：
+
+- 用一个 DSH ACP runtime 承载多个 conversation session，复用上游原生 multi-session 能力。
+- 路由判断回到“消息是否实际被确定性 AstrBot 路径处理”的语义，不让 router 维护持续增长的 handler 身份表。
+- 将 provider/model 从固定 QQ profile 中移到显式运行时配置。
+
+详细整改要求与验收见 `docs/phases/phase-3-remediation.md`。
 
 ### Phase 4 — AstrBot MCP
 
