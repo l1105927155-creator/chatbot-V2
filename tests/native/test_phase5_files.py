@@ -10,7 +10,7 @@ RUNTIME = ROOT / '.runtime/dsh-runtime'
 
 def test_native_files_and_shell_sandbox():
     with tempfile.TemporaryDirectory(prefix='phase5-native-', dir=ROOT/'.runtime') as directory:
-        env = dict(os.environ, V2_NATIVE_TEST_ROOT=directory)
+        env = dict(os.environ, V2_NATIVE_TEST_ROOT=directory, LC_MESSAGES="C")
         script = r'''
 import assert from 'node:assert/strict';
 import { join } from 'node:path';

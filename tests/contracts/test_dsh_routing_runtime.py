@@ -77,21 +77,26 @@ def test_pinned_builtin_observers_and_probe_do_not_block_or_duplicate_dsh(tmp_pa
                 for name in ('astrbot','v2_ai_gate','v2_phase1_probe','v2_dsh_router','test_deterministic'):
                     assert (await manager.load(specified_dir_name=name))[0]
                 router=star_map['data.plugins.v2_dsh_router.main'].star_cls
-                calls=[];sent=[]
+                calls=[];sent=[];selections=[]
                 class Service:
+                    def __init__(self,domain):self.domain=domain
                     async def handle(self,conversation,message_id,send,**kwargs):
-                        calls.append(message_id);await send('fake DSH reply')
-                router.service=Service()
+                        calls.append((self.domain,message_id));await send('fake DSH reply')
+                    async def select_profile(self,conversation,kind,value,send,**kwargs):
+                        selections.append((self.domain,conversation.key,kind,value))
+                        await send({kind:value})
+                router.services['chat']=Service('chat')
+                router.services['owner']=Service('owner')
                 ctx=PipelineContext(astrbot_config=config,plugin_manager=manager,astrbot_config_id='v2-phase3-contract')
                 waking,process,respond=WakingCheckStage(),ProcessStage(),RespondStage()
                 for stage in (waking,process,respond):await stage.initialize(ctx)
-                def event(text,mid):
+                def event(text,mid,user_id='900002'):
                     m=AstrBotMessage();m.message=[Plain(text=text)];m.message_str=text
-                    m.type=MessageType.FRIEND_MESSAGE;m.sender=MessageMember(user_id='900002',nickname='Test')
-                    m.self_id='900001';m.session_id='900002'
-                    m.raw_message={'post_type':'message','message_type':'private','self_id':900001,'user_id':900002,
+                    m.type=MessageType.FRIEND_MESSAGE;m.sender=MessageMember(user_id=user_id,nickname='Test')
+                    m.self_id='900001';m.session_id=user_id
+                    m.raw_message={'post_type':'message','message_type':'private','self_id':900001,'user_id':int(user_id),
                                    'message_id':mid,'message':[{'type':'text','data':{'text':text}}]}
-                    e=AstrMessageEvent(text,m,PlatformMetadata(name='aiocqhttp',id='contract',description='contract'),'900002')
+                    e=AstrMessageEvent(text,m,PlatformMetadata(name='aiocqhttp',id='contract',description='contract'),user_id)
                     async def send(chain):sent.append(chain.get_plain_text())
                     e.send=send;return e
                 async def drive(e):
@@ -100,12 +105,43 @@ def test_pinned_builtin_observers_and_probe_do_not_block_or_duplicate_dsh(tmp_pa
                 ordinary=event('ordinary question','in-1');await drive(ordinary)
                 active={h.handler_name for h in ordinary.get_extra('activated_handlers')}
                 assert {'persist_group_message','on_message'} <= active
-                assert calls==['in-1'] and sent==['fake DSH reply']
+                assert calls==[('chat','in-1')] and sent==['fake DSH reply']
+                owner=event('owner request','owner-1','900003');await drive(owner)
+                assert calls==[('chat','in-1'),('owner','owner-1')]
                 deterministic=event('deterministic answer','det-1');await drive(deterministic)
-                assert calls==['in-1'] and sent==['fake DSH reply','deterministic plugin reply']
+                assert calls==[('chat','in-1'),('owner','owner-1')]
+                assert sent==['fake DSH reply','fake DSH reply','deterministic plugin reply']
                 await drive(event('/v2probe','command'))
-                assert calls==['in-1'] and sent==['fake DSH reply','deterministic plugin reply','v2 phase 1 probe: ok']
+                assert calls==[('chat','in-1'),('owner','owner-1')]
+                assert sent==['fake DSH reply','fake DSH reply','deterministic plugin reply','v2 phase 1 probe: ok']
+                before=len(calls)
+                await drive(event('/v2agent persona analyst','nonowner-control'))
+                assert sent[-1]=='仅 Bot 所有者可以切换人格和场景。'
+                assert selections==[]
+                await drive(event('/v2agent persona analyst','owner-persona','900003'))
+                await drive(event('/v2agent scene research','owner-scene','900003'))
+                assert selections==[('owner','private:900003','persona','analyst'),
+                                    ('owner','private:900003','scene','research')]
+                assert sent[-2:]==['人格已切换为 analyst，下轮生效。','场景已切换为 research，下轮生效。']
+                assert len(calls)==before
                 await router.terminate()
+                closed=[]
+                class GoodClient:
+                    def close(self):closed.append('chat')
+                class BadClient:
+                    def close(self):
+                        closed.append('owner')
+                        raise RuntimeError('owner close failed')
+                class CloseMcp:
+                    async def close(self):closed.append('mcp')
+                router.clients={'chat':GoodClient(),'owner':BadClient()}
+                router.mcp=CloseMcp()
+                try:
+                    await router._close_runtime()
+                except BaseExceptionGroup as exc:
+                    assert 'owner close failed' in str(exc.exceptions[0])
+                else:raise AssertionError('client close failure was swallowed')
+                assert closed==['owner','chat','mcp']
                 # Storage failure is checked before eager ACP startup.
                 original_state=router_module.StateStore
                 def bad_state(*args):raise RuntimeError('unsupported state schema')
@@ -131,7 +167,8 @@ def test_pinned_builtin_observers_and_probe_do_not_block_or_duplicate_dsh(tmp_pa
         asyncio.run(main())
     ''')
     result = subprocess.run([str(runtime/'.venv/bin/python'),'-c',script],cwd=runtime,
-        env={**os.environ,'ASTRBOT_ROOT':str(runtime),'V2_REPO_ROOT':str(root),'V2_QQ_ALLOWED_CONVERSATIONS':'private:900002',
+        env={**os.environ,'ASTRBOT_ROOT':str(runtime),'V2_REPO_ROOT':str(root),'V2_QQ_ALLOWED_CONVERSATIONS':'private:900002,private:900003',
+             'V2_QQ_OWNERS':'[{"platform_id":"contract","bot_id":"900001","user_id":"900003"}]',
              'V2_MCP_PORT':'0','V2_DSH_PROVIDER':'test-provider','V2_DSH_MODEL':'test-model'},
         capture_output=True,text=True,timeout=45)
     assert result.returncode==0,result.stdout+result.stderr

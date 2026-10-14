@@ -16,26 +16,55 @@ Before development, read:
 - [`docs/phases/phase-3-remediation.md`](docs/phases/phase-3-remediation.md) — completed implementation-alignment work.
 - [`docs/phases/phase-3-startup-validation.md`](docs/phases/phase-3-startup-validation.md) — completed Phase 3 follow-up.
 - [`docs/phases/phase-4.md`](docs/phases/phase-4.md) — completed MCP capability phase.
-- [`docs/phases/phase-5.md`](docs/phases/phase-5.md) — current conversation authorization-scope and native-integration phase.
-- [`docs/phases/phase-5-remediation.md`](docs/phases/phase-5-remediation.md) — required current development entry, code evidence and acceptance requirements.
+- [`docs/architecture/agent-bot-runtime.md`](docs/architecture/agent-bot-runtime.md) — current Agent-Bot architecture.
+- [`docs/architecture/dsh-version-decision.md`](docs/architecture/dsh-version-decision.md) — pinned-version decision.
+- [`docs/phases/agent-profile-validation.md`](docs/phases/agent-profile-validation.md) — current implementation and evidence.
 
-Current status: **Phases 1–4 are complete; Phase 5 implements persistent per-conversation authorization scopes through verified native DSH execution boundaries, without QQ per-action approval.**
-Read the confirmed [authorization-scope rules](docs/architecture/conversation-authorization-scope.md).
-Every system operation checks the current requester and latest committed scope;
-owner may edit the scope and use all enabled system operations. Scope rules govern
-operations, not natural-language replies. Phase 4 tests do not establish Phase 5 acceptance. Read the
-[remediation requirements](docs/phases/phase-5-remediation.md) before development;
-do not resume the previous permission-wrapper design. The pinned AstrBot baseline
-and V2-owned canonical journal are verified with controlled group/private QQ
-messages, including DSH replies and restart continuity. Concurrent event-bus tests establish that `journal_id` preserves
-V2 capture-callback order for one client. Phase 3 connects the pinned DSH
-runtime to unhandled AstrBot conversations using persistent session mapping and
-journal cursors. See the [Phase 1 findings](docs/phases/phase-1-findings.md),
-[capture findings](docs/phases/phase-2-capture-findings.md), and
-[journal verification](docs/phases/phase-2-journal-findings.md), and
-[ordering findings](docs/phases/phase-2.1-findings.md), and
-[DSH chat-loop findings](docs/phases/phase-3-findings.md), and
-[remediation findings](docs/phases/phase-3-remediation-findings.md).
+Current work rebuilds the Agent Profile around stable capabilities, dynamic persona and skill scenes, external Journal history, and independent trust domains. DSH remains pinned to the lock file; native plugin seams currently satisfy the verified mechanisms.
+
+## V2 plugin documentation
+
+| Plugin | Purpose |
+| --- | --- |
+| [V2 AI Gate](astrbot-plugins/v2_ai_gate/README.md) | Suppress AstrBot conversational LLM requests |
+| [V2 Journal](astrbot-plugins/v2_journal/README.md) | Canonical platform-confirmed chat history |
+| [V2 DSH Router](astrbot-plugins/v2_dsh_router/README.md) | DSH sessions, trust domains, scoped MCP and profile controls |
+| [V2 Phase 1 Probe](astrbot-plugins/v2_phase1_probe/README.md) | Deterministic message-chain diagnostics |
+
+## Current Agent Profiles
+
+The router uses two independent ACP runtimes:
+
+- Safe chat: all admitted groups and non-owner private chats; `v2-agent-group.patch.yml`, `.runtime/dsh-home-chat`, `.runtime/dsh-workspace-chat`, and `state-chat.sqlite3`. No generic host file or terminal tools.
+- Owner operations: only exact configured owners in their own private chat; `v2-agent-owner.patch.yml`, `.runtime/dsh-home-owner`, `.runtime/dsh-workspace-owner`, and `state-owner.sqlite3`. Each tool call checks the current host-issued request, not remembered identity.
+
+Keep `V2_DSH_PROVIDER`, `V2_DSH_MODEL`, credentials, and `V2_QQ_ALLOWED_CONVERSATIONS` in the process environment. Owner identities use `V2_QQ_OWNERS`, a JSON array of exact `platform_id`, `bot_id`, and `user_id` strings. An empty array disables the owner runtime. An owner speaking in a group still uses safe chat capabilities.
+
+Owner Bash constrains the existing native dsh-subprocess scope and verifies cgroup limits before executing, so native timeout/cancellation retains control of descendants. It requires Linux, working user systemd scopes/cgroup limits, and `/usr/bin/bwrap`. It sees only essential read-only runtime files and `/workspace`; it has no network or inherited credential environment. Limits are 512 MiB memory, 64 tasks, one CPU, and a maximum 60-second foreground call. Background execution and escalation are unavailable. Missing infrastructure fails the tool rather than falling back to host execution. Owner home/workspace must be private 0700 directories owned by the runtime user; socket, device, FIFO, and multiply linked files are rejected in the workspace. Disk budgeting remains an acceptance gap.
+
+Configured owners can select the current admitted conversation's runtime state:
+
+```text
+/v2agent persona default|analyst|companion|developer
+/v2agent scene casual-chat|research|development
+```
+
+These deterministic commands wait for the current turn to finish, update private host state, and acknowledge through AstrBot. They do not invoke the model, replace the session, or grant tools. A command before the first ordinary message creates only the native session and its MCP binding. A pending uncertain turn blocks selection until recovery. Each normal input projects at most 100 recent entries and 32 KiB. Oversized entries are clearly marked, and scoped history tools can retrieve their complete originals. The stored cursor is the accepted projection boundary; omitted facts remain externally queryable in the canonical Journal. This bounds bootstrap/backlog context rather than deleting history.
+
+The scene exposes only installed skill definitions. The repository provides chat-history, filesystem, and development; web-research remains a test fixture rather than a production capability. Skill discovery shares one native provider and falls back to shared polling when filesystem watcher capacity is exhausted. Loading development skills does not grant Bash to safe-chat sessions.
+
+Run `scripts/check-agent-profile.sh` for pinned-source checks, native mechanisms, actual controlled ACP turns, owner isolation, and message-chain regressions. These checks use disposable data and scripted model adapters. Real-provider synthetic safe-chat and owner acceptance has passed. Authorized real QQ acceptance passed only for Bot 2869323076 / private:1105927155: persona and scene commands, model replies, deterministic probe visibility through Journal history, persistent session restart, native skill loading, and isolated workspace write/read. Temporary personal-account HTTP access and the V2 test process were closed after verification; existing QQ services were preserved. Production rollout, group QQ acceptance, workspace disk budgeting, and real-provider large-context stress remain open. Old `state.sqlite3` / Phase 5 sessions are not automatically migrated.
+
+When V2 provider credentials are available in the environment, run the isolated real-model check explicitly:
+
+```bash
+.runtime/astrbot/.venv/bin/python scripts/check-agent-profile-live.py
+.runtime/astrbot/.venv/bin/python scripts/check-agent-profile-live.py --domain owner
+```
+
+It creates disposable safe-chat sessions, checks three synthetic turns, observes successful native skill loading, changes persona, and resumes after a process restart. It never connects QQ. Its ignored `.runtime/agent-profile-live-result.json` records only verification metadata; an advertised model window is not evidence of a large-context stress test.
+
+The following Phase 1–4 setup sections and Phase 5 documents describe the retained historical baseline. For current development, use the Agent Profile phase document above.
 
 The journal records OneBot inbound messages and platform-confirmed Bot
 `message_sent` feedback. Phase 3 adds the V2-owned DSH router; Phase 4 attaches scoped AstrBot MCP
@@ -269,3 +298,56 @@ its canonical outbound journal row and real message ID.
 
 Contracts, real QQ tool calls, message IDs, restart evidence and limits are in
 [Phase 4 findings](docs/phases/phase-4-findings.md).
+
+
+## Phase 5: conversation authorization and native tools
+
+Linux deployment uses the pinned native sandbox plus `bwrap` and util-linux
+`flock`. Run `scripts/bootstrap-dsh.sh` to install locked dependencies and link
+`dsh/node_modules` to that installation for V2 native plugin imports. This link
+is ignored; do not install a separate set of dependencies under `dsh/`.
+
+Set real owner identities explicitly in the AstrBot runtime environment:
+
+```bash
+export V2_QQ_OWNERS='[{"platform_id":"v2-phase1-napcat","bot_id":"2869323076","user_id":"1105927155"}]'
+```
+
+The default is `[]` (no owner). Entries are exact platform/Bot/user triples;
+text or nicknames cannot establish identity. Use the actual adapter ID for a
+different deployment. Owner can use the enabled native `read`, `write`, `edit`
+and foreground sandboxed `bash`, and the typed `conversation_scope_get` /
+`conversation_scope_update` tools. Updates target the current conversation only,
+require its expected revision, and replace the public ordinary scope. Preserve
+other entries when adding/removing one file. There is no QQ approval workflow.
+
+Ordinary scopes have independent `read`, `write`, `delete` arrays of canonical
+absolute file paths. They default to empty and persist under
+`.runtime/dsh-home/v2-conversation-scopes/`. Every filesystem operation checks the
+latest committed scope. Existing-file overwrite/edit requires read plus write;
+file creation cannot create a missing parent directory. Ordinary shell is denied
+regardless of a mentioned allowed path. This profile has no ordinary delete
+primitive; a delete entry does not enable shell or invent a tool. Owner can
+delete disposable workspace files through the native foreground shell.
+
+Only V2 passes current requester facts from the committed inbound journal row.
+Private runtime source files live outside the workspace, bind epoch/session/
+nonce and the actual claimed native prompt digest, and clear after completion or
+successful native drain. Old queued input cannot borrow a newly published
+source. Missing/expired sources fail closed; failed shutdown retains sources and
+can be retried. Scope/source control files cannot be granted to ordinary members.
+Background jobs, persistent shells and derived Agent execution are unavailable.
+Neither scope changes nor denied tools recreate sessions or rewind journal
+cursors. Known model context is not erased by revocation.
+
+```bash
+./scripts/check-phase5.sh
+```
+
+This runs preceding integration contracts, pinned native authorization tests and
+source lifecycle tests without sending QQ messages. Real QQ results and known
+upstream limits are recorded in [Phase 5 findings](docs/phases/phase-5-findings.md).
+
+## Start the current Agent-Bot
+
+With DEEPSEEK_API_KEY, V2_DSH_PROVIDER, V2_DSH_MODEL and V2_QQ_ALLOWED_CONVERSATIONS set explicitly in the environment, run scripts/run-agent-bot.sh. V2_QQ_OWNERS is an exact identity JSON array and defaults to no owner runtime. The launcher runs AstrBot in the foreground; its router starts and cleans up the two native DSH ACP runtimes. Credentials are inherited only, never saved by this launcher. The existing runtime dashboard is localhost:6186, OneBot reverse WS localhost:6200, and MCP localhost:6210. ACP runtimes have no independent Web page; localhost:3081 belongs to the separate old DSH service.

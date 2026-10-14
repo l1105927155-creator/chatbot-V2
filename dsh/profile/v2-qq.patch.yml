@@ -1,14 +1,41 @@
 # Applied after the pinned sdk-minimal profile for V2 QQ conversations.
-# The model receives journal deltas and returns text; it has no local tools.
+# Foreground native tools only; authorization is at execution/provider boundaries.
 - id: persistent-bash
   disabled: true
 - id: persistent-pwsh
+  disabled: true
+- id: jobs
   disabled: true
 - id: sdk-app-startup
   disabled: true
 - id: sdk-jsonrpc-server
   disabled: true
+- id: sandbox-policy
+  config:
+    mode: workspace-write
+    workspaceRoot: !!js process.cwd()
 - insert:
+    - id: v2-authority
+      name: ../plugins/qq-permission/authority.mjs
+    - id: v2-filesystem
+      name: ../plugins/qq-permission/fs.mjs
+    - id: fs-observation-policy
+      name: '@deepseek-ai/dsh-fs-observation-policy'
+    - id: tool-fs
+      name: '@deepseek-ai/dsh-tool-fs'
+    - id: shell-env
+      name: '@deepseek-ai/dsh-shell-env'
+    - id: bash-sandbox
+      name: '@deepseek-ai/dsh-bash-sandbox'
+      config:
+        timeoutMs: 60000
+    - id: tool-bash
+      name: '@deepseek-ai/dsh-tool-bash'
+      config:
+        enableRunInBackground: false
+        promoteOnTimeout: false
+    - id: v2-scope-tools
+      name: ../plugins/qq-permission/configuration.mjs
     - id: v2-acp-startup
       name: '@deepseek-ai/dsh-acp-app'
     - id: v2-acp

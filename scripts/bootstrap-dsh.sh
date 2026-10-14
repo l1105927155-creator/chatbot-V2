@@ -8,7 +8,7 @@ source_dir="${runtime_dir}/dsh-source"
 install_dir="${runtime_dir}/dsh-runtime"
 venv_python="${runtime_dir}/astrbot/.venv/bin/python"
 
-for binary in python3 curl unzip npm; do
+for binary in python3 curl unzip npm node flock; do
   command -v "$binary" >/dev/null || { printf '%s is required.\n' "$binary" >&2; exit 1; }
 done
 [[ -x "$venv_python" ]] || { printf 'Bootstrap AstrBot and its .venv first: %s\n' "$venv_python" >&2; exit 1; }
@@ -63,6 +63,13 @@ python3 "$repo_root/scripts/verify-dsh-source.py" "$repo_root/upstream.lock.json
 
 cp -- "$repo_root/dsh/runtime/package.json" "$repo_root/dsh/runtime/package-lock.json" "$install_dir/"
 npm ci --prefix "$install_dir" --omit=dev
+# Resolve V2 native plugin imports against precisely this locked installation.
+plugin_dependencies="$repo_root/dsh/node_modules"
+if [[ -e "$plugin_dependencies" && ! -L "$plugin_dependencies" ]]; then
+  printf 'Refusing to replace non-symlink DSH plugin dependencies.\n' >&2
+  exit 1
+fi
+ln -sfn -- "$install_dir/node_modules" "$plugin_dependencies"
 "$venv_python" -m pip install --no-deps "$source_dir/python/sdk"
 "$venv_python" - "$install_dir" "${pinned[2]}" <<'PY'
 import json

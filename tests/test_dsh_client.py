@@ -1,11 +1,13 @@
 """Shared ACP lifecycle and session isolation contracts."""
 import importlib.util
 import threading
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import pytest
 
 SOURCE = Path(__file__).resolve().parents[1] / 'astrbot-plugins/v2_dsh_router/dsh_client.py'
+sys.path.insert(0, str(SOURCE.parent))
 spec = importlib.util.spec_from_file_location('v2_dsh_client_contract', SOURCE)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
@@ -175,3 +177,213 @@ def test_native_mcp_bindings_follow_session_create_and_restart_resume(tmp_path):
     assert restarted.run(sid_a,'next delta',fresh)==sid_a
     assert runtimes[1].calls[0]==('resume_mcp',sid_a,fresh)
     restarted.close()
+
+
+def test_authorized_run_publishes_only_current_source_and_cleans_after_prompt(tmp_path):
+    import hashlib
+    import json
+    source = {
+        'platform_id': 'qq', 'bot_id': '2869323076',
+        'conversation_key': 'private:1105927155', 'requester_id': '1105927155',
+        'inbound_message_id': 'message-1',
+    }
+    seen = []
+    class Inspect(Runtime):
+        def run(self, sid, delta):
+            directory = Path(self.settings['source_dir'])
+            path = directory / (module.TurnSourcePublisher.filename(sid))
+            assert path.exists()
+            data = json.loads(path.read_text())
+            seen.append((self.settings, data, path.stat().st_mode & 0o777))
+            return super().run(sid, delta)
+    client = module.DshClient(**settings(tmp_path, Inspect), enable_authorization=True)
+    session = 'native-session'
+    assert client.run(session, 'delta', trusted_source=source) == session
+    config, payload, mode = seen[0]
+    assert set(payload) == {'epoch', 'session_id', 'nonce', 'prompt_sha256', *source}
+    assert payload['session_id'] == session and payload['epoch'] == config['source_epoch']
+    assert payload['prompt_sha256'] == hashlib.sha256(b'delta').hexdigest()
+    assert mode == 0o600
+    assert Path(config['source_dir']).stat().st_mode & 0o777 == 0o700
+    assert not (Path(config['source_dir']) / module.TurnSourcePublisher.filename(session)).exists()
+    assert config['scope_root'] == tmp_path / 'home' / 'v2-conversation-scopes'
+    assert client.runtime.calls[-1] == (session, 'delta')
+    client.close()
+    assert not Path(config['source_dir']).exists()
+
+
+def test_authorized_run_cleans_source_after_runtime_failure_and_restart_uses_new_epoch(tmp_path):
+    source = {
+        'platform_id': 'qq', 'bot_id': '2869323076',
+        'conversation_key': 'group:1055300305', 'requester_id': '1105927155',
+        'inbound_message_id': 'message-2',
+    }
+    class FailedPrompt(Runtime):
+        def run(self, sid, delta):
+            self.active = True
+            raise TimeoutError('prompt timed out')
+        def close_session(self, sid):
+            if getattr(self, 'active', False):
+                assert (Path(self.settings['source_dir']) / module.TurnSourcePublisher.filename(sid)).exists()
+                self.active = False
+            super().close_session(sid)
+    class Recovering(FailedPrompt):
+        def run(self, sid, delta):
+            if getattr(self, 'active', False): raise AssertionError('old prompt still active')
+            if not getattr(self, 'calls', None): self.calls = []
+            self.calls.append((sid, delta))
+            return 'recovered'
+    client = module.DshClient(**settings(tmp_path, FailedPrompt), enable_authorization=True)
+    directory = Path(client.settings['source_dir'])
+    epoch = client.settings['source_epoch']
+    with pytest.raises(TimeoutError, match='prompt timed out'):
+        client.run('session', 'delta', trusted_source=source)
+    assert list(directory.iterdir()) == []
+    assert ('close', 'session') in client.runtime.calls
+    client.close()
+    restarted = module.DshClient(**settings(tmp_path, Recovering), enable_authorization=True)
+    assert restarted.settings['source_epoch'] != epoch
+    assert restarted.settings['source_dir'] != directory
+    assert restarted.run('session', 'retry', trusted_source=source) == 'recovered'
+    assert restarted.runtime.calls[:1] == [('resume', 'session')]
+    restarted.close()
+
+
+def test_failed_native_drain_retains_source_and_quarantines_session_until_shutdown(tmp_path):
+    source = {
+        'platform_id': 'qq', 'bot_id': '2869323076',
+        'conversation_key': 'private:1105927155', 'requester_id': '1105927155',
+        'inbound_message_id': 'message-3',
+    }
+    class Undrainable(Runtime):
+        def run(self, sid, delta): raise TimeoutError('prompt timed out')
+        def close_session(self, sid): raise RuntimeError('native drain failed')
+    client = module.DshClient(**settings(tmp_path, Undrainable), enable_authorization=True)
+    directory = Path(client.settings['source_dir'])
+    path = directory / module.TurnSourcePublisher.filename('session')
+    with pytest.raises(RuntimeError, match='trusted source retained'):
+        client.run('session', 'delta', trusted_source=source)
+    assert path.exists()
+    with pytest.raises(RuntimeError, match='quarantined'):
+        client.run('session', 'overlap', trusted_source=source)
+    assert client.runtime.calls == [('resume', 'session')]
+    with pytest.raises(ExceptionGroup, match='shutdown failed'):
+        client.close()
+    assert not directory.exists()
+
+
+def test_shutdown_failures_retain_sources_reject_work_and_allow_close_retry(tmp_path):
+    source = {
+        'platform_id': 'qq', 'bot_id': '2869323076',
+        'conversation_key': 'private:1105927155', 'requester_id': '1105927155',
+        'inbound_message_id': 'message-4',
+    }
+    class RetryShutdown(Runtime):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.close_session_calls = 0
+            self.close_calls = 0
+        def run(self, sid, delta): raise TimeoutError('prompt timed out')
+        def close_session(self, sid):
+            self.close_session_calls += 1
+            if self.close_session_calls <= 2: raise RuntimeError('session drain failed')
+            super().close_session(sid)
+        def close(self):
+            self.close_calls += 1
+            if self.close_calls == 1: raise RuntimeError('runtime stop failed')
+            super().close()
+    client = module.DshClient(**settings(tmp_path, RetryShutdown), enable_authorization=True)
+    directory = Path(client.settings['source_dir'])
+    path = directory / module.TurnSourcePublisher.filename('session')
+    with pytest.raises(RuntimeError, match='trusted source retained'):
+        client.run('session', 'delta', trusted_source=source)
+    assert path.exists()
+    with pytest.raises(ExceptionGroup, match='shutdown failed'):
+        client.close()
+    assert path.exists() and not client.runtime.closed
+    with pytest.raises(RuntimeError, match='closed'):
+        client.create_session()
+    with pytest.raises(RuntimeError, match='closed'):
+        client.run('session', 'retry', trusted_source=source)
+    client.close()
+    assert client.runtime.closed and not directory.exists()
+    assert client.runtime.close_session_calls == 3 and client.runtime.close_calls == 2
+
+
+def test_authorized_constructor_failure_removes_unpublished_epoch(tmp_path):
+    home = tmp_path / 'home'
+    class FailingFactory(Runtime):
+        def __init__(self, **_kwargs): raise RuntimeError('factory failed')
+    with pytest.raises(RuntimeError, match='factory failed'):
+        module.DshClient(**settings(tmp_path, FailingFactory), enable_authorization=True)
+    assert list((home / 'v2-turn-sources').iterdir()) == []
+
+
+def test_authorized_scope_directory_failure_removes_unpublished_epoch(tmp_path):
+    kw = settings(tmp_path)
+    home = kw['dsh_home']
+    home.mkdir(parents=True)
+    (home / 'v2-conversation-scopes').write_text('blocking file')
+    with pytest.raises(FileExistsError):
+        module.DshClient(**kw, enable_authorization=True)
+    assert list((home / 'v2-turn-sources').iterdir()) == []
+
+
+def test_authorized_runtime_kwargs_are_opt_in_only(tmp_path):
+    ordinary = module.DshClient(**settings(tmp_path))
+    assert not {'source_dir', 'source_epoch', 'scope_root'} & ordinary.settings.keys()
+    ordinary.close()
+    authorized = module.DshClient(**settings(tmp_path), enable_authorization=True)
+    assert {'source_dir', 'source_epoch', 'scope_root'} <= authorized.settings.keys()
+    authorized.close()
+
+
+
+def test_owner_runtime_directories_are_private_and_reject_weak_existing_paths(tmp_path):
+    kw = settings(tmp_path)
+    owner_patch = tmp_path / "v2-agent-owner.patch.yml"
+    owner_patch.touch()
+    kw["patch"] = owner_patch
+    kw["enable_authorization"] = True
+    client = module.DshClient(**kw)
+    try:
+        assert kw["dsh_home"].stat().st_mode & 0o077 == 0
+        assert kw["workspace"].stat().st_mode & 0o077 == 0
+    finally:
+        client.close()
+
+    kw["workspace"].chmod(0o755)
+    with pytest.raises(ValueError, match="private"):
+        module.DshClient(**kw)
+    kw["workspace"].chmod(0o700)
+    kw["workspace"].rmdir()
+    kw["workspace"].symlink_to(kw["dsh_home"], target_is_directory=True)
+    with pytest.raises(ValueError, match="symlink"):
+        module.DshClient(**kw)
+
+
+
+@pytest.mark.parametrize("layout", ["same", "home-in-work", "work-in-home"])
+def test_owner_private_state_and_workspace_cannot_overlap(tmp_path, layout):
+    kw=settings(tmp_path)
+    patch=tmp_path/"v2-agent-owner.patch.yml"
+    patch.touch()
+    kw.update(patch=patch, enable_authorization=True)
+    if layout=="same":
+        kw["dsh_home"]=kw["workspace"]
+    elif layout=="home-in-work":
+        kw["dsh_home"]=kw["workspace"]/"private-home"
+    else:
+        kw["workspace"]=kw["dsh_home"]/"work"
+    with pytest.raises(ValueError,match="disjoint"):
+        module.DshClient(**kw)
+    assert not kw["dsh_home"].exists() and not kw["workspace"].exists()
+
+
+def test_owner_profile_requires_current_trusted_source_publisher(tmp_path):
+    kw=settings(tmp_path)
+    patch=tmp_path/"v2-agent-owner.patch.yml"
+    patch.touch()
+    kw["patch"]=patch
+    with pytest.raises(ValueError,match="host-issued trusted source"):
+        module.DshClient(**kw)

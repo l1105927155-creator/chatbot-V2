@@ -15,7 +15,9 @@ installed = json.loads(Path('.runtime/dsh-runtime/node_modules/.package-lock.jso
 packages = ('dsh', 'dsh-tools', 'dsh-fs-local', 'dsh-fs-sandbox', 'dsh-bash-sandbox',
             'dsh-sandbox-local', 'dsh-mcp-client', 'cordis', 'dsh-system-prompt',
             'dsh-scope', 'dsh-llm', 'dsh-session-projection', 'dsh-sandbox-policy',
-            'dsh-subprocess-local')
+            'dsh-subprocess-local', 'dsh-fs', 'dsh-tool-fs',
+            'dsh-fs-observation-policy', 'dsh-shell-env', 'dsh-tool-bash',
+            'dsh-agent', 'dsh-agent-loop', 'dsh-session', 'dsh-session-persistence-jsonl')
 for package in packages:
     key = 'node_modules/@deepseek-ai/' + package
     path = Path('.runtime/dsh-runtime') / key / 'package.json'

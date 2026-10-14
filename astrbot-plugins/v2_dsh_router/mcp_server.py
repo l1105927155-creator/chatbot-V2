@@ -197,7 +197,13 @@ class McpServer:
 
         @server.tool(structured_output=True)
         async def qq_send_origin(text: str, ctx: Context | None = None) -> SendSubmission:
-            """Send plain text through AstrBot to this turn's origin conversation."""
+            """Send an additional separate message to the current origin via AstrBot.
+
+            Ordinary conversational answers are delivered automatically from
+            the Agent's final response. Do not call this tool to answer the
+            current question or quote a fact. Use it only when the task requires
+            a distinct additional message besides that final response.
+            """
             turn = self._turn(ctx)
             if not isinstance(text, str) or not text.strip() or len(text) > 4000:
                 raise ToolError("text must contain 1 to 4000 characters")

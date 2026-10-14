@@ -1,3 +1,14 @@
+# 当前重构入口（2026-10-13）
+
+用户已决定从最终 Agent-Bot 产品重新设计，当前主线改为专用 Agent Profile 验证，不继续补完 Phase 5。
+
+- 目标架构：[Agent-Bot 运行时](docs/architecture/agent-bot-runtime.md)。
+- 当前阶段：[Agent Profile 验证](docs/phases/agent-profile-validation.md)。
+- 保留 AstrBot / DSH / MCP 职责、Journal 与已验证集成成果；人格、技能场景与信任域分开。
+- 下方是历史 V2 分阶段基线。历史 Phase 5 修改保留，其完工不再作为当前重构前置条件。
+
+---
+
 # chatbot-V2 实施计划大纲
 
 > 状态：Phase 4 与职责边界冻结完成；Phase 5 按会话授权范围名单路线验证与实施，无 QQ 逐次审批

@@ -13,11 +13,17 @@ class PendingTurnError(RuntimeError):
 
 
 class ChatService:
-    def __init__(self, journal: Any, state: Any, dsh: Any, mcp: Any = None) -> None:
+    MAX_DELTA_ROWS = 100
+    MAX_DELTA_BYTES = 32 * 1024
+    MAX_ROW_BYTES = 8 * 1024
+
+    def __init__(self, journal: Any, state: Any, dsh: Any, mcp: Any = None,
+                 trusted_sources: bool = False) -> None:
         self.journal = journal
         self.state = state
         self.dsh = dsh
         self.mcp = mcp
+        self.trusted_sources = trusted_sources
         self._locks: dict[tuple[str, str, str], asyncio.Lock] = {}
 
     @staticmethod
@@ -44,37 +50,71 @@ class ChatService:
         return self._locks.setdefault(key, asyncio.Lock())
 
     async def _delta(self, conversation, after: int, upper: int) -> list[Any]:
-        rows = []
-        cursor = after
-        while cursor < upper:
-            page = await asyncio.to_thread(self.journal.after, conversation, cursor, 500)
-            selected = [row for row in page if row.journal_id <= upper]
-            rows.extend(selected)
-            if not page or page[-1].journal_id >= upper:
-                break
-            cursor = page[-1].journal_id
-        return rows
+        # One reverse-indexed query bounds bootstrap/backlog work. The extra
+        # row detects a gap without scanning the full canonical history.
+        page = await asyncio.to_thread(
+            self.journal.before, conversation, upper + 1, self.MAX_DELTA_ROWS + 1,
+        )
+        return [row for row in page if after < row.journal_id <= upper]
 
-    @staticmethod
-    def _prompt(conversation, rows: list[Any], wake_id: int) -> str:
-        header = {
-            "conversation": conversation.key,
-            "latest_user_journal_id": wake_id,
-            "instruction": "Reply to the latest ordinary user message using this ordered QQ journal delta.",
+    @classmethod
+    def _project_row(cls, row) -> tuple[str, bool]:
+        message = row.message
+        payload = {
+            "journal_id": row.journal_id,
+            "direction": message.direction,
+            "actor_id": message.actor_id,
+            "actor_name": message.actor_name,
+            "message_id": message.message_id,
+            "reply_to": message.reply_to,
+            "content": message.content,
         }
-        lines = [json.dumps(header, ensure_ascii=False)]
-        for row in rows:
-            message = row.message
-            lines.append(json.dumps({
-                "journal_id": row.journal_id,
-                "direction": message.direction,
-                "actor_id": message.actor_id,
-                "actor_name": message.actor_name,
-                "message_id": message.message_id,
-                "reply_to": message.reply_to,
-                "content": message.content,
-            }, ensure_ascii=False, separators=(",", ":")))
-        return "\n".join(lines)
+        def encode():
+            return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        encoded = encode()
+        if len(encoded.encode("utf-8")) <= cls.MAX_ROW_BYTES:
+            return encoded, False
+        # This is a projection, not a journal mutation. A typed lookup by the
+        # journal ID can retrieve the full original content and media metadata.
+        for key, value in tuple(payload.items()):
+            if isinstance(value, str):
+                payload[key] = value[:128]
+        text = message.content.get("text", "")
+        payload["content"] = {
+            "text": text[:1024] if isinstance(text, str) else "",
+            "projection_truncated": True,
+            "original_journal_id": row.journal_id,
+        }
+        encoded = encode()
+        while len(encoded.encode("utf-8")) > cls.MAX_ROW_BYTES:
+            payload["content"]["text"] = payload["content"]["text"][:len(payload["content"]["text"]) // 2]
+            encoded = encode()
+        return encoded, True
+
+    @classmethod
+    def _prompt(cls, conversation, rows: list[Any], wake_id: int, after: int = 0) -> str:
+        selected = [(row, *cls._project_row(row)) for row in rows[-cls.MAX_DELTA_ROWS:]]
+        while True:
+            header = {
+                "conversation": conversation.key[:256],
+                "latest_user_journal_id": wake_id,
+                "instruction": "Reply to the latest ordinary user message using this ordered QQ journal delta. "
+                               "Query the scoped Journal tools for omitted or truncated original facts.",
+                "history_window": {
+                    "after_journal_id": after,
+                    "through_journal_id": wake_id,
+                    "complete": len(selected) == len(rows) and not any(truncated for _, _, truncated in selected),
+                    "before_journal_id": selected[0][0].journal_id,
+                    "truncated_journal_ids": [row.journal_id for row, _, truncated in selected if truncated],
+                },
+            }
+            prompt = "\n".join([json.dumps(header, ensure_ascii=False, separators=(",", ":"))]
+                               + [encoded for _, encoded, _ in selected])
+            if len(prompt.encode("utf-8")) <= cls.MAX_DELTA_BYTES:
+                return prompt
+            if len(selected) == 1:
+                raise ValueError("canonical wake projection exceeds the input budget")
+            selected.pop(0)
 
     async def handle(
         self,
@@ -89,6 +129,37 @@ class ChatService:
                 async with self.mcp.turn(conversation, send, get_group) as servers:
                     return await self._handle_locked(conversation, inbound_message_id, send, servers)
             return await self._handle_locked(conversation, inbound_message_id, send)
+
+    async def select_profile(self, conversation, kind: str, value: str, send,
+                             get_group=None) -> dict:
+        """Change trusted runtime state while serializing with ordinary turns."""
+        selector = {"persona": self.dsh.select_persona, "scene": self.dsh.select_scene}.get(kind)
+        if selector is None:
+            raise ValueError("unknown profile selection")
+        async with self._lock(conversation):
+            identity = (conversation.platform_id, conversation.bot_id, conversation.key)
+            state = await asyncio.to_thread(self.state.get, *identity)
+            if state is not None and state.pending_upper_cursor is not None:
+                raise PendingTurnError("profile selection requires recovery of the pending turn")
+
+            async def select(servers=None):
+                nonlocal state
+                if state is None:
+                    args = () if servers is None else (servers,)
+                    session_id = await self._dsh_call(self.dsh.create_session, *args)
+                    state = await asyncio.to_thread(self.state.get_or_create, *identity, session_id)
+                selected = await self._dsh_call(selector, state.session_id, value)
+                await send(selected)
+                return selected
+
+            if self.mcp is not None:
+                async def no_tool_send(_reply):
+                    raise RuntimeError("profile selection cannot send through an Agent tool")
+                async with self.mcp.turn(conversation, no_tool_send, get_group) as servers:
+                    # Session creation discovers MCP tools but performs no model
+                    # turn. The inactive bearer cannot execute tools afterward.
+                    return await select(servers)
+            return await select()
 
     async def _handle_locked(self, conversation, inbound_message_id, send, servers=None):
         mcp_args = () if servers is None else (servers,)
@@ -110,6 +181,12 @@ class ChatService:
                      row.message.direction == "inbound"), None)
         if wake is None:
             raise RuntimeError("inbound wake message is missing from the canonical journal")
+        if (wake.message.platform_id != conversation.platform_id or
+                wake.message.bot_id != conversation.bot_id or
+                wake.message.conversation_key != conversation.key or
+                wake.message.direction != "inbound" or
+                wake.message.message_id != inbound_message_id):
+            raise RuntimeError("canonical wake message identity is inconsistent")
         if wake.journal_id <= state.last_seen_journal_id:
             return None
         # End this turn at its own wake row. A later ordinary message may
@@ -119,11 +196,28 @@ class ChatService:
         rows = await self._delta(conversation, state.last_seen_journal_id, upper)
         if not any(row.journal_id == wake.journal_id for row in rows):
             raise RuntimeError("inbound wake message is absent from journal delta")
-        prompt = self._prompt(conversation, rows, wake.journal_id)
+        prompt = self._prompt(conversation, rows, wake.journal_id, state.last_seen_journal_id)
+        trusted_source = None
+        if self.trusted_sources:
+            message = wake.message
+            trusted_source = {
+                "platform_id": message.platform_id,
+                "bot_id": message.bot_id,
+                "conversation_key": message.conversation_key,
+                "requester_id": message.actor_id,
+                "inbound_message_id": message.message_id,
+            }
+            if any(not isinstance(value, str) or not value for value in trusted_source.values()):
+                raise RuntimeError("canonical wake message has incomplete trusted source facts")
         await asyncio.to_thread(self.state.begin_turn, *identity, state.session_id, upper)
         # Any error after begin_turn leaves a durable pending marker. The
         # SDK stdio protocol cannot prove whether a lost call was accepted.
-        reply = await self._dsh_call(self.dsh.run, state.session_id, prompt, *mcp_args)
+        run_args = (state.session_id, prompt, *mcp_args)
+        if self.trusted_sources:
+            if not mcp_args:
+                run_args += (None,)
+            run_args += (trusted_source,)
+        reply = await self._dsh_call(self.dsh.run, *run_args)
         await send(reply)
         await asyncio.to_thread(self.state.complete_turn, *identity, state.session_id, upper)
         return reply

@@ -1,0 +1,92 @@
+"""Load the real AstrBot router and both native Profiles without QQ or inference."""
+import os
+import subprocess
+import textwrap
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_real_router_profiles_and_control_without_model_or_qq():
+    runtime = ROOT / ".runtime/astrbot"
+    worker = textwrap.dedent(r'''
+        import asyncio, copy, os, tempfile
+        from pathlib import Path
+        from astrbot.core.config.default import DEFAULT_CONFIG
+        from astrbot.core.star.star_manager import PluginManager
+        from astrbot.core.star.star import star_map
+        from astrbot.api import star
+        import data.plugins.v2_dsh_router.main as router_module
+
+        async def main():
+            config=copy.deepcopy(DEFAULT_CONFIG)
+            config['plugin_set']=['*']
+            config['provider_settings']['enable']=False
+            class Context:
+                conversation_manager=object()
+                def get_config(self, **_kwargs):return config
+            with tempfile.TemporaryDirectory(prefix='router-profile-acceptance-',
+                    dir=Path(os.environ['V2_REPO_ROOT'])/'.runtime') as directory:
+                base=Path(directory)
+                star.StarTools.get_data_dir=staticmethod(lambda name:base/'data'/name)
+                original=router_module.start_client
+                async def isolated_client(**settings):
+                    domain='owner' if settings.get('enable_authorization') else 'chat'
+                    settings['dsh_home']=base/domain/'home'
+                    settings['workspace']=base/domain/'workspace'
+                    return await original(**settings)
+                router_module.start_client=isolated_client
+                manager=PluginManager(Context(),config)
+                loaded=await manager.load(specified_dir_name='v2_dsh_router')
+                assert loaded[0],loaded
+                router=star_map['data.plugins.v2_dsh_router.main'].star_cls
+                replies=[]
+                class Event:
+                    def __init__(self,group=False,user=900003):
+                        self.extra={}
+                        self.message_obj=type('Message',(),{'raw_message':{
+                            'post_type':'message','message_type':'group' if group else 'private',
+                            'self_id':900001,'user_id':user,'group_id':42,
+                            'message_id':'control-group' if group else 'control-private',
+                            'message':[{'type':'text','data':{'text':'/v2agent persona analyst'}}],
+                        }})()
+                    def get_platform_id(self):return 'contract'
+                    def set_extra(self,key,value):self.extra[key]=value
+                    async def send(self,chain):replies.append(chain.get_plain_text())
+                    async def get_group(self):return {}
+                try:
+                    assert set(router.clients)=={'chat','owner'}
+                    assert not any(client._sessions for client in router.clients.values())
+                    await router.configure_agent(Event(), 'persona', 'analyst')
+                    private=router.services['owner'].state.get('contract','900001','private:900003')
+                    assert private is not None
+                    owner=router.clients['owner']
+                    assert owner.personas.current(private.session_id)['persona']=='analyst'
+                    await router.configure_agent(Event(), 'scene', 'research')
+                    assert router.services['owner'].state.get('contract','900001','private:900003').session_id==private.session_id
+                    assert owner.scenes.current(private.session_id)['scene']=='research'
+                    await router.configure_agent(Event(group=True), 'persona', 'companion')
+                    group=router.services['chat'].state.get('contract','900001','group:42')
+                    assert group is not None
+                    assert router.clients['chat'].personas.current(group.session_id)['persona']=='companion'
+                    assert owner.personas.current(private.session_id)['persona']=='analyst'
+                    await router.configure_agent(Event(user=900004), 'persona', 'developer')
+                    assert replies[-1]=='仅 Bot 所有者可以切换人格和场景。'
+                    assert len(owner._sessions)==1 and len(router.clients['chat']._sessions)==1
+                    assert private.last_seen_journal_id==0 and group.last_seen_journal_id==0
+                    print('REAL_ROUTER_PROFILES_CONTROL_OK')
+                finally:
+                    await router.terminate()
+        asyncio.run(main())
+    ''')
+    result = subprocess.run(
+        [str(runtime/".venv/bin/python"), "-c", worker], cwd=runtime,
+        env={**os.environ, "ASTRBOT_ROOT":str(runtime), "V2_REPO_ROOT":str(ROOT),
+             "V2_DSH_PROVIDER":"deepseek-official", "V2_DSH_MODEL":"deepseek-v4-flash",
+             "V2_QQ_OWNERS":'[{"platform_id":"contract","bot_id":"900001","user_id":"900003"}]',
+             "V2_QQ_ALLOWED_CONVERSATIONS":"private:900003,group:42", "V2_MCP_PORT":"0",
+             "DEEPSEEK_API_KEY":""},
+        capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode==0,result.stdout+result.stderr
+    assert "REAL_ROUTER_PROFILES_CONTROL_OK" in result.stdout

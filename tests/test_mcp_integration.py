@@ -100,3 +100,34 @@ async def test_mcp_failure_can_be_explained_without_fabricating_action(tmp_path)
         # This cursor records successful consumption of user input, not success
         # of the failed capability. No action row was written by the tool.
     finally:await server.close()
+
+
+
+@pytest.mark.asyncio
+async def test_truncated_current_input_can_be_retrieved_in_full_via_scoped_history(tmp_path):
+    j=journal.JournalStore(tmp_path/'journal.sqlite3')
+    storage=state.StateStore(tmp_path/'state.sqlite3')
+    conv=journal.Conversation('qq','1','group:3')
+    original='完整任务' * 10000 + 'FULL_ORIGINAL_TAIL'
+    wake=append(j,'long-input',original)
+    server=mcp.McpServer(j)
+    await server.start(0)
+    class Model:
+        def create_session(self,declarations):return 'bounded-input-session'
+        def run(self,sid,prompt,declarations):
+            assert len(prompt.encode('utf-8')) <= service.ChatService.MAX_DELTA_BYTES
+            header=json.loads(prompt.splitlines()[0])
+            assert wake.journal_id in header['history_window']['truncated_journal_ids']
+            result=asyncio.run(invoke(declarations[0],[
+                ('history_before',{'before_id':wake.journal_id+1,'limit':1}),
+            ]))[0]
+            assert not result.isError
+            assert result.structuredContent['entries'][0]['content']['text']==original
+            return 'Full original retrieved'
+    replies=[]
+    async def send(reply):replies.append(reply)
+    try:
+        await service.ChatService(j,storage,Model(),server).handle(conv,'long-input',send)
+        assert replies==['Full original retrieved']
+    finally:
+        await server.close()

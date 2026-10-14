@@ -3,3 +3,6 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+
+# ESM resolution for V2 plugins against the locked, bootstrapped runtime.
+/dsh/node_modules
