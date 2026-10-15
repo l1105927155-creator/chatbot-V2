@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>QQ 消息沙箱</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script defer src="/static/app.js"></script>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark">Q</span><div><strong>QQ 消息沙箱</strong><small>本地 Bot 安全测试环境</small></div></div>
+      <div class="connection"><span id="connection-dot" class="status-dot"></span><span id="connection-label">正在连接…</span><button id="scenario-toggle" class="quiet-button">测试控制</button><button id="reconnect" class="quiet-button">重连</button></div>
+    </header>
+
+    <section class="workspace">
+      <aside class="sidebar">
+        <div class="section-head"><span>会话</span><button id="new-conversation" class="icon-button" title="新建私聊或群聊">＋</button></div>
+        <div id="conversation-list" class="conversation-list"></div>
+        <div class="sidebar-bottom">
+          <div class="section-head"><span>模拟成员</span><button id="add-member" class="icon-button" title="添加成员">＋</button></div>
+          <div id="member-list" class="member-list"></div>
+        </div>
+      </aside>
+
+      <section class="chat-pane">
+        <div class="chat-header">
+          <div class="chat-title"><div id="chat-avatar" class="avatar avatar-blue">群</div><div><strong id="chat-name">请选择会话</strong><small id="chat-subtitle">所有消息只发往本地模拟适配器</small></div></div>
+          <div class="header-actions"><button id="raw-toggle" class="secondary-button">原始消息 <kbd>JSON</kbd></button><button id="fault-toggle" class="secondary-button">故障注入 <span class="chevron">⌄</span></button></div>
+        </div>
+        <section id="fault-panel" class="fault-panel" hidden>
+          <div class="fault-title"><strong>故障注入</strong><span>按下方说明生效</span></div>
+          <label class="check-option"><input type="checkbox" name="fault" value="duplicate"><span><b>重复入站事件</b><small>本次输入以相同 message_id 推送两次</small></span></label>
+          <label class="check-option"><input type="checkbox" name="fault" value="disconnect"><span><b>随后断开适配器</b><small>推送本次输入后断开模拟连接</small></span></label>
+          <label class="check-option"><input type="checkbox" name="fault" value="timeout"><span><b>Bot 出站请求超时</b><small>对当前会话下一次 Bot 发送延迟 API 响应</small></span></label>
+          <label class="check-option"><input type="checkbox" name="fault" value="drop_feedback"><span><b>丢弃 Bot 出站事件</b><small>下一次 Bot 发送仍返回 API 成功，但不推送 message_sent 事件</small></span></label>
+        </section>
+        <div id="messages" class="messages" aria-live="polite"><div class="empty-state"><span class="empty-icon">✦</span><strong>开始一轮安全测试</strong><p>选择群聊或私聊，再以不同成员身份发送消息。</p></div></div>
+        <div id="reply-banner" class="reply-banner" hidden><span>回复</span><strong id="reply-label"></strong><button id="clear-reply" title="取消回复">×</button></div>
+        <form id="composer" class="composer">
+          <div class="compose-tools">
+            <label class="sender-select"><span>发送身份</span><select id="sender-select" aria-label="发送身份"></select></label>
+            <div class="tool-buttons"><button type="button" id="at-button" class="tool-button" title="插入真实 @ 消息段">@ <span>成员 / Bot</span></button><button type="button" class="tool-button" data-insert="face" title="表情">☻ <span>表情</span></button><label class="tool-button file-button" title="添加图片或文件">▧ <span>图片 / 文件</span><input id="file-input" type="file" multiple accept="image/*,*/*"></label><button type="button" id="fixture-button" class="tool-button" title="插入沙箱测试素材">▧ <span>测试素材</span></button><button type="button" id="forward-button" class="tool-button" title="发送合并转发">▤ <span>合并转发</span></button><button type="button" id="reply-button" class="tool-button" title="选择一条消息进行回复">↶ <span>引用</span></button></div>
+          </div>
+          <div id="attachments" class="attachments" hidden></div>
+          <div id="fixture-picker" class="fixture-picker" hidden></div>
+          <div class="input-row"><textarea id="message-input" rows="2" placeholder="输入消息…（Enter 发送，Shift + Enter 换行）" aria-label="消息内容"></textarea><button class="send-button" type="submit">发送 <span>↵</span></button></div>
+          <div class="compose-foot"><span>发送到 <b id="send-target">—</b></span><span>模拟身份不会获得真实 QQ 权限</span></div>
+        </form>
+      </section>
+
+      <aside id="inspector" class="inspector" hidden>
+        <div class="inspector-head"><div><strong>消息结构</strong><small>OneBot v11 格式</small></div><div class="inspector-buttons"><button id="replay-event" class="secondary-button" disabled title="保持原 message_id 重放，用于验证去重">重放原始事件</button><button id="replay-new-message" class="secondary-button" disabled title="分配新 message_id 后重新发送，用于再次测试 DSH">作为新消息重发</button><button id="close-inspector" class="icon-button">×</button></div></div>
+        <div id="raw-content" class="raw-content"><p class="muted">选择一条消息查看原始事件 JSON。</p></div>
+      </aside>
+    </section>
+    <aside id="scenario-drawer" class="scenario-drawer" hidden aria-label="沙箱场景、生命周期与证据">
+      <header class="drawer-head"><div><strong>测试控制台</strong><small>配置、故障与只读运行证据</small></div><button id="close-scenario" class="icon-button" aria-label="关闭">×</button></header>
+      <div class="drawer-content">
+        <section class="control-section">
+          <div class="control-title"><strong>运行场景</strong><span id="scenario-mode" class="mode-badge">读取中</span></div>
+          <div class="owner-card"><span class="control-label">启动时固定的模拟 Owner</span><b id="scenario-owner">未启用</b><small>此身份只能由启动配置确定，窗口不能授予 Owner 身份。</small></div>
+        </section>
+        <section class="control-section">
+          <div class="control-title"><strong>DSH 会话准入</strong><button id="save-admission" class="small-primary">保存名单</button></div>
+          <p class="control-help">测试会话仍可接收消息；勾选项才会交给 DSH。名单与会话是否存在相互独立。</p>
+          <div id="admission-list" class="admission-list"><span class="muted">读取场景中…</span></div>
+          <small id="admission-status" class="control-status"></small>
+        </section>
+        <section class="control-section">
+          <div class="control-title"><strong>模型 / 工具故障</strong><span class="control-note">只对指定调用生效</span></div>
+          <form id="precise-fault-form" class="fault-form">
+            <label>目标<select id="fault-target"><option value="model">模型请求</option><option value="search">网页搜索工具</option><option value="fetch">网页读取工具</option></select></label>
+            <label>故障<select id="fault-kind"><option value="error">返回错误</option><option value="timeout">超时 / 延迟</option><option value="malformed">格式错误结果</option><option value="truncate">截断结果</option></select></label>
+            <label>触发阶段<select id="fault-phase"><option value="before">执行前</option><option value="after">执行后</option></select></label>
+            <label>触发第几次<input id="fault-nth" type="number" min="1" value="1"></label>
+            <label>关联工具调用 ID<input id="fault-call-id" type="text" placeholder="可选"></label>
+            <label>限定 Session ID<input id="fault-session-id" type="text" placeholder="可选"></label>
+            <label>限定 DSH Turn ID<input id="fault-turn-id" type="text" placeholder="可选"></label>
+            <label>延迟毫秒<input id="fault-delay" type="number" min="0" value="30000"></label>
+            <label>截断上限（搜索为条数）<input id="fault-limit" type="number" min="1" max="32768" value="32"></label>
+            <button class="small-primary" type="submit">添加一次性故障</button>
+          </form>
+          <div id="fault-rule-list" class="compact-list"><span class="muted">暂无故障规则</span></div>
+        </section>
+        <section class="control-section">
+          <div class="control-title"><strong>生命周期</strong></div>
+          <form id="event-wait-form" class="wait-form">
+            <label>等待事件<select id="wait-event"><option value="tool/start">工具开始</option><option value="tool/end">工具结束</option><option value="turn/start">轮次开始</option><option value="turn/completed">轮次完成</option><option value="turn/failed">轮次失败</option><option value="dsh/stop:cancelled">取消确认</option></select></label>
+            <label>工具名（可选）<input id="wait-tool" type="text" placeholder="Bash"></label>
+            <button type="submit" class="small-primary">等待实际事件</button>
+          </form>
+          <div id="wait-result" class="wait-result" aria-live="polite">尚未等待事件</div>
+          <div class="lifecycle-actions"><button id="cancel-turn" class="secondary-button">发送取消命令</button><button id="recover-pending" class="secondary-button">恢复选中 pending</button></div>
+          <small class="control-help">操作通过模拟 Owner 私聊发送正常 /v2agent 消息，仍经过 AstrBot 与 Router。</small>
+        </section>
+        <section class="control-section evidence-section">
+          <div class="control-title"><strong>只读证据</strong><button id="refresh-evidence" class="quiet-button">刷新</button></div>
+          <div class="evidence-filters"><label>会话<select id="evidence-conversation"></select></label><label>Session ID<input id="evidence-session" type="text" placeholder="可选"></label></div>
+          <div class="evidence-actions"><button id="export-evidence" class="secondary-button">导出证据 JSON</button></div>
+          <div id="evidence-content" class="evidence-content"><span class="muted">选择会话并刷新以读取 Journal、Router、审计和回执。</span></div>
+        </section>
+      </div>
+    </aside>
+    <div id="toast" class="toast" role="status" hidden></div>
+  </main>
+</body>
+</html>

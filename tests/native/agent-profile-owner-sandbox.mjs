@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, linkSync, unlinkSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { Context } from '../../dsh/node_modules/@deepseek-ai/cordis/lib/index.js'
 import { ToolCallId } from '../../dsh/node_modules/@deepseek-ai/dsh-llm/lib/index.js'
 import ToolRuntime from '../../dsh/node_modules/@deepseek-ai/dsh-tools/lib/index.js'
@@ -27,6 +28,8 @@ const sourcePath = join(sourceRoot, createHash('sha256').update(sessionId).diges
 let turn = 0, call = 0, executions = 0
 const agent = { session: { id: sessionId, header: { cwd: workspace } } }
 const ctx = new Context()
+const volumeScript = fileURLToPath(new URL('../../scripts/owner-workspace.py', import.meta.url))
+let mounted = false
 
 function source(requester = ownerId, key = 'private:' + requester, nonce = String(++turn)) {
   return {
@@ -63,6 +66,10 @@ function output(result) {
 }
 
 try {
+  const preparation = spawnSync('/usr/bin/python3', [volumeScript, 'prepare', '--workspace', workspace,
+    '--image', join(root, 'workspace.ext4'), '--size-mib', '32'], { encoding: 'utf8' })
+  assert.equal(preparation.status, 0, preparation.stderr)
+  mounted = true
   await ctx.plugin(SystemPrompt, {})
   await ctx.plugin(ToolRuntime)
   await ctx.plugin(OwnerSandbox, {
@@ -142,7 +149,9 @@ try {
   })))
   assert.notEqual(result.code, 0, 'network must be isolated')
 
-  linkSync(outside, join(workspace, 'host-hardlink'))
+  // Cross-filesystem links from the host are impossible; multiple links
+  // within this bounded workspace must still fail the preflight.
+  linkSync(join(workspace, 'inside.txt'), join(workspace, 'host-hardlink'))
   assert.match(output(await dispatch('bash', {command:'true'})), /unsafe owner workspace entry/)
   unlinkSync(join(workspace, 'host-hardlink'))
 
@@ -171,5 +180,9 @@ try {
     hardlinkDenied:true, envCleared:true, networkIsolated:true, cgroupWrapper:true,
   }))
 } finally {
+  if (mounted) {
+    const detached = spawnSync('/usr/bin/python3', [volumeScript, 'unmount', '--workspace', workspace], {encoding:'utf8'})
+    assert.equal(detached.status, 0, detached.stderr)
+  }
   rmSync(root, {recursive:true, force:true})
 }

@@ -5,6 +5,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import inspect
+import json
+import os
 import secrets
 import socket
 from contextlib import asynccontextmanager
@@ -71,6 +74,34 @@ class _BearerAuth:
     async def __call__(self, scope, receive, send) -> None:
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
+        if scope.get("path") == "/healthz" and self.server.health is not None:
+            if scope.get("method") != "GET":
+                status, data = 405, {"error": "method_not_allowed"}
+            else:
+                try:
+                    result = self.server.health()
+                    if inspect.isawaitable(result):
+                        result = await result
+                    # Health is loopback-only operational metadata. Never
+                    # expose identities, credentials, configuration or errors.
+                    flags = {"core_ready", "ready", "closing", "onebot_connected", "owner_volume_ready",
+                             "acp_ready", "journal_ready", "state_ready", "degraded"}
+                    numbers = {"pid", "active_turns", "queued", "pending_conversations", "quarantined_sessions"}
+                    data = {key: value for key, value in result.items() if
+                            (key in flags and type(value) is bool) or
+                            (key in numbers and type(value) is int and value >= 0)}
+                    data.setdefault("core_ready", False)
+                    data.setdefault("ready", False)
+                    status = 200 if data["core_ready"] else 503
+                except Exception:
+                    status, data = 503, {"core_ready": False, "ready": False, "pid": os.getpid()}
+            body = json.dumps(data, separators=(",", ":")).encode()
+            await send({"type": "http.response.start", "status": status,
+                        "headers": [(b"content-type", b"application/json"),
+                                    (b"cache-control", b"no-store"),
+                                    (b"content-length", str(len(body)).encode())]})
+            await send({"type": "http.response.body", "body": body})
+            return
         headers = {key.lower(): value for key, value in scope.get("headers", [])}
         authorization = headers.get(b"authorization", b"").decode("latin1")
         token = authorization[7:] if authorization.startswith("Bearer ") else ""
@@ -87,9 +118,10 @@ class _BearerAuth:
 class McpServer:
     """A loopback Streamable HTTP endpoint with turn-scoped authority."""
 
-    def __init__(self, journal: Any, logger: logging.Logger | None = None) -> None:
+    def __init__(self, journal: Any, logger: logging.Logger | None = None, *, health=None) -> None:
         self.journal = journal
         self.logger = logger or logging.getLogger(__name__)
+        self.health = health
         self._tokens: dict[tuple[str, str, str], str] = {}
         self._active_tokens: dict[str, _Turn] = {}
         self._active_conversations: set[tuple[str, str, str]] = set()

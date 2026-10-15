@@ -91,6 +91,43 @@ def test_complete_turn_advances_and_clears_matching_pending_turn(tmp_path):
     assert store.begin_turn(PLATFORM, BOT, GROUP, mapped.session_id, 20).pending_upper_cursor == 20
 
 
+def test_resolve_pending_is_explicit_cas_skip_and_does_not_mark_turn_success(tmp_path):
+    store = state.StateStore(tmp_path / "dsh-state.sqlite3")
+    mapped = store.get_or_create(PLATFORM, BOT, GROUP)
+    store.begin_turn(PLATFORM, BOT, GROUP, mapped.session_id, 12)
+
+    recovered = store.resolve_pending(
+        PLATFORM, BOT, GROUP, mapped.session_id, expected_cursor=0, expected_pending=12
+    )
+    assert recovered.last_seen_journal_id == 12
+    assert recovered.pending_upper_cursor is None
+    # Recovery consumes the uncertain delta; normal future deltas can proceed.
+    assert store.begin_turn(PLATFORM, BOT, GROUP, mapped.session_id, 15).pending_upper_cursor == 15
+
+
+@pytest.mark.parametrize(
+    "session_id,cursor,pending",
+    [("stale-session", 0, 12), ("session", 1, 12), ("session", 0, 11)],
+)
+def test_resolve_pending_conflict_is_non_mutating(tmp_path, session_id, cursor, pending):
+    store = state.StateStore(tmp_path / "dsh-state.sqlite3")
+    mapped = store.get_or_create(PLATFORM, BOT, GROUP, session_id="session")
+    store.begin_turn(PLATFORM, BOT, GROUP, mapped.session_id, 12)
+    before = store.get(PLATFORM, BOT, GROUP)
+
+    with pytest.raises(ValueError, match="does not match|state changed"):
+        store.resolve_pending(PLATFORM, BOT, GROUP, session_id, cursor, pending)
+    assert store.get(PLATFORM, BOT, GROUP) == before
+
+
+@pytest.mark.parametrize("cursor,pending", [(-1, 12), (True, 12), (0, -1), (1.5, 12), (2, 1)])
+def test_resolve_pending_requires_strict_ordered_nonnegative_cursors(tmp_path, cursor, pending):
+    store = state.StateStore(tmp_path / "dsh-state.sqlite3")
+    mapped = store.get_or_create(PLATFORM, BOT, GROUP)
+    with pytest.raises(ValueError, match="cursor"):
+        store.resolve_pending(PLATFORM, BOT, GROUP, mapped.session_id, cursor, pending)
+
+
 def test_begin_turn_rejects_stale_cursor_and_session(tmp_path):
     store = state.StateStore(tmp_path / "dsh-state.sqlite3")
     mapped = store.get_or_create(PLATFORM, BOT, GROUP)

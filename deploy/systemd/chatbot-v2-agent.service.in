@@ -1,0 +1,23 @@
+[Unit]
+Description=Chatbot V2 Personal Agent-Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@ASTRBOT_DIR@
+Environment=PATH=@PATH_VALUE@
+UnsetEnvironment=DEEPSEEK_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY DASHSCOPE_API_KEY SILICONFLOW_API_KEY
+ExecStartPre=@PREFLIGHT_COMMAND@
+ExecStart=@RUN_COMMAND@
+ExecStartPost=@HEALTH_COMMAND@
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGINT
+KillMode=mixed
+TimeoutStopSec=420
+TimeoutStartSec=480
+UMask=0077
+
+[Install]
+WantedBy=default.target

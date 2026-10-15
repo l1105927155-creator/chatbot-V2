@@ -5,16 +5,26 @@ import asyncio
 import threading
 import stat
 import copy
+import time
 from pathlib import Path
 from typing import Any
+
+# The pinned fetch provider skips DNS validation on proxy routes. Keep both
+# Agent Profiles on direct transport so its public-address/pinning checks run.
+DIRECT_NETWORK_ENV = {name: "" for name in (
+    "http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY",
+    "all_proxy", "ALL_PROXY", "no_proxy", "NO_PROXY",
+)} | {"NODE_USE_ENV_PROXY": "0"}
 try:  # Support both AstrBot package loading and the isolated contract tests.
     from .turn_source import TurnSourcePublisher
     from .persona_state import PersonaStateStore
     from .scene_state import SceneStateStore
+    from .runtime_audit import CURRENT_TRACE, call_id
 except ImportError:  # pragma: no cover - exercised by tests loading this file directly
     from turn_source import TurnSourcePublisher
     from persona_state import PersonaStateStore
     from scene_state import SceneStateStore
+    from runtime_audit import CURRENT_TRACE, call_id
 
 
 class AcpRuntime:
@@ -29,11 +39,36 @@ class AcpRuntime:
 
         self.response_model = ObjectResponse
         self.workspace = str(workspace)
+        self._control_lock = threading.RLock()
+        self._active_prompts = {}
+
+        class PromptWriteClient(HarnessClient):
+            """Serialize prompt dispatch with cancellation notifications.
+
+            The pinned SDK has no nonblocking request handle. Its narrow
+            _write_message hook lets us ensure a latched cancel is written only
+            after the prompt line has reached stdin.
+            """
+            def _write_message(inner_self, message):
+                if message.get("method") != "session/prompt":
+                    return super(PromptWriteClient, inner_self)._write_message(message)
+                session_id = message.get("params", {}).get("sessionId")
+                with self._control_lock:
+                    super(PromptWriteClient, inner_self)._write_message(message)
+                    token = self._active_prompts.get(session_id)
+                    if token is not None:
+                        token["dispatched"] = True
+                        if token.get("trace"):
+                            token["trace"].emit("dsh/dispatched")
+                        if token["requested"]:
+                            inner_self.notify("session/cancel", {"sessionId": session_id})
+
         # Pinned DSH classifies sandbox denials from English OS diagnostics.
         env = {"LC_MESSAGES": "C",
                "DSH_SYSTEM_PROMPT": instructions.read_text(encoding="utf-8"),
                "V2_DSH_PROVIDER": provider, "V2_DSH_MODEL": model}
         if Path(patch).name in {"v2-agent-group.patch.yml", "v2-agent-owner.patch.yml"}:
+            env.update(DIRECT_NETWORK_ENV)
             env.update({
                 "V2_AGENT_SKILLS_DIR": str(Path(patch).resolve().parent.parent / "skills"),
                 "V2_PERSONA_STATE_ROOT": str(Path(dsh_home).resolve() / "agent-bot-personas"),
@@ -45,7 +80,7 @@ class AcpRuntime:
             env.update({"V2_TURN_SOURCE_DIR": str(source_dir),
                         "V2_TURN_SOURCE_EPOCH": source_epoch,
                         "V2_SCOPE_ROOT": str(scope_root)})
-        self.client = HarnessClient(HarnessConfig(
+        self.client = PromptWriteClient(HarnessConfig(
             dsh_bin=str(dsh_bin), dsh_home=str(dsh_home), cwd=self.workspace,
             profile="sdk-minimal", patches=(str(patch),),
             env=env,
@@ -77,17 +112,50 @@ class AcpRuntime:
 
     def run(self, session_id, delta):
         chunks = []
+        trace = CURRENT_TRACE.get()
+        tool_starts = {}
+        token = {"requested": False, "dispatched": False, "trace": trace}
+        with self._control_lock:
+            if session_id in self._active_prompts:
+                raise RuntimeError("DSH session already has an active prompt")
+            self._active_prompts[session_id] = token
         def collect(notification):
             if notification.method != "session/update" or notification.payload.get("sessionId") != session_id:
                 return
             update = notification.payload.get("update", {})
             content = update.get("content", {})
+            if trace and update.get("sessionUpdate") in {"tool_call", "tool_call_update"}:
+                raw_id = update.get("toolCallId")
+                if isinstance(raw_id, str):
+                    if update["sessionUpdate"] == "tool_call":
+                        tool_starts[raw_id] = time.monotonic()
+                        trace.emit("tool/start", call_id=call_id(raw_id), tool=update.get("title"),
+                                   status=update.get("status"))
+                    else:
+                        before = tool_starts.pop(raw_id, None)
+                        trace.emit("tool/end", call_id=call_id(raw_id), status=update.get("status"),
+                                   **({"elapsed_ms": (time.monotonic() - before) * 1000} if before else {}))
             if update.get("sessionUpdate") == "agent_message_chunk" and content.get("type") == "text":
                 chunks.append(content["text"])
-        result = self.request("session/prompt", {
-            "sessionId": session_id, "prompt": [{"type": "text", "text": delta}],
-        }, on_notification=collect, notification_filter=lambda n:
-           n.method == "session/update" and n.payload.get("sessionId") == session_id)
+        try:
+            result = self.request("session/prompt", {
+                "sessionId": session_id, "prompt": [{"type": "text", "text": delta}],
+            }, on_notification=collect, notification_filter=lambda n:
+               n.method == "session/update" and n.payload.get("sessionId") == session_id)
+        except BaseException as error:
+            if trace:
+                trace.emit("dsh/error", error_type=type(error).__name__)
+            raise
+        finally:
+            with self._control_lock:
+                if self._active_prompts.get(session_id) is token:
+                    self._active_prompts.pop(session_id, None)
+        if result.get("stopReason") == "cancelled":
+            if trace:
+                trace.emit("dsh/stop", stop_reason="cancelled")
+            raise DshTurnCancelled("DSH turn was cancelled")
+        if trace:
+            trace.emit("dsh/stop", stop_reason=result.get("stopReason"))
         if result.get("stopReason") != "end_turn":
             raise RuntimeError(f"DSH turn did not complete: {result.get('stopReason')}")
         text = "".join(chunks).strip()
@@ -95,11 +163,38 @@ class AcpRuntime:
             raise RuntimeError("DSH completed without a text reply")
         return text
 
+    def cancel_session(self, session_id):
+        """Request cancellation of this session's current prompt without waiting."""
+        with self._control_lock:
+            token = self._active_prompts.get(session_id)
+            if token is None:
+                return False
+            token["requested"] = True
+            trace = token.get("trace")
+            control = CURRENT_TRACE.get()
+            if trace:
+                trace.emit("cancel/requested", **({"related_turn_id": control.id} if control else {}))
+            if token["dispatched"]:
+                self.client.notify("session/cancel", {"sessionId": session_id})
+            return True
+
     def close_session(self, session_id):
         self.request("session/close", {"sessionId": session_id})
 
+    def transport_alive(self):
+        # The pinned SDK has no non-generating public ping. Check its actual
+        # process and reader thread; provider availability requires a real turn.
+        process = self.client._proc
+        reader = self.client._reader_thread
+        return bool(process is not None and process.poll() is None
+                    and reader is not None and reader.is_alive())
+
     def close(self):
         self.client.close()
+
+
+class DshTurnCancelled(RuntimeError):
+    """The pinned ACP runtime confirmed that the active turn was cancelled."""
 
 
 def _prepare_owner_directory(path: Path) -> None:
@@ -277,6 +372,22 @@ class DshClient:
                     ) from cleanup_error
                 return result
 
+    def cancel_session(self, session_id):
+        """Cancel an active turn without acquiring its per-session run lock."""
+        with self._lock:
+            if self._closed or session_id in self._quarantined_sessions:
+                return False
+            runtime = self.runtime
+        cancel = getattr(runtime, "cancel_session", None)
+        return bool(cancel(session_id)) if cancel is not None else False
+
+    def health(self):
+        with self._lock:
+            closed = self._closed or self._runtime_stopped
+            quarantined = len(self._quarantined_sessions)
+        return {"ready": not closed and self.runtime.transport_alive(),
+                "quarantined_sessions": quarantined}
+
     def select_persona(self, session_id: str, persona: str) -> dict:
         """Set the next-turn persona without changing the DSH session or tool set."""
         if self.personas is None:
@@ -293,7 +404,52 @@ class DshClient:
 
     def close_session(self, session_id):
         with self._session_lock(session_id):
-            self.runtime.close_session(session_id)
+            try:
+                self.runtime.close_session(session_id)
+            except BaseException as drain_error:
+                # ACP close may report an error after the native Session has
+                # already been removed. Never retry resume/close against an
+                # ambiguous lifecycle; keep it tracked for process shutdown.
+                with self._lock:
+                    self._quarantined_sessions[session_id] = drain_error
+                raise RuntimeError(
+                    "DSH session drain failed; session is quarantined until runtime shutdown"
+                ) from drain_error
+            with self._lock:
+                self._sessions.discard(session_id)
+                self._session_servers.pop(session_id, None)
+
+    def drain_session(self, session_id, mcp_servers=None):
+        """Resume and close one persisted Session without running a prompt."""
+        if not session_id:
+            raise ValueError("session ID is required")
+        servers = copy.deepcopy(mcp_servers or [])
+        with self._session_lock(session_id):
+            with self._lock:
+                if session_id in self._quarantined_sessions:
+                    raise RuntimeError(
+                        "DSH session is quarantined after an undrained turn; runtime shutdown is required"
+                    ) from self._quarantined_sessions[session_id]
+                loaded = session_id in self._sessions
+            if not loaded:
+                if servers:
+                    self.runtime.resume(session_id, servers)
+                else:
+                    self.runtime.resume(session_id)
+                # If close fails, shutdown must still retry this exact Session.
+                with self._lock:
+                    self._sessions.add(session_id)
+                    self._session_servers[session_id] = servers
+            try:
+                self.runtime.close_session(session_id)
+            except BaseException as drain_error:
+                # Pinned ACP deletes its session record even on failed close.
+                # An uncertain drain must not be retried against that record.
+                with self._lock:
+                    self._quarantined_sessions[session_id] = drain_error
+                raise RuntimeError(
+                    "DSH session drain failed; session is quarantined until runtime shutdown"
+                ) from drain_error
             with self._lock:
                 self._sessions.discard(session_id)
                 self._session_servers.pop(session_id, None)

@@ -1,4 +1,5 @@
-# 当前阶段 — Agent Profile 验证
+# 已有阶段记录 — Agent Profile 验证
+当前实施入口为 [Personal Agent-Bot 产品化](personal-agent-bot.md)；下文按日期保留历史观察与纠错，不表示所有早期未完成项仍未完成。
 日期：2026-10-13。架构来源：../architecture/agent-bot-runtime.md。
 
 ## 实施顺序与门槛

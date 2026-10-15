@@ -13,7 +13,7 @@ def test_pinned_builtin_observers_and_probe_do_not_block_or_duplicate_dsh(tmp_pa
         from pathlib import Path
         from astrbot.core import sp
         from astrbot.core.config.default import DEFAULT_CONFIG
-        from astrbot.core.message.components import Plain
+        from astrbot.core.message.components import Plain, At, Reply
         from astrbot.core.pipeline.context import PipelineContext
         from astrbot.core.pipeline.waking_check.stage import WakingCheckStage
         from astrbot.core.pipeline.process_stage.stage import ProcessStage
@@ -77,7 +77,7 @@ def test_pinned_builtin_observers_and_probe_do_not_block_or_duplicate_dsh(tmp_pa
                 for name in ('astrbot','v2_ai_gate','v2_phase1_probe','v2_dsh_router','test_deterministic'):
                     assert (await manager.load(specified_dir_name=name))[0]
                 router=star_map['data.plugins.v2_dsh_router.main'].star_cls
-                calls=[];sent=[];selections=[]
+                calls=[];sent=[];selections=[];cancellations=[];recoveries=[]
                 class Service:
                     def __init__(self,domain):self.domain=domain
                     async def handle(self,conversation,message_id,send,**kwargs):
@@ -85,17 +85,35 @@ def test_pinned_builtin_observers_and_probe_do_not_block_or_duplicate_dsh(tmp_pa
                     async def select_profile(self,conversation,kind,value,send,**kwargs):
                         selections.append((self.domain,conversation.key,kind,value))
                         await send({kind:value})
+                    async def status(self,conversation):
+                        return {'state':'idle','persona':'analyst','scene':'research'}
+                    async def cancel(self,conversation):
+                        cancellations.append((self.domain,conversation.key))
+                        return self.domain == 'owner'
+                    async def resolve_pending(self,conversation,expected_pending,**kwargs):
+                        from types import SimpleNamespace
+                        recoveries.append((self.domain,conversation.key,expected_pending))
+                        return SimpleNamespace(last_seen_journal_id=expected_pending)
                 router.services['chat']=Service('chat')
                 router.services['owner']=Service('owner')
                 ctx=PipelineContext(astrbot_config=config,plugin_manager=manager,astrbot_config_id='v2-phase3-contract')
                 waking,process,respond=WakingCheckStage(),ProcessStage(),RespondStage()
                 for stage in (waking,process,respond):await stage.initialize(ctx)
-                def event(text,mid,user_id='900002'):
+                def event(text,mid,user_id='900002',group=None,mention=None,reply_sender=None):
                     m=AstrBotMessage();m.message=[Plain(text=text)];m.message_str=text
                     m.type=MessageType.FRIEND_MESSAGE;m.sender=MessageMember(user_id=user_id,nickname='Test')
                     m.self_id='900001';m.session_id=user_id
                     m.raw_message={'post_type':'message','message_type':'private','self_id':900001,'user_id':int(user_id),
                                    'message_id':mid,'message':[{'type':'text','data':{'text':text}}]}
+                    if group is not None:
+                        m.type=MessageType.GROUP_MESSAGE;m.group_id=str(group);m.session_id=str(group)
+                        m.raw_message.update(message_type='group',group_id=int(group))
+                    if mention is not None:
+                        m.message.insert(0,At(qq=str(mention)))
+                        m.raw_message['message'].insert(0,{'type':'at','data':{'qq':str(mention)}})
+                    if reply_sender is not None:
+                        m.message.insert(0,Reply(id='quoted-message',sender_id=str(reply_sender)))
+                        m.raw_message['message'].insert(0,{'type':'reply','data':{'id':'quoted-message'}})
                     e=AstrMessageEvent(text,m,PlatformMetadata(name='aiocqhttp',id='contract',description='contract'),user_id)
                     async def send(chain):sent.append(chain.get_plain_text())
                     e.send=send;return e
@@ -116,7 +134,7 @@ def test_pinned_builtin_observers_and_probe_do_not_block_or_duplicate_dsh(tmp_pa
                 assert sent==['fake DSH reply','fake DSH reply','deterministic plugin reply','v2 phase 1 probe: ok']
                 before=len(calls)
                 await drive(event('/v2agent persona analyst','nonowner-control'))
-                assert sent[-1]=='仅 Bot 所有者可以切换人格和场景。'
+                assert sent[-1]=='仅 Bot 所有者可以使用 Agent 控制命令。'
                 assert selections==[]
                 await drive(event('/v2agent persona analyst','owner-persona','900003'))
                 await drive(event('/v2agent scene research','owner-scene','900003'))
@@ -124,6 +142,67 @@ def test_pinned_builtin_observers_and_probe_do_not_block_or_duplicate_dsh(tmp_pa
                                     ('owner','private:900003','scene','research')]
                 assert sent[-2:]==['人格已切换为 analyst，下轮生效。','场景已切换为 research，下轮生效。']
                 assert len(calls)==before
+                await drive(event('/v2agent status','owner-status','900003'))
+                assert sent[-1]=='Agent：空闲；人格：analyst；场景：research；模式：Owner 受限操作。'
+                await drive(event('/v2agent persona list','owner-list','900003'))
+                assert sent[-1]=='可用人格：analyst、companion、default、developer'
+                await drive(event('/v2agent status','nonowner-status'))
+                assert sent[-1]=='仅 Bot 所有者可以使用 Agent 控制命令。'
+                await drive(event('/v2agent cancel','nonowner-cancel'))
+                assert sent[-1]=='仅 Bot 所有者可以使用 Agent 控制命令。'
+                assert cancellations==[]
+                await drive(event('/v2agent cancel','owner-cancel','900003'))
+                assert cancellations==[('owner','private:900003')]
+                assert sent[-1].startswith('已请求取消当前执行')
+                await drive(event('/v2agent cancel','owner-group-cancel','900003',group='1055300305'))
+                assert cancellations[-1]==('chat','group:1055300305')
+                assert sent[-1].startswith('当前没有可取消的模型执行')
+                await drive(event('/v2agent cancel','owner-excluded-cancel','900003',group='994363760'))
+                assert sent[-1]=='当前会话尚未启用 Agent。'
+                assert len(cancellations)==2
+                await drive(event('/v2agent recover 1','nonowner-recover'))
+                assert sent[-1]=='仅 Bot 所有者可以使用 Agent 控制命令。'
+                assert recoveries==[]
+                await drive(event('/v2agent recover bad','owner-invalid-recover','900003'))
+                assert '核对上一轮执行和发送结果后' in sent[-1]
+                assert recoveries==[]
+                await drive(event('/v2agent recover 1','owner-recover','900003'))
+                assert recoveries==[('owner','private:900003',1)]
+                assert sent[-1].startswith('已解除暂停并跳过截至 Journal 1')
+                await drive(event('/v2agent recover 2','owner-group-recover','900003',group='1055300305'))
+                assert recoveries[-1]==('chat','group:1055300305',2)
+                await drive(event('/v2agent recover 2','owner-excluded-recover','900003',group='994363760'))
+                assert sent[-1]=='当前会话尚未启用 Agent。'
+                assert len(recoveries)==2
+                assert len(calls)==before and len(selections)==2
+                # ALL handlers wake plain group messages in upstream; the
+                # router must independently enforce the agreed trigger.
+                group='1055300305';other_group='994363760'
+                count=len(calls);outbound=len(sent)
+                quiet=event('ordinary group chatter','group-quiet',group=group)
+                await drive(quiet)
+                assert quiet.is_wake and not quiet.is_at_or_wake_command
+                await drive(event('bot prefix is just text','group-prefix',group=group))
+                await drive(event('@Bot nickname text','group-name',group=group))
+                await drive(event('other mention','group-other',group=group,mention='900004'))
+                await drive(event('all mention','group-all',group=group,mention='all'))
+                await drive(event('reply to member','group-member-reply',group=group,reply_sender='900004'))
+                await drive(event('/ordinary-prefix','group-slash',group=group))
+                assert len(calls)==count and len(sent)==outbound
+                await drive(event('Bot question','group-at',group=group,mention='900001'))
+                await drive(event('Bot reply question','group-reply',group=group,reply_sender='900001'))
+                await drive(event('Owner group question','group-owner',user_id='900003',group=group,mention='900001'))
+                assert calls[count:]==[('chat','group-at'),('chat','group-reply'),('chat','group-owner')]
+                count=len(calls);outbound=len(sent)
+                await drive(event('excluded mention','excluded-at',group=other_group,mention='900001'))
+                await drive(event('excluded reply','excluded-reply',group=other_group,reply_sender='900001'))
+                assert len(calls)==count and len(sent)==outbound
+                # Swap admission without changing event content or trust domain.
+                router.allowed_conversations=frozenset({'group:'+other_group})
+                await drive(event('former group','former-at',group=group,mention='900001'))
+                assert len(calls)==count
+                await drive(event('now admitted','admitted-at',group=other_group,mention='900001'))
+                assert calls[-1]==('chat','admitted-at') and len(calls)==count+1
                 await router.terminate()
                 closed=[]
                 class GoodClient:
@@ -167,7 +246,7 @@ def test_pinned_builtin_observers_and_probe_do_not_block_or_duplicate_dsh(tmp_pa
         asyncio.run(main())
     ''')
     result = subprocess.run([str(runtime/'.venv/bin/python'),'-c',script],cwd=runtime,
-        env={**os.environ,'ASTRBOT_ROOT':str(runtime),'V2_REPO_ROOT':str(root),'V2_QQ_ALLOWED_CONVERSATIONS':'private:900002,private:900003',
+        env={**os.environ,'ASTRBOT_ROOT':str(runtime),'V2_REPO_ROOT':str(root),'V2_QQ_ALLOWED_CONVERSATIONS':'private:900002,private:900003,group:1055300305',
              'V2_QQ_OWNERS':'[{"platform_id":"contract","bot_id":"900001","user_id":"900003"}]',
              'V2_MCP_PORT':'0','V2_DSH_PROVIDER':'test-provider','V2_DSH_MODEL':'test-model'},
         capture_output=True,text=True,timeout=45)

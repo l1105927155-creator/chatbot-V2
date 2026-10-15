@@ -176,8 +176,15 @@ def message_from_onebot(
 class JournalStore:
     """Small durable SQLite store with stable, conversation-scoped cursors."""
 
-    def __init__(self, path: Path | str) -> None:
+    def __init__(self, path: Path | str, *, read_only: bool = False) -> None:
         self.path = Path(path)
+        self.read_only = read_only
+        if read_only:
+            with self._db() as conn:
+                version = conn.execute("PRAGMA user_version").fetchone()[0]
+                if version != 1:
+                    raise RuntimeError(f"unsupported read-only V2 journal schema version {version}")
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._db() as conn:
             version = conn.execute("PRAGMA user_version").fetchone()[0]
@@ -211,12 +218,23 @@ class JournalStore:
             )
 
     def _connect(self) -> sqlite3.Connection:
+        if self.read_only:
+            conn = sqlite3.connect(self.path.resolve().as_uri() + "?mode=ro", uri=True, timeout=10)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA query_only=ON")
+            return conn
         conn = sqlite3.connect(self.path, timeout=10)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout=10000")
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=FULL")
         return conn
+
+    def check_health(self) -> bool:
+        """Shallow readable-schema check; not a full integrity scan."""
+        with self._db() as conn:
+            conn.execute("SELECT journal_id FROM journal LIMIT 1").fetchone()
+        return True
 
     @contextmanager
     def _db(self):

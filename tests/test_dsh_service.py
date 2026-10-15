@@ -13,6 +13,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "astrbot-plugins/v2_dsh_router"))
 
 
 def load(name, path):
@@ -56,6 +57,222 @@ class FakeDsh:
     def run(self, session_id, prompt):
         self.calls.append((session_id, prompt))
         return f"DSH reply {len(self.calls)}"
+
+
+def test_cancel_does_not_wait_for_chat_lock_and_preserves_pending(tmp_path):
+    started, cancelled = threading.Event(), threading.Event()
+
+    class Blocking(FakeDsh):
+        def run(self, sid, prompt):
+            started.set()
+            assert cancelled.wait(5)
+            raise RuntimeError("native cancellation confirmed")
+
+        def cancel_session(self, sid):
+            self.calls.append(("cancel", sid))
+            cancelled.set()
+            return True
+
+    j = journal.JournalStore(tmp_path / "journal.sqlite3")
+    s = state.StateStore(tmp_path / "state.sqlite3")
+    conv = journal.Conversation("qq", "1", "group:3")
+    other = journal.Conversation("qq", "1", "private:2")
+    dsh = Blocking()
+    svc = service.ChatService(j, s, dsh)
+    append(j, "cancel me", "in-1")
+
+    async def send(_reply):
+        raise AssertionError("cancelled turn must not send a final reply")
+
+    async def scenario():
+        assert await svc.cancel(conv) is False
+        assert s.get("qq", "1", "group:3") is None
+        running = asyncio.create_task(svc.handle(conv, "in-1", send))
+        assert await asyncio.to_thread(started.wait, 2)
+        try:
+            assert await svc.cancel(other) is False
+            assert await asyncio.wait_for(svc.cancel(conv), 1) is True
+            with pytest.raises(RuntimeError, match="cancellation confirmed"):
+                await running
+        finally:
+            cancelled.set()
+            await asyncio.gather(running, return_exceptions=True)
+        assert await svc.cancel(conv) is False
+        with pytest.raises(service.PendingTurnError):
+            await svc.handle(conv, "in-1", send)
+
+    asyncio.run(scenario())
+    saved = s.get("qq", "1", "group:3")
+    assert saved.pending_upper_cursor == 1 and saved.last_seen_journal_id == 0
+    assert dsh.calls == [("cancel", saved.session_id)]
+
+
+def test_delayed_cancel_cannot_target_later_turn_of_same_session(tmp_path):
+    first_started, second_started = threading.Event(), threading.Event()
+    first_release, second_release = threading.Event(), threading.Event()
+
+    class Blocking(FakeDsh):
+        def run(self, sid, prompt):
+            if not first_started.is_set():
+                first_started.set()
+                assert first_release.wait(5)
+            else:
+                second_started.set()
+                assert second_release.wait(5)
+            return super().run(sid, prompt)
+
+        def cancel_session(self, sid):
+            raise AssertionError("stale cancellation reached a later turn")
+
+    j = journal.JournalStore(tmp_path / "journal.sqlite3")
+    s = state.StateStore(tmp_path / "state.sqlite3")
+    svc = service.ChatService(j, s, Blocking())
+    conv = journal.Conversation("qq", "1", "group:3")
+    append(j, "first", "in-1")
+    append(j, "second", "in-2")
+
+    async def scenario():
+        captured, release_cancel = asyncio.Event(), asyncio.Event()
+        original = svc._dsh_call
+
+        async def delayed(function, *args):
+            if function.__name__ == "request":
+                captured.set()
+                await release_cancel.wait()
+            return await original(function, *args)
+
+        svc._dsh_call = delayed
+
+        async def send(_reply):
+            pass
+
+        first = asyncio.create_task(svc.handle(conv, "in-1", send))
+        assert await asyncio.to_thread(first_started.wait, 2)
+        cancel = asyncio.create_task(svc.cancel(conv))
+        await asyncio.wait_for(captured.wait(), 1)
+        first_release.set()
+        await first
+        second = asyncio.create_task(svc.handle(conv, "in-2", send))
+        assert await asyncio.to_thread(second_started.wait, 2)
+        try:
+            release_cancel.set()
+            assert await asyncio.wait_for(cancel, 1) is False
+        finally:
+            second_release.set()
+            release_cancel.set()
+            await asyncio.gather(second, cancel, return_exceptions=True)
+        assert svc.dsh.calls[0][0] == svc.dsh.calls[1][0]
+
+    asyncio.run(scenario())
+
+
+def test_reviewed_recovery_skips_uncertain_send_without_replay_or_fabricated_output(tmp_path):
+    class Recoverable(FakeDsh):
+        def __init__(self):
+            super().__init__()
+            self.drained = []
+
+        def drain_session(self, sid):
+            self.drained.append(sid)
+
+    j = journal.JournalStore(tmp_path / "journal.sqlite3")
+    s = state.StateStore(tmp_path / "state.sqlite3")
+    dsh = Recoverable()
+    svc = service.ChatService(j, s, dsh)
+    conv = journal.Conversation("qq", "1", "group:3")
+    append(j, "do an operation once", "in-1")
+
+    async def lost_receipt(reply):
+        # Genuine feedback may already be present even though send raised.
+        append(j, reply, "actual-platform-feedback", outbound=True)
+        raise ConnectionError("platform accepted but receipt lost")
+
+    with pytest.raises(ConnectionError):
+        asyncio.run(svc.handle(conv, "in-1", lost_receipt))
+    saved = s.get("qq", "1", "group:3")
+    append(j, "arrived after failure", "in-queued")
+    before = j.before(conv, 100, 100)
+    resolved = asyncio.run(svc.resolve_pending(conv, saved.pending_upper_cursor))
+    assert resolved.session_id == saved.session_id
+    assert resolved.last_seen_journal_id == 1 and resolved.pending_upper_cursor is None
+    assert j.before(conv, 100, 100) == before
+    assert dsh.drained == [saved.session_id] and len(dsh.calls) == 1
+    append(j, "new explicit request", "in-new")
+
+    async def send(_reply):
+        pass
+
+    asyncio.run(svc.handle(conv, "in-new", send))
+    assert len(dsh.calls) == 2 and dsh.calls[1][0] == saved.session_id
+    assert [row["content"]["text"] for row in rows(dsh.calls[1][1])] == [
+        "DSH reply 1", "arrived after failure", "new explicit request"]
+    assert "do an operation once" not in dsh.calls[1][1]
+
+
+@pytest.mark.parametrize("case", ["no-state", "no-pending", "stale", "running"])
+def test_recovery_rejects_unreviewed_or_running_state_without_drain(tmp_path, case):
+    class NoDrain(FakeDsh):
+        def drain_session(self, *_args):
+            raise AssertionError("invalid recovery must not touch the native session")
+
+    s = state.StateStore(tmp_path / "state.sqlite3")
+    svc = service.ChatService(None, s, NoDrain())
+    conv = journal.Conversation("qq", "1", "group:3")
+    if case != "no-state":
+        mapped = s.get_or_create("qq", "1", "group:3", "sid")
+        if case != "no-pending":
+            s.begin_turn("qq", "1", "group:3", mapped.session_id, 12)
+    before = s.get("qq", "1", "group:3")
+
+    async def scenario():
+        if case == "running":
+            async with svc._lock(conv):
+                with pytest.raises(service.RecoveryError):
+                    await asyncio.wait_for(svc.resolve_pending(conv, 12), 1)
+        else:
+            with pytest.raises(service.RecoveryError):
+                await svc.resolve_pending(conv, 11 if case == "stale" else 12)
+
+    asyncio.run(scenario())
+    assert s.get("qq", "1", "group:3") == before
+
+
+def test_failed_drain_keeps_pending_and_other_conversation_unchanged(tmp_path):
+    class FailedDrain(FakeDsh):
+        def drain_session(self, _sid):
+            raise RuntimeError("native drain failed")
+
+    s = state.StateStore(tmp_path / "state.sqlite3")
+    conv = journal.Conversation("qq", "1", "group:3")
+    mapped = s.get_or_create("qq", "1", "group:3", "sid")
+    pending = s.begin_turn("qq", "1", "group:3", mapped.session_id, 12)
+    other = s.get_or_create("qq", "1", "private:2", "other")
+    svc = service.ChatService(None, s, FailedDrain())
+    with pytest.raises(RuntimeError, match="native drain failed"):
+        asyncio.run(svc.resolve_pending(conv, 12))
+    assert s.get("qq", "1", "group:3") == pending
+    assert s.get("qq", "1", "private:2") == other
+
+
+def test_recovery_cannot_clear_a_new_pending_turn_created_during_drain(tmp_path):
+    s = state.StateStore(tmp_path / "state.sqlite3")
+    conv = journal.Conversation("qq", "1", "group:3")
+    mapped = s.get_or_create("qq", "1", "group:3", "sid")
+    s.begin_turn("qq", "1", "group:3", mapped.session_id, 12)
+
+    class ConcurrentStateChange(FakeDsh):
+        def drain_session(self, sid):
+            # Model a second writer resolving the inspected state and then
+            # admitting another input while the original drainer was waiting.
+            other = state.StateStore(s.path)
+            other.resolve_pending("qq", "1", "group:3", sid, 0, 12)
+            other.begin_turn("qq", "1", "group:3", sid, 20)
+
+    svc = service.ChatService(None, s, ConcurrentStateChange())
+    with pytest.raises(service.RecoveryError, match="状态已变化"):
+        asyncio.run(svc.resolve_pending(conv, 12))
+    saved = s.get("qq", "1", "group:3")
+    assert saved.last_seen_journal_id == 12 and saved.pending_upper_cursor == 20
 
 
 def rows(prompt):
@@ -390,3 +607,28 @@ def test_input_byte_budget_preserves_current_message_and_full_canonical_original
     assert wake.journal_id in header["history_window"]["truncated_journal_ids"]
     assert header["history_window"]["complete"] is False
     assert j.by_message_id("qq", "1", "large-wake")[0].message.content["text"] == text
+
+
+def test_status_does_not_wait_for_active_turn_or_clear_pending(tmp_path):
+    from types import SimpleNamespace
+    storage = state.StateStore(tmp_path / "state.sqlite3")
+    conv = journal.Conversation("qq", "1", "group:3")
+    # Any accidental model call, creation or resume fails: this object has
+    # only private host-state readers.
+    dsh = SimpleNamespace(
+        personas=SimpleNamespace(current=lambda sid: {"persona": "analyst"}),
+        scenes=SimpleNamespace(current=lambda sid: {"scene": "research"}))
+    svc = service.ChatService(None, storage, dsh)
+    async def scenario():
+        initial = await svc.status(conv)
+        assert initial["state"] == "not-started" and initial["session_id"] is None
+        assert storage.get("qq", "1", "group:3") is None
+        saved = storage.get_or_create("qq", "1", "group:3", "saved-session")
+        storage.begin_turn("qq", "1", "group:3", saved.session_id, 1)
+        async with svc._lock(conv):
+            current = await asyncio.wait_for(svc.status(conv), 1)
+            assert current["state"] == "running"
+            assert current["persona"] == "analyst" and current["scene"] == "research"
+        assert (await svc.status(conv))["state"] == "pending"
+        assert storage.get("qq", "1", "group:3").pending_upper_cursor == 1
+    asyncio.run(scenario())

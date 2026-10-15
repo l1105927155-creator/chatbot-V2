@@ -387,3 +387,217 @@ def test_owner_profile_requires_current_trusted_source_publisher(tmp_path):
     kw["patch"]=patch
     with pytest.raises(ValueError,match="host-issued trusted source"):
         module.DshClient(**kw)
+
+
+def test_cancel_session_bypasses_run_lock_and_only_targets_active_session(tmp_path):
+    entered, release, cancelled = threading.Event(), threading.Event(), threading.Event()
+    class Cancellable(Runtime):
+        def run(self, sid, delta):
+            if sid == "a":
+                entered.set()
+                assert release.wait(5)
+            return super().run(sid, delta)
+        def cancel_session(self, sid):
+            self.calls.append(("cancel", sid))
+            cancelled.set()
+            return sid == "a"
+    client = module.DshClient(**settings(tmp_path, Cancellable))
+    with ThreadPoolExecutor(2) as pool:
+        prompt = pool.submit(client.run, "a", "long")
+        assert entered.wait(2)
+        try:
+            assert client.cancel_session("idle") is False
+            assert client.cancel_session("a") is True
+            assert cancelled.wait(1)
+            assert pool.submit(client.run, "b", "other").result(1) == "b"
+        finally:
+            release.set()
+        assert prompt.result(2) == "a"
+    assert ("cancel", "a") in client.runtime.calls
+    client.close()
+
+
+def test_cancel_rejected_after_close_or_session_quarantine(tmp_path):
+    class Cancellable(Runtime):
+        def cancel_session(self, _sid): return True
+    client = module.DshClient(**settings(tmp_path, Cancellable))
+    client._quarantined_sessions["bad"] = RuntimeError("undrained")
+    assert client.cancel_session("bad") is False
+    client.close()
+    assert client.cancel_session("anything") is False
+
+
+def test_drain_loaded_session_closes_only_that_session_without_prompt(tmp_path):
+    client = module.DshClient(**settings(tmp_path))
+    first, other = client.create_session(), client.create_session()
+    client.drain_session(first)
+    assert client.runtime.calls == [("close", first)]
+    assert first not in client._sessions and other in client._sessions
+    client.close()
+    assert client.runtime.calls == [("close", first), ("close", other)]
+
+
+def test_drain_restart_resumes_exact_session_then_closes_without_generation(tmp_path):
+    class Tracked(Runtime):
+        def new_session(self, _servers=None):
+            self.counter += 1
+            self.calls.append(("new", f"native-{self.counter}"))
+            return f"native-{self.counter}"
+        def resume(self, sid, _servers=None): self.calls.append(("resume", sid))
+    client = module.DshClient(**settings(tmp_path, Tracked))
+    client.drain_session("persisted-id", [{"name": "scope"}])
+    assert client.runtime.calls == [("resume", "persisted-id"), ("close", "persisted-id")]
+    assert client.runtime.counter == 0
+    client.close()
+
+
+def test_drain_resume_failure_does_not_track_or_close_other_session(tmp_path):
+    class FailedResume(Runtime):
+        def resume(self, sid):
+            self.calls.append(("resume", sid))
+            if sid == "bad": raise RuntimeError("resume failed")
+    client = module.DshClient(**settings(tmp_path, FailedResume))
+    active = client.create_session()
+    with pytest.raises(RuntimeError, match="resume failed"):
+        client.drain_session("bad")
+    assert "bad" not in client._sessions
+    assert active in client._sessions
+    assert client.runtime.calls == [("resume", "bad")]
+    client.close()
+
+
+def test_drain_close_ambiguous_native_removal_quarantines_until_shutdown(tmp_path):
+    class CloseThenUnknown(Runtime):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.native_sessions = set()
+            self.session_close_calls = {}
+        def resume(self, sid):
+            self.calls.append(("resume", sid))
+            self.native_sessions.add(sid)
+        def close_session(self, sid):
+            self.calls.append(("close", sid))
+            self.session_close_calls[sid] = self.session_close_calls.get(sid, 0) + 1
+            if sid not in self.native_sessions:
+                raise RuntimeError("unknown session ID")
+            self.native_sessions.remove(sid)
+            raise RuntimeError("close response lost after native removal")
+    client = module.DshClient(**settings(tmp_path, CloseThenUnknown), enable_authorization=True)
+    source_dir = client.settings["source_dir"]
+    with pytest.raises(RuntimeError, match="quarantined until runtime shutdown"):
+        client.drain_session("persisted")
+    assert "persisted" in client._sessions
+    assert "persisted" in client._quarantined_sessions
+    calls_after_failure = list(client.runtime.calls)
+    with pytest.raises(RuntimeError, match="quarantined"):
+        client.drain_session("persisted")
+    with pytest.raises(RuntimeError, match="quarantined"):
+        client.run("persisted", "must not prompt", trusted_source={
+            "platform_id": "qq", "bot_id": "bot", "conversation_key": "private:owner",
+            "requester_id": "owner", "inbound_message_id": "recovery",
+        })
+    assert client.runtime.calls == calls_after_failure
+    with pytest.raises(ExceptionGroup, match="shutdown failed"):
+        client.close()
+    assert client.runtime.calls == [
+        ("resume", "persisted"), ("close", "persisted"), ("close", "persisted")
+    ]
+    assert client.runtime.closed
+    assert not Path(source_dir).exists()
+    assert client.runtime.session_close_calls["persisted"] == 2
+
+
+def test_drain_refuses_quarantined_session_until_runtime_shutdown(tmp_path):
+    client = module.DshClient(**settings(tmp_path))
+    client._quarantined_sessions["uncertain"] = RuntimeError("undrained")
+    with pytest.raises(RuntimeError, match="quarantined"):
+        client.drain_session("uncertain")
+    assert client.runtime.calls == []
+    client.close()
+
+
+def test_acp_cancel_latches_before_prompt_write_and_flushes_after_prompt(tmp_path, monkeypatch):
+    import deepseek_harness.client as sdk
+    prompt_ready, allow_write, response_wait, finish = (threading.Event() for _ in range(4))
+    writes = []
+    class Response:
+        def __init__(self, data): self.data = data
+        def model_dump(self): return self.data
+    class HarnessConfig:
+        def __init__(self, **kwargs): self.kwargs = kwargs
+    class HarnessClient:
+        def __init__(self, _config): self.closed = False
+        def start(self): pass
+        def close(self): self.closed = True
+        def _write_message(self, message): writes.append(message)
+        def notify(self, method, params=None):
+            self._write_message({"method": method, "params": params})
+        def request(self, method, params, **_kwargs):
+            if method == "initialize":
+                return Response({"agentCapabilities": {"sessionCapabilities": {"resume": {}}}})
+            if method == "session/prompt":
+                prompt_ready.set()
+                assert allow_write.wait(3)
+                self._write_message({"method": method, "params": params})
+                response_wait.set()
+                assert finish.wait(3)
+                return Response({"stopReason": "cancelled"})
+            raise AssertionError(method)
+    monkeypatch.setattr(sdk, "HarnessClient", HarnessClient)
+    monkeypatch.setattr(sdk, "HarnessConfig", HarnessConfig)
+    kw = settings(tmp_path)
+    runtime = module.AcpRuntime(**{k: v for k, v in kw.items() if k != "harness_factory"})
+    with ThreadPoolExecutor(1) as pool:
+        turn = pool.submit(runtime.run, "sid-a", "delta")
+        assert prompt_ready.wait(2)
+        assert runtime.cancel_session("sid-a") is True
+        assert runtime.cancel_session("sid-idle") is False
+        allow_write.set()
+        assert response_wait.wait(2)
+        assert [message["method"] for message in writes] == ["session/prompt", "session/cancel"]
+        finish.set()
+        with pytest.raises(module.DshTurnCancelled): turn.result(2)
+    assert runtime.cancel_session("sid-a") is False
+    runtime.close()
+
+
+@pytest.mark.parametrize("stop_reason,exception", [
+    ("cancelled", module.DshTurnCancelled),
+    ("max_tokens", RuntimeError),
+])
+def test_acp_distinguishes_confirmed_cancel_from_other_stop_reasons(tmp_path, stop_reason, exception):
+    runtime = object.__new__(module.AcpRuntime)
+    runtime._control_lock = threading.RLock()
+    runtime._active_prompts = {}
+    runtime.client = type("Client", (), {"notify": lambda *_args: None})()
+    runtime.request = lambda *_args, **_kwargs: {"stopReason": stop_reason}
+    with pytest.raises(exception): runtime.run("sid", "delta")
+    assert runtime._active_prompts == {}
+
+
+def test_authorized_native_cancel_drains_and_cleans_owner_source(tmp_path):
+    source = {
+        "platform_id": "qq", "bot_id": "2869323076",
+        "conversation_key": "private:1105927155", "requester_id": "1105927155",
+        "inbound_message_id": "cancel-me",
+    }
+    entered, release = threading.Event(), threading.Event()
+    class NativeCancelled(Runtime):
+        def run(self, sid, delta):
+            entered.set()
+            assert release.wait(5)
+            raise module.DshTurnCancelled("confirmed")
+        def cancel_session(self, sid):
+            self.calls.append(("cancel", sid))
+            release.set()
+            return True
+    client = module.DshClient(**settings(tmp_path, NativeCancelled), enable_authorization=True)
+    directory = Path(client.settings["source_dir"])
+    with ThreadPoolExecutor(1) as pool:
+        turn = pool.submit(client.run, "owner-sid", "delta", trusted_source=source)
+        assert entered.wait(2)
+        assert client.cancel_session("owner-sid") is True
+        with pytest.raises(module.DshTurnCancelled): turn.result(2)
+    assert ("close", "owner-sid") in client.runtime.calls
+    assert list(directory.iterdir()) == []
+    client.close()

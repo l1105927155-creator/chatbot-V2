@@ -13,11 +13,13 @@ spec.loader.exec_module(module)
 
 
 class Event:
-    def __init__(self, *, handlers=(), handled=False, platform="aiocqhttp", stopped=False):
+    def __init__(self, *, handlers=(), handled=False, platform="aiocqhttp", stopped=False,
+                 components=()):
         self.handlers = handlers
         self.handled = handled
         self.platform = platform
         self.stopped = stopped
+        self.message_obj = SimpleNamespace(message=components)
 
     def get_platform_name(self):
         return self.platform
@@ -30,10 +32,12 @@ class Event:
                 "v2_deterministic_handled": self.handled}.get(key, default)
 
 
-def raw(text="hello", *, post_type="message", message_type="group"):
+def raw(text="hello", *, post_type="message", message_type="group", mention=True):
     return {"post_type": post_type, "message_type": message_type,
             "self_id": 900001, "user_id": 900002,
-            "message": [{"type": "text", "data": {"text": text}}]}
+            "message": ([{"type": "at", "data": {"qq": "900001"}}]
+                        if mention and message_type == "group" else [])
+                       + [{"type": "text", "data": {"text": text}}]}
 
 
 def handler(module_path, name):
@@ -68,3 +72,28 @@ def test_nontext_self_feedback_and_other_platform_are_excluded():
     assert not module.should_route(Event(), own)
     assert not module.should_route(Event(platform="other"), raw())
     assert not module.should_route(Event(stopped=True), raw())
+
+
+def test_group_handler_wake_prefix_nickname_and_other_mentions_do_not_trigger():
+    event = Event()
+    event.is_wake = event.is_at_or_wake_command = True
+    for text in ("hello", "@Bot hello", "bot hello"):
+        assert not module.should_route(event, raw(text, mention=False))
+    for qq in ("all", "900004"):
+        message = raw()
+        message["message"][0]["data"]["qq"] = qq
+        assert not module.should_route(event, message)
+    assert module.should_route(Event(), raw(message_type="private", mention=False))
+
+
+def test_reply_trigger_requires_platform_resolved_bot_sender_and_matching_id():
+    message = raw(mention=False)
+    message["message"].insert(0, {"type": "reply", "data": {
+        "id": "prior-bot-message", "sender_id": "900001"}})
+    assert not module.should_route(Event(), message)
+    reply = SimpleNamespace(type="Reply", id="prior-bot-message", sender_id="900001")
+    assert module.should_route(Event(components=[reply]), message)
+    reply.sender_id = "900004"
+    assert not module.should_route(Event(components=[reply]), message)
+    reply.sender_id, reply.id = "900001", "different-message"
+    assert not module.should_route(Event(components=[reply]), message)

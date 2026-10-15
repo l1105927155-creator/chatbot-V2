@@ -58,6 +58,31 @@ async def connect(url, headers):
 
 
 @pytest.mark.asyncio
+async def test_loopback_health_is_metadata_only_and_does_not_grant_mcp_access(tmp_path):
+    state = {"core_ready": True, "ready": False, "pid": 123, "onebot_connected": False,
+             "credential": "MUST_NOT_LEAK", "owners": [{"user_id": "MUST_NOT_LEAK"}]}
+    calls = []
+    async def health():
+        calls.append(True)
+        return state
+    service = mcp_module.McpServer(journal.JournalStore(tmp_path / "journal.sqlite3"), health=health)
+    await service.start(0)
+    try:
+        async with httpx.AsyncClient(trust_env=False) as client:
+            url = service.url.removesuffix("/mcp") + "/healthz"
+            response = await client.get(url)
+            assert response.status_code == 200
+            assert response.json() == {k: state[k] for k in ("core_ready", "ready", "pid", "onebot_connected")}
+            assert "MUST_NOT_LEAK" not in response.text
+            assert (await client.get(service.url)).status_code == 401
+            assert (await client.post(url)).status_code == 405 and len(calls) == 1
+            state.update(core_ready=False, closing=True)
+            assert (await client.get(url)).status_code == 503
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
 async def test_history_search_tools_and_send_are_scoped_to_active_origin(tmp_path):
     store = journal.JournalStore(tmp_path / "journal.sqlite3")
     origin = journal.Conversation("qq-test", "10", "group:30")

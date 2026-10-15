@@ -1,11 +1,33 @@
-# 当前重构入口（2026-10-13）
+# 当前实施入口（2026-10-14）
 
-用户已决定从最终 Agent-Bot 产品重新设计，当前主线改为专用 Agent Profile 验证，不继续补完 Phase 5。
+用户已确认 Personal Agent-Bot 折中路线。沿用已实现并验证的 Agent Profile，推进产品闭环与真实测试群验收，不继续补完历史 Phase 5。
 
 - 目标架构：[Agent-Bot 运行时](docs/architecture/agent-bot-runtime.md)。
-- 当前阶段：[Agent Profile 验证](docs/phases/agent-profile-validation.md)。
+- 产品契约与当前阶段：[Personal Agent-Bot 产品化](docs/phases/personal-agent-bot.md)。
+- 已有实现与验证记录：[Agent Profile 验证](docs/phases/agent-profile-validation.md)。
 - 保留 AstrBot / DSH / MCP 职责、Journal 与已验证集成成果；人格、技能场景与信任域分开。
-- 下方是历史 V2 分阶段基线。历史 Phase 5 修改保留，其完工不再作为当前重构前置条件。
+- Owner 仅在身份核验通过的独立私聊执行受限操作，无逐操作审批。群聊仅 @Bot 或引用 Bot 唤醒；人格和场景不扩权。
+- 最终真实验收使用群 1055300305 与 994363760 对比白名单，固定场景通过后连续试用 3 天。
+- 下方是历史 V2 分阶段基线，不覆盖当前产品契约；历史 Phase 5 的共享群聊执行/名单不重新启用。
+
+## 当前交付状态与后续安排（2026-10-15）
+
+主目标是让 Personal Agent-Bot 在真实 QQ 中可靠工作：群聊、人格/技能、上下文与历史、Owner 私聊受限执行、Research，以及可核对的取消/恢复和运维。完整完成标准仍是两群固定场景验收后连续试用3天。
+
+- **已实现并部署**：触发/会话隔离、人格/场景、历史补读与原生压缩、受限Owner执行、Research、cancel/recover、审计/指标、健康、systemd自启动及备份恢复。正式V2目前仅准入Owner私聊。
+- **已有证据**：主产品统一回归200项；真实provider上下文/Research测试；正式1GiB工作区备份还原与故障重启；新版沙箱61项回归、7组scripted故事及7组真实DeepSeek Owner故事。沙箱检查同时核对原始事件、平台反馈、canonical Journal、Router和原生工具，不替代真实QQ。
+- **尚未完成**：本次部署的真实Owner QQ私聊补测、两群准入/交换与故障故事、连续3天观察。真实测试群尚未放行，完整目标未完成。
+
+后续按以下顺序推进：
+
+1. 收口当前变更和文档，核对验收版本、配置及回退点；后续开发优先修复影响真实验收的问题。
+2. 真实Owner从实际QQ客户端发送控制、受限执行、取消/恢复和Research用例，核对真实身份、API回执和Journal。自动发送账号若仍不可用，可用手动消息完成，不将登录工具扩建作为必经步骤。
+3. 按已约定的接入确认点放行主群1055300305，对照994363760，执行固定故事并交换准入复测；最终只保留主群及Owner私聊。
+4. 固定场景通过后连续试用3天，观察串会话、越权、重复副作用、消息事实缺失和失败恢复；影响稳定性的修复后重新观察。
+
+沙箱用于复现和回归，按真实验收暴露的缺口补充。本轮继续不扩展长期记忆、主动任务、后台Jobs、多Agent、多渠道或新控制平台。
+
+执行入口：[真实验收清单](docs/personal-agent-acceptance.md)；运行维护：[运维手册](docs/personal-agent-operations.md)；最新隔离证据：[沙箱更新后复核](docs/sandbox-revalidation-2026-10-15.md)。下方历史阶段记录不覆盖本节当前状态。
 
 ---
 

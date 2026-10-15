@@ -8,11 +8,14 @@ import os
 import sys
 import tempfile
 import time
+from contextlib import ExitStack
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "astrbot-plugins" / "v2_dsh_router"))
 from dsh_client import DshClient
+sys.path.insert(0, str(ROOT / "dsh/plugins/agent-profile"))
+from owner_volume import prepare, unmount
 
 
 def run(provider: str | None, model: str | None) -> dict:
@@ -88,8 +91,10 @@ def run_owner(provider: str | None, model: str | None) -> dict:
         "platform_id": identity["platform_id"], "bot_id": identity["bot_id"],
         "user_id": identity["requester_id"],
     }])
-    with tempfile.TemporaryDirectory(prefix="agent-owner-live-", dir=ROOT / ".runtime") as directory:
+    with tempfile.TemporaryDirectory(prefix="agent-owner-live-", dir=ROOT / ".runtime") as directory, ExitStack() as cleanup:
         base = Path(directory)
+        prepare(base / "workspace", base / "workspace.ext4", 32 * 1024 ** 2)
+        cleanup.callback(unmount, base / "workspace")
         settings = dict(
             dsh_bin=ROOT / ".runtime/dsh-runtime/node_modules/.bin/dsh",
             dsh_home=base / "home", workspace=base / "workspace",

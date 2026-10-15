@@ -11,6 +11,7 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
 ROOT=Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'astrbot-plugins/v2_dsh_router'))
 
 def load(name,path):
     spec=importlib.util.spec_from_file_location(name,ROOT/path)

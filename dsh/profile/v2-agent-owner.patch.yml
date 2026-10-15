@@ -38,6 +38,30 @@
         skillsDir: !!js process.env.V2_AGENT_SKILLS_DIR
     - id: tool-skill
       name: '@deepseek-ai/dsh-tool-skill'
+    - id: web
+      name: '@deepseek-ai/dsh-web'
+      config:
+        searchProvider: deepseek-official
+        fetchProvider: http
+    - id: web-search-deepseek
+      name: '@deepseek-ai/dsh-web-search-deepseek'
+    - id: web-fetch-http
+      name: '@deepseek-ai/dsh-web-fetch-http'
+      config:
+        maxResponseBytes: 262144
+        maxBodyChars: 65536
+        timeoutMs: 30000
+        maxRedirects: 3
+    - id: tool-web
+      name: '@deepseek-ai/dsh-tool-web'
+      config:
+        searchMaxQueries: 2
+        searchMaxResults: 8
+        searchTimeoutMs: 60000
+        fetchTimeoutMs: 30000
+        fetchMaxOutputChars: 32000
+    - id: tool-call-timeout-policy
+      name: '@deepseek-ai/dsh-tool-call-timeout-policy'
     - id: compaction-basic
       name: '@deepseek-ai/dsh-compaction-basic'
       config:

@@ -35,6 +35,9 @@ with TemporaryDirectory(prefix="agent-profile-compaction-acp-", dir=root / ".run
     skills_root.mkdir()
     probe_output = base / "probe.json"
     model_calls = base / "model-calls.jsonl"
+    observer_output = base / "observer.jsonl"
+    observer_metadata = base / "observer-metadata.json"
+    observer_metadata.write_text(json.dumps({"anchor":"Controlled summary of earlier turns", "initialNeedle":"turn-1 "}))
     probe_patch = base / "probe.patch.yml"
     probe_patch.write_text(
         "- insert:\n"
@@ -42,6 +45,8 @@ with TemporaryDirectory(prefix="agent-profile-compaction-acp-", dir=root / ".run
         "      name: " + str(root / "tests/native/agent-profile-probe.mjs") + "\n",
         encoding="utf-8",
     )
+    probe_patch.write_text(probe_patch.read_text() +
+        "    - id: context-observer\n      name: " + str(root / "tests/native/agent-profile-live-context-observer.mjs") + "\n")
     settings = HarnessConfig(
         dsh_bin=str(root / ".runtime/dsh-runtime/node_modules/.bin/dsh"),
         dsh_home=str(home), cwd=str(workspace), profile="sdk-minimal",
@@ -57,6 +62,8 @@ with TemporaryDirectory(prefix="agent-profile-compaction-acp-", dir=root / ".run
             "V2_AGENT_PROFILE_PROBE_PATH": str(probe_output),
             "V2_AGENT_PROFILE_MODEL_CALLS": str(model_calls),
             "V2_AGENT_PROFILE_CONTEXT_WINDOW": "8192",
+            "V2_CONTEXT_OBSERVER_OUTPUT": str(observer_output),
+            "V2_CONTEXT_OBSERVER_METADATA": str(observer_metadata),
         },
         request_timeout_seconds=45,
     )
@@ -77,7 +84,7 @@ with TemporaryDirectory(prefix="agent-profile-compaction-acp-", dir=root / ".run
         })
         created = request(first, "session/new", {"cwd": str(workspace), "mcpServers": []})
         session_id = created["sessionId"]
-        assert json.loads(probe_output.read_text(encoding="utf-8"))["tools"] == ["skill"]
+        assert json.loads(probe_output.read_text(encoding="utf-8"))["tools"] == ["skill", "web_fetch", "web_search"]
         turns = 0
         for index in range(1, 10):
             reply = request(first, "session/prompt", {
@@ -91,7 +98,7 @@ with TemporaryDirectory(prefix="agent-profile-compaction-acp-", dir=root / ".run
         assert any(call["purpose"] == "compaction" for call in calls()), "automatic compaction did not call the controlled summarizer"
         assert turns >= 2
         assert all(call["sessionId"] == session_id for call in calls())
-        assert all(call["tools"] == ["skill"] for call in calls())
+        assert all(call["tools"] == ["skill", "web_fetch", "web_search"] for call in calls())
         request(first, "session/close", {"sessionId": session_id})
     except BaseException:
         print("\n".join(first._stderr_lines), file=sys.stderr)
@@ -120,7 +127,7 @@ with TemporaryDirectory(prefix="agent-profile-compaction-acp-", dir=root / ".run
         })
         resumed = json.loads(probe_output.read_text(encoding="utf-8"))
         assert resumed["sessionId"] == session_id
-        assert resumed["tools"] == ["skill"]
+        assert resumed["tools"] == ["skill", "web_fetch", "web_search"]
         reply = request(resumed_client, "session/prompt", {
             "sessionId": session_id,
             "prompt": [{"type": "text", "text": "What remains from the earlier conversation?"}],
@@ -129,9 +136,15 @@ with TemporaryDirectory(prefix="agent-profile-compaction-acp-", dir=root / ".run
         ordinary = [call for call in calls() if call["purpose"] is None]
         resumed_input = json.dumps(ordinary[-1]["messages"])
         assert ordinary[-1]["sessionId"] == session_id
-        assert ordinary[-1]["tools"] == ["skill"]
+        assert ordinary[-1]["tools"] == ["skill", "web_fetch", "web_search"]
         assert "Controlled summary of earlier turns" in resumed_input
         assert "turn-1 " not in resumed_input
+        observed = [json.loads(line) for line in observer_output.read_text().splitlines()]
+        requests = [item for item in observed if item["kind"] == "request"]
+        assert all(item["contextWindow"] == 8192 for item in requests)
+        assert any(item["purpose"] == "compaction" for item in requests)
+        assert any(item["summaryInjected"] and not item["initialNeedlePresent"] for item in requests)
+        assert any(item.get("realLlmSummary") for item in observed if item.get("eventType") == "compaction/summary")
         request(resumed_client, "session/close", {"sessionId": session_id})
         print(json.dumps({"automatic_compaction": True, "turns_to_trigger": turns,
                           "durable_events": True, "acp_resume": True,

@@ -6,3 +6,6 @@ __pycache__/
 
 # ESM resolution for V2 plugins against the locked, bootstrapped runtime.
 /dsh/node_modules
+
+# AstrBot import-time fallback data; never commit generated config or secrets.
+/data/

@@ -6,6 +6,38 @@ from collections.abc import Mapping
 from typing import Any
 
 
+def _group_trigger(event: Any, raw: Mapping, segments: list) -> bool:
+    """Use a real mention or AstrBot's platform-resolved reply sender.
+
+    ALL-message handlers themselves set is_wake in pinned AstrBot, and
+    is_at_or_wake_command also admits text prefixes and @all. Neither flag
+    proves that this group's message addresses this Bot.
+    """
+    bot_id = str(raw.get("self_id", ""))
+    if not bot_id:
+        return False
+    reply_ids = set()
+    for segment in segments:
+        if not isinstance(segment, Mapping):
+            continue
+        data = segment.get("data")
+        if not isinstance(data, Mapping):
+            continue
+        if segment.get("type") == "at" and str(data.get("qq", "")) == bot_id:
+            return True
+        if segment.get("type") == "reply" and data.get("id") is not None:
+            reply_ids.add(str(data["id"]))
+    # The pinned aiocqhttp adapter resolves reply sender with get_msg. Do
+    # not accept a sender_id asserted inside raw reply data or quoted text.
+    components = getattr(getattr(event, "message_obj", None), "message", ())
+    return any(
+        getattr(component, "type", None) == "Reply"
+        and str(getattr(component, "id", "")) in reply_ids
+        and str(getattr(component, "sender_id", "")) == bot_id
+        for component in components
+    )
+
+
 def should_route(event: Any, raw: Any) -> bool:
     """Admit ordinary text unless a deterministic V2 handler claimed it.
 
@@ -25,6 +57,8 @@ def should_route(event: Any, raw: Any) -> bool:
         return False
     segments = raw.get("message")
     if not isinstance(segments, list):
+        return False
+    if raw["message_type"] == "group" and not _group_trigger(event, raw, segments):
         return False
     plain = "".join(
         segment.get("data", {}).get("text", "")

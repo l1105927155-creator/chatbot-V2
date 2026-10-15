@@ -7,6 +7,42 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from owner_volume import verified_workspace
+
+
+WORKSPACE_CHECK = """
+import os, sys
+try:
+    root = os.stat('/workspace')
+    if (root.st_dev, root.st_ino) != (int(sys.argv[1]), int(sys.argv[2])):
+        raise RuntimeError('workspace mount changed')
+except Exception:
+    print('V2 owner containment unavailable', file=sys.stderr)
+    raise SystemExit(125)
+os.execv('/usr/bin/bash', ['bash', '-c', sys.argv[3]])
+"""
+
+
+def bounded_argv(argv: list[str], workspace: Path) -> tuple[list[str], int]:
+    """Pin verified root, then check the actual mount before any model code."""
+    fd = verified_workspace(workspace)
+    try:
+        binding = next((index for index in range(len(argv) - 2)
+                        if argv[index:index + 3] == ["--bind", str(workspace), "/workspace"]), None)
+        separator = argv.index("--")
+        if (binding is None or argv[0] != "/usr/bin/bwrap"
+                or argv[separator + 1:separator + 3] != ["/usr/bin/bash", "-c"]
+                or len(argv) != separator + 4):
+            raise RuntimeError("bounded workspace and foreground Bash are required")
+        result = list(argv)
+        root = os.fstat(fd)
+        result[separator + 1:] = ["/usr/bin/python3", "-I", "-S", "-c", WORKSPACE_CHECK,
+                                 str(root.st_dev), str(root.st_ino), argv[-1]]
+        result[binding:binding + 3] = ["--bind-fd", str(fd), "/workspace"]
+        return result, fd
+    except BaseException:
+        os.close(fd)
+        raise
 
 
 def main() -> None:
@@ -33,9 +69,16 @@ def main() -> None:
     quota, period = (controls / "cpu.max").read_text().split()
     if quota == "max" or int(quota) != int(period):
         raise RuntimeError("CPU limit was not enforced")
-    if len(sys.argv) < 3 or sys.argv[1] != "/usr/bin/bwrap":
+    if len(sys.argv) < 5 or sys.argv[1] != "--workspace" or sys.argv[3] != "/usr/bin/bwrap":
         raise RuntimeError("unexpected confinement runner")
-    os.execv(sys.argv[1], sys.argv[1:])
+    workspace = sys.argv[2]
+    argv = sys.argv[3:]
+    argv, fd = bounded_argv(argv, Path(workspace))
+    try:
+        os.set_inheritable(fd, True)
+        os.execv(argv[0], argv)
+    finally:
+        os.close(fd)
 
 
 if __name__ == "__main__":

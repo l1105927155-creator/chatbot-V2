@@ -1,0 +1,6 @@
+name: v2_sandbox_fixture
+display_name: QQ Sandbox Fixtures
+author: chatbot-V2
+desc: Deterministic local-only media transport probes.
+version: 0.1.0
+astrbot_version: "==4.28.2"

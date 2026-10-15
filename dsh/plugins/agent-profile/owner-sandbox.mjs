@@ -12,7 +12,7 @@ const fields = ['platform_id', 'bot_id', 'conversation_key', 'requester_id',
   'inbound_message_id', 'epoch', 'session_id', 'nonce', 'prompt_sha256']
 const safeMcp = new Set(['mcp__astrbot__history_recent', 'mcp__astrbot__history_before',
   'mcp__astrbot__history_search', 'mcp__astrbot__current_group_info', 'mcp__astrbot__qq_send_origin'])
-const allowedTools = new Set(['bash', 'skill', ...safeMcp])
+const allowedTools = new Set(['bash', 'skill', 'web_search', 'web_fetch', ...safeMcp])
 const text = value => typeof value === 'string' && value.length > 0
   && value.trim() === value && !/[\x00-\x1f\x7f]/.test(value)
 const within = (base, path) => path === base || path.startsWith(base + sep)
@@ -229,7 +229,7 @@ export class OwnerSandbox extends SandboxProvider {
     return {
       // Set limits on DSH's owned scope. A second systemd-run scope would
       // move descendants out of the native cancellation/teardown range.
-      argv: [this.limiter, this.scopeRunner, ...wrapped],
+      argv: [this.limiter, this.scopeRunner, '--workspace', this.workspace, ...wrapped],
       enforcement: 'full',
       denialSignatures: ['permission denied', 'read-only file system', 'no such file or directory'],
       runnerFailureRules: [{fatalSignatures: ['bwrap: ', 'V2 owner containment unavailable']}],

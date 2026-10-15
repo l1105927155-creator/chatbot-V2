@@ -57,6 +57,16 @@ def test_real_router_profiles_and_control_without_model_or_qq():
                 try:
                     assert set(router.clients)=={'chat','owner'}
                     assert not any(client._sessions for client in router.clients.values())
+                    await router.configure_agent(Event(), 'status', '')
+                    assert replies[-1]=='Agent：尚未开始；人格：default；场景：casual-chat；模式：Owner 受限操作。'
+                    await router.configure_agent(Event(), 'metrics', '')
+                    assert replies[-1]=='当前运行周期：排队 0；运行会话 0；DSH请求 0；完成 0；失败/暂停 0；平均耗时 暂无；审计写入错误 0。'
+                    await router.configure_agent(Event(), 'persona', 'list')
+                    assert replies[-1]=='可用人格：analyst、companion、default、developer'
+                    await router.configure_agent(Event(), 'scene', 'list')
+                    assert replies[-1]=='可用场景：casual-chat、development、research'
+                    assert not any(client._sessions for client in router.clients.values())
+                    assert router.services['owner'].state.get('contract','900001','private:900003') is None
                     await router.configure_agent(Event(), 'persona', 'analyst')
                     private=router.services['owner'].state.get('contract','900001','private:900003')
                     assert private is not None
@@ -70,9 +80,31 @@ def test_real_router_profiles_and_control_without_model_or_qq():
                     assert group is not None
                     assert router.clients['chat'].personas.current(group.session_id)['persona']=='companion'
                     assert owner.personas.current(private.session_id)['persona']=='analyst'
+                    await router.configure_agent(Event(group=True), 'status', '')
+                    assert replies[-1]=='Agent：空闲；人格：companion；场景：casual-chat；模式：安全聊天。'
+                    router.services['owner'].state.begin_turn('contract','900001','private:900003',private.session_id,1)
+                    await router.configure_agent(Event(), 'status', '')
+                    assert 'Agent：结果待核对；人格：analyst；场景：research' in replies[-1]
+                    assert '系统不会重试旧输入' in replies[-1]
+                    assert '/v2agent recover 1' in replies[-1]
+                    await router.configure_agent(Event(user=900004), 'recover', '1')
+                    assert replies[-1]=='仅 Bot 所有者可以使用 Agent 控制命令。'
+                    assert router.services['owner'].state.get('contract','900001','private:900003').pending_upper_cursor==1
+                    await router.configure_agent(Event(), 'recover', '2')
+                    assert '编号已变化' in replies[-1]
+                    await router.configure_agent(Event(), 'recover', '1')
+                    assert '已解除暂停并跳过截至 Journal 1' in replies[-1]
+                    resolved=router.services['owner'].state.get('contract','900001','private:900003')
+                    assert resolved.pending_upper_cursor is None and resolved.last_seen_journal_id==1
+                    assert resolved.session_id==private.session_id
+                    assert owner.personas.current(private.session_id)['persona']=='analyst'
+                    assert owner.scenes.current(private.session_id)['scene']=='research'
+                    assert router.services['chat'].state.get('contract','900001','group:42')==group
+                    await router.configure_agent(Event(), 'recover', '1')
+                    assert '没有待核对' in replies[-1]
                     await router.configure_agent(Event(user=900004), 'persona', 'developer')
-                    assert replies[-1]=='仅 Bot 所有者可以切换人格和场景。'
-                    assert len(owner._sessions)==1 and len(router.clients['chat']._sessions)==1
+                    assert replies[-1]=='仅 Bot 所有者可以使用 Agent 控制命令。'
+                    assert len(owner._sessions)==0 and len(router.clients['chat']._sessions)==1
                     assert private.last_seen_journal_id==0 and group.last_seen_journal_id==0
                     print('REAL_ROUTER_PROFILES_CONTROL_OK')
                 finally:

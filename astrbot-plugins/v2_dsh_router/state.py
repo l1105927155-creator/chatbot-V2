@@ -155,6 +155,13 @@ class StateStore:
             ).fetchone()
         return self._row(row) if row is not None else None
 
+    def health_counts(self) -> dict:
+        """Read operational counts without creating a conversation or Session."""
+        with self._db() as conn:
+            row = conn.execute("SELECT COUNT(*), COALESCE(SUM(pending_upper_cursor IS NOT NULL),0) "
+                               "FROM conversation_state").fetchone()
+        return {"conversations": row[0], "pending": row[1]}
+
     def advance(
         self,
         platform_id: str,
@@ -298,4 +305,56 @@ class StateStore:
             ).fetchone()
         if row is None:
             raise RuntimeError("conversation state missing after completing DSH turn")
+        return self._row(row)
+
+    def resolve_pending(
+        self,
+        platform_id: str,
+        bot_id: str,
+        conversation_key: str,
+        session_id: str,
+        expected_cursor: int,
+        expected_pending: int,
+    ) -> SessionState:
+        """Explicitly consume an uncertain delta after external review.
+
+        This is a compare-and-set recovery operation: it records only that the
+        pending range was reviewed and must not be replayed. It does not mark a
+        DSH turn successful or create an outbound journal record.
+        """
+        identity = self._identity(platform_id, bot_id, conversation_key)
+        session_id = self._session_id(session_id)
+        expected_cursor = self._cursor(expected_cursor)
+        expected_pending = self._cursor(expected_pending)
+        if expected_pending < expected_cursor:
+            raise ValueError("pending recovery cursor precedes the expected journal cursor")
+        with self._db() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE conversation_state
+                SET last_seen_journal_id=?, pending_upper_cursor=NULL
+                WHERE platform_id=? AND bot_id=? AND conversation_key=? AND session_id=?
+                  AND last_seen_journal_id=? AND pending_upper_cursor=?
+                """,
+                (expected_pending, *identity, session_id, expected_cursor, expected_pending),
+            )
+            if cursor.rowcount != 1:
+                self._mapping_error(conn, identity)
+                current = conn.execute(
+                    """SELECT session_id, last_seen_journal_id, pending_upper_cursor
+                       FROM conversation_state
+                       WHERE platform_id=? AND bot_id=? AND conversation_key=?""",
+                    identity,
+                ).fetchone()
+                assert current is not None
+                if current["session_id"] != session_id:
+                    raise ValueError("DSH session does not match conversation mapping")
+                raise ValueError("pending recovery state changed")
+            row = conn.execute(
+                """SELECT * FROM conversation_state
+                   WHERE platform_id=? AND bot_id=? AND conversation_key=?""",
+                identity,
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("conversation state missing after pending recovery")
         return self._row(row)

@@ -5,36 +5,46 @@ import signal
 import subprocess
 import pytest
 from pathlib import Path
+from contextlib import ExitStack
 
 ROOT = Path(__file__).resolve().parents[2]
 PYTHON = ROOT / ".runtime" / "astrbot" / ".venv" / "bin" / "python"
 
 
-@pytest.mark.parametrize("mode", ["success", "timeout", "cancel", "resume", "runner_failure", "limits"])
+@pytest.mark.parametrize("mode", [
+    "success", "timeout", "cancel", "resume", "runner_failure", "limits",
+    "disk_full", "volume_unavailable",
+])
 def test_owner_acp_bash_is_confined(mode):
     worker = r'''
 import json, os, sys, time
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from tempfile import TemporaryDirectory
+from contextlib import ExitStack
 from deepseek_harness.client import HarnessClient, HarnessConfig
 from pydantic import BaseModel, ConfigDict
 root = Path(os.environ["V2_REPO_ROOT"])
 sys.path.insert(0, str(root / "astrbot-plugins" / "v2_dsh_router"))
+sys.path.insert(0, str(root / "dsh/plugins/agent-profile"))
+from owner_volume import prepare, verified_workspace, unmount, manifest_path
 from turn_source import TurnSourcePublisher
 from scene_state import SceneStateStore
 class ObjectResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 def request(client, method, params):
     return client.request(method, params, response_model=ObjectResponse).model_dump()
-with TemporaryDirectory(prefix="owner-profile-acp-", dir=root / ".runtime") as tmp:
+with TemporaryDirectory(prefix="owner-profile-acp-", dir=root / ".runtime") as tmp, ExitStack() as cleanup:
     base = Path(tmp)
     home, workspace = base / "home", base / "workspace"
     home.mkdir(mode=0o700)
-    workspace.mkdir(mode=0o700)
-    os.chmod(workspace, 0o700)
+    prepare(workspace, base / "workspace.img", 32 * 1024 * 1024)
+    cleanup.callback(unmount, workspace)
+    volume_fd = verified_workspace(workspace)
+    os.close(volume_fd)
     (workspace / "subdir").mkdir()
     publisher = TurnSourcePublisher(home)
+    cleanup.callback(publisher.close)
     persona, scene = home / "agent-bot-personas", home / "agent-bot-scenes"
     persona.mkdir(mode=0o700)
     scene.mkdir(mode=0o700)
@@ -67,6 +77,17 @@ with TemporaryDirectory(prefix="owner-profile-acp-", dir=root / ".runtime") as t
         env["V2_OWNER_FAIL_RUNNER"] = "1"
     if mode == "limits":
         env["V2_OWNER_PROBE_COMMAND"] = "cat /proc/self/cgroup > cgroup.txt; sleep 2; pwd"
+    if mode == "disk_full":
+        env["V2_OWNER_PROBE_COMMAND"] = (
+            "python3 -c 'import os\n"
+            "f=open(\"fill.bin\",\"wb\",buffering=0)\n"
+            "data=b\"x\"*(1024*1024)\n"
+            "try:\n while True: f.write(data)\n"
+            "except OSError as e:\n print(e, flush=True)\n f.close()\n"
+            " os.unlink(\"fill.bin\")\n"
+            " open(\"recovered.txt\",\"wb\").write(b\"ok\")\n"
+            " raise SystemExit(1)'"
+        )
     settings = HarnessConfig(
         dsh_bin=str(root / ".runtime/dsh-runtime/node_modules/.bin/dsh"),
         dsh_home=str(home), cwd=str(workspace), profile="sdk-minimal",
@@ -75,6 +96,7 @@ with TemporaryDirectory(prefix="owner-profile-acp-", dir=root / ".runtime") as t
     )
     client = HarnessClient(settings)
     client.start()
+    cleanup.callback(client.close)
     try:
         request(client,"initialize",{
             "protocolVersion":1,"clientCapabilities":{},
@@ -82,6 +104,17 @@ with TemporaryDirectory(prefix="owner-profile-acp-", dir=root / ".runtime") as t
         })
         sid = request(client,"session/new",{"cwd":str(workspace),"mcpServers":[]})["sessionId"]
         SceneStateStore(scene).select(sid, "development")
+        manifest = manifest_path(workspace)
+        manifest_backup = Path(str(manifest) + ".test-backup")
+        if mode == "volume_unavailable":
+            def restore_manifest():
+                if manifest_backup.exists():
+                    os.replace(manifest_backup, manifest)
+            os.replace(manifest, manifest_backup)
+            cleanup.callback(restore_manifest)
+            cleanup.callback(client.close)
+        if mode == "disk_full":
+            (workspace / "subdir/sentinel.txt").write_text("preserve-me")
         prompt = "owner current journal delta"
         nonce = publisher.publish(sid,{
             "platform_id":"qq","bot_id":"bot","conversation_key":"private:owner",
@@ -117,7 +150,7 @@ with TemporaryDirectory(prefix="owner-profile-acp-", dir=root / ".runtime") as t
         calls=[json.loads(x) for x in trace.read_text().splitlines()]
         assert len(calls)==(1 if mode == "cancel" else 2),calls
         assert calls[0]["runtime"]["sandbox"] == "OwnerSandbox", calls[0]["runtime"]
-        assert calls[0]["tools"] == ["bash", "skill"], calls[0]["tools"]
+        assert calls[0]["tools"] == ["bash", "skill", "web_fetch", "web_search"], calls[0]["tools"]
         assert "trusted owner" in json.dumps(calls[0]["messages"])
         assert "Inspect and modify files" in json.dumps(calls[0]["messages"])
         assert "Develop and validate a task" in json.dumps(calls[0]["messages"])
@@ -132,6 +165,15 @@ with TemporaryDirectory(prefix="owner-profile-acp-", dir=root / ".runtime") as t
             assert "SANDBOX_UNAVAILABLE" in observed or "nonexistent-owner-acceptance-runner" in observed, observed
         elif mode == "limits":
             assert "/workspace/subdir" in observed, observed
+        elif mode == "disk_full":
+            assert "no space left on device" in observed.lower(), observed
+            assert "[exit code: 1]" in observed.lower(), observed
+            assert (workspace/"subdir/sentinel.txt").read_text() == "preserve-me"
+            assert (workspace/"subdir/recovered.txt").read_text() == "ok"
+            assert not (workspace/"subdir/fill.bin").exists()
+        elif mode == "volume_unavailable":
+            assert not (workspace/"subdir/result.txt").exists(), "missing volume manifest fell back to host workspace"
+            assert "volume" in observed.lower() or "containment unavailable" in observed.lower(), observed
         else:
             assert (workspace/"subdir/result.txt").read_text()=="native-owner-sandbox"
             assert "/workspace/subdir" in observed,observed
@@ -140,6 +182,7 @@ with TemporaryDirectory(prefix="owner-profile-acp-", dir=root / ".runtime") as t
             (workspace/"subdir/result.txt").write_text("keep-sentinel")
             client = HarnessClient(settings)
             client.start()
+            cleanup.callback(client.close)
             request(client,"initialize",{
                 "protocolVersion":1,"clientCapabilities":{},
                 "clientInfo":{"name":"owner-resume-acceptance","version":"0.1.0"},
@@ -182,9 +225,6 @@ with TemporaryDirectory(prefix="owner-profile-acp-", dir=root / ".runtime") as t
     except BaseException:
         print("\n".join(client._stderr_lines),file=sys.stderr)
         raise
-    finally:
-        client.close()
-        publisher.close()
 '''
     env = {**os.environ, "V2_REPO_ROOT": str(ROOT), "V2_OWNER_TEST_MODE": mode}
     process = subprocess.Popen(

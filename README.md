@@ -18,9 +18,10 @@ Before development, read:
 - [`docs/phases/phase-4.md`](docs/phases/phase-4.md) — completed MCP capability phase.
 - [`docs/architecture/agent-bot-runtime.md`](docs/architecture/agent-bot-runtime.md) — current Agent-Bot architecture.
 - [`docs/architecture/dsh-version-decision.md`](docs/architecture/dsh-version-decision.md) — pinned-version decision.
-- [`docs/phases/agent-profile-validation.md`](docs/phases/agent-profile-validation.md) — current implementation and evidence.
+- [`docs/phases/agent-profile-validation.md`](docs/phases/agent-profile-validation.md) — retained implementation and evidence.
+- [`docs/phases/personal-agent-bot.md`](docs/phases/personal-agent-bot.md) — current product contract, implementation gates and real-group acceptance.
 
-Current work rebuilds the Agent Profile around stable capabilities, dynamic persona and skill scenes, external Journal history, and independent trust domains. DSH remains pinned to the lock file; native plugin seams currently satisfy the verified mechanisms.
+Current work productizes the verified Agent Profiles as a Personal Agent-Bot: group chat, persona/skills, bounded context, restricted owner execution without per-operation approval, research, and recovery. Group conversation requires an actual Bot mention or a platform-resolved reply to the Bot. Final acceptance includes two-group admission checks and three days of real use. DSH remains pinned to the lock file.
 
 ## V2 plugin documentation
 
@@ -40,20 +41,28 @@ The router uses two independent ACP runtimes:
 
 Keep `V2_DSH_PROVIDER`, `V2_DSH_MODEL`, credentials, and `V2_QQ_ALLOWED_CONVERSATIONS` in the process environment. Owner identities use `V2_QQ_OWNERS`, a JSON array of exact `platform_id`, `bot_id`, and `user_id` strings. An empty array disables the owner runtime. An owner speaking in a group still uses safe chat capabilities.
 
-Owner Bash constrains the existing native dsh-subprocess scope and verifies cgroup limits before executing, so native timeout/cancellation retains control of descendants. It requires Linux, working user systemd scopes/cgroup limits, and `/usr/bin/bwrap`. It sees only essential read-only runtime files and `/workspace`; it has no network or inherited credential environment. Limits are 512 MiB memory, 64 tasks, one CPU, and a maximum 60-second foreground call. Background execution and escalation are unavailable. Missing infrastructure fails the tool rather than falling back to host execution. Owner home/workspace must be private 0700 directories owned by the runtime user; socket, device, FIFO, and multiply linked files are rejected in the workspace. Disk budgeting remains an acceptance gap.
+Owner Bash constrains the existing native dsh-subprocess scope and verifies cgroup limits before executing, so native timeout/cancellation retains control of descendants. It requires Linux, working user systemd scopes/cgroup limits, and `/usr/bin/bwrap`. It sees only essential read-only runtime files and `/workspace`; it has no network or inherited credential environment. Limits are 512 MiB memory, 64 tasks, one CPU, and a maximum 60-second foreground call. Background execution and escalation are unavailable. Missing infrastructure fails the tool rather than falling back to host execution. Owner home/workspace must be private 0700 directories owned by the runtime user; socket, device, FIFO, and multiply linked files are rejected in the workspace. Every Bash call also verifies a fixed-capacity ext4 workspace and the actual sandbox mount identity; an unavailable or replaced volume fails execution.
 
 Configured owners can select the current admitted conversation's runtime state:
 
 ```text
 /v2agent persona default|analyst|companion|developer
 /v2agent scene casual-chat|research|development
+/v2agent persona list
+/v2agent scene list
+/v2agent status
+/v2agent metrics
+/v2agent cancel
+/v2agent recover <pending Journal ID>
 ```
 
-These deterministic commands wait for the current turn to finish, update private host state, and acknowledge through AstrBot. They do not invoke the model, replace the session, or grant tools. A command before the first ordinary message creates only the native session and its MCP binding. A pending uncertain turn blocks selection until recovery. Each normal input projects at most 100 recent entries and 32 KiB. Oversized entries are clearly marked, and scoped history tools can retrieve their complete originals. The stored cursor is the accepted projection boundary; omitted facts remain externally queryable in the canonical Journal. This bounds bootstrap/backlog context rather than deleting history.
+Persona/scene selection waits for the current turn to finish, updates private host state, and acknowledges through AstrBot. Status/list reads and cancellation do not wait for the chat lock. Cancellation targets only the current model turn through native ACP; its acknowledgement means requested, and confirmed cancellation preserves pending results for review without replaying side effects. They do not invoke the model, replace the session, or grant tools. A command before the first ordinary message creates only the native session and its MCP binding. A pending uncertain turn blocks selection until recovery. Each normal input projects at most 100 recent entries and 32 KiB. Oversized entries are clearly marked, and scoped history tools can retrieve their complete originals. The stored cursor is the accepted projection boundary; omitted facts remain externally queryable in the canonical Journal. This bounds bootstrap/backlog context rather than deleting history.
 
-The scene exposes only installed skill definitions. The repository provides chat-history, filesystem, and development; web-research remains a test fixture rather than a production capability. Skill discovery shares one native provider and falls back to shared polling when filesystem watcher capacity is exhausted. Loading development skills does not grant Bash to safe-chat sessions.
+The scene exposes only installed skill definitions. The repository provides chat-history, filesystem, development, and web-research. Both profiles expose native controlled web_search/web_fetch; scenes control skill loading without granting tools. Agent Profile ACP processes clear inherited HTTP proxy settings to retain native public-DNS checks. Skill discovery shares one native provider and falls back to shared polling when filesystem watcher capacity is exhausted. Loading development skills does not grant Bash to safe-chat sessions.
 
-Run `scripts/check-agent-profile.sh` for pinned-source checks, native mechanisms, actual controlled ACP turns, owner isolation, and message-chain regressions. These checks use disposable data and scripted model adapters. Real-provider synthetic safe-chat and owner acceptance has passed. Authorized real QQ acceptance passed only for Bot 2869323076 / private:1105927155: persona and scene commands, model replies, deterministic probe visibility through Journal history, persistent session restart, native skill loading, and isolated workspace write/read. Temporary personal-account HTTP access and the V2 test process were closed after verification; existing QQ services were preserved. Production rollout, group QQ acceptance, workspace disk budgeting, and real-provider large-context stress remain open. Old `state.sqlite3` / Phase 5 sessions are not automatically migrated.
+Run `scripts/check-agent-profile.sh` for pinned-source checks, native mechanisms, actual controlled ACP turns, owner isolation, and message-chain regressions. These checks use disposable data and scripted model adapters. Real-provider synthetic safe-chat and owner acceptance has passed. Authorized real QQ acceptance passed only for Bot 2869323076 / private:1105927155: persona and scene commands, model replies, deterministic probe visibility through Journal history, persistent session restart, native skill loading, and isolated workspace write/read. Temporary personal-account HTTP access was closed after verification; existing QQ services were preserved. The active V2 private-chat runtime now uses a fixed 1 GiB ext4 workspace, preserving its Session and files. Isolated real-provider automatic compaction, same-session restart, and scoped historical retrieval passed with synthetic large ACP inputs. The user service is now deployed and enabled; stopped-writer backup/restore, cold remount, crash restart, and OneBot reconnect passed. Real group acceptance and three days of use remain open. After the account recharge, the strengthened isolated live Research gate passed: final citations matched persisted native source and fetch metadata. Research, recovery, metadata audit, metrics, and health are deployed. This deployment has not yet repeated real Owner private-message acceptance because the personal test sender is offline; no temporary HTTP sender was left enabled. Old `state.sqlite3` / Phase 5 sessions are not automatically migrated. See the [operations guide](docs/personal-agent-operations.md) and [pre-group acceptance checkpoint](docs/personal-agent-acceptance.md).
+
+Owner Bash requires a host-prepared bounded volume: `python3 scripts/owner-workspace.py prepare` on an empty target, then `check`. Preparation needs noninteractive sudo for mount/chown; normal execution checks the actual backing and sandbox mount without sudo. The volume persists data but must be remounted after host reboot. Existing workspace migration requires stopping V2 and preserving its files first; see the [router guide](astrbot-plugins/v2_dsh_router/README.md). Status/list queries create no Session or inference and do not wait for an active turn.
 
 When V2 provider credentials are available in the environment, run the isolated real-model check explicitly:
 
@@ -64,7 +73,7 @@ When V2 provider credentials are available in the environment, run the isolated 
 
 It creates disposable safe-chat sessions, checks three synthetic turns, observes successful native skill loading, changes persona, and resumes after a process restart. It never connects QQ. Its ignored `.runtime/agent-profile-live-result.json` records only verification metadata; an advertised model window is not evidence of a large-context stress test.
 
-The following Phase 1–4 setup sections and Phase 5 documents describe the retained historical baseline. For current development, use the Agent Profile phase document above.
+The following Phase 1–4 setup sections and Phase 5 documents describe the retained historical baseline. For current development, use the Personal Agent-Bot product phase above.
 
 The journal records OneBot inbound messages and platform-confirmed Bot
 `message_sent` feedback. Phase 3 adds the V2-owned DSH router; Phase 4 attaches scoped AstrBot MCP

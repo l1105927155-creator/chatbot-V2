@@ -93,7 +93,7 @@ with TemporaryDirectory(prefix="agent-profile-acp-", dir=root / ".runtime") as t
         forbidden = {"bash", "terminal", "persistent_bash", "filesystem", "read_file",
                      "write_file", "edit_file", "jobs", "exec"}
         assert forbidden.isdisjoint(initial["tools"]), initial["tools"]
-        assert initial["tools"] == ["skill"], initial["tools"]
+        assert initial["tools"] == ["skill", "web_fetch", "web_search"], initial["tools"]
 
         def ordinary_calls():
             return [json.loads(line) for line in model_calls.read_text(encoding="utf-8").splitlines()

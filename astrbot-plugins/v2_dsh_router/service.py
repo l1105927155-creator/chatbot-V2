@@ -4,12 +4,31 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
+import time
+from dataclasses import dataclass, field
 from collections.abc import Awaitable, Callable
 from typing import Any
+
+try:
+    from .runtime_audit import CURRENT_TRACE, trace_scope
+except ImportError:
+    from runtime_audit import CURRENT_TRACE, trace_scope
 
 
 class PendingTurnError(RuntimeError):
     """A prior DSH call may have been accepted; automatic replay is unsafe."""
+
+
+class RecoveryError(RuntimeError):
+    """The requested reviewed pending turn cannot currently be resolved."""
+
+
+@dataclass
+class _ActiveRun:
+    session_id: str
+    finished: bool = False
+    lock: Any = field(default_factory=threading.Lock)
 
 
 class ChatService:
@@ -18,13 +37,17 @@ class ChatService:
     MAX_ROW_BYTES = 8 * 1024
 
     def __init__(self, journal: Any, state: Any, dsh: Any, mcp: Any = None,
-                 trusted_sources: bool = False) -> None:
+                 trusted_sources: bool = False, audit=None) -> None:
         self.journal = journal
         self.state = state
         self.dsh = dsh
         self.mcp = mcp
         self.trusted_sources = trusted_sources
+        self.audit = audit
+        self.domain = "owner" if trusted_sources else "chat"
+        self._queued = 0
         self._locks: dict[tuple[str, str, str], asyncio.Lock] = {}
+        self._active_runs: dict[tuple[str, str, str], _ActiveRun] = {}
 
     @staticmethod
     async def _dsh_call(function, *args):
@@ -48,6 +71,96 @@ class ChatService:
     def _lock(self, conversation) -> asyncio.Lock:
         key = (conversation.platform_id, conversation.bot_id, conversation.key)
         return self._locks.setdefault(key, asyncio.Lock())
+
+    def metrics(self):
+        return {"queued": self._queued, "active_chats": sum(lock.locked() for lock in self._locks.values()),
+                "model_runs": len(self._active_runs),
+                **(self.audit.snapshot(self.domain) if self.audit else {})}
+
+    async def status(self, conversation) -> dict:
+        """Read host state without waiting for a turn or creating a Session."""
+        identity = (conversation.platform_id, conversation.bot_id, conversation.key)
+        state = await asyncio.to_thread(self.state.get, *identity)
+        active = self._lock(conversation).locked()
+        if state is None:
+            return {"state": "running" if active else "not-started", "session_id": None,
+                    "persona": "default", "scene": "casual-chat",
+                    "last_seen_journal_id": 0, "pending_upper_cursor": None}
+        trace = CURRENT_TRACE.get()
+        if trace:
+            trace.session_id = state.session_id
+        persona, scene = await asyncio.gather(
+            asyncio.to_thread(self.dsh.personas.current, state.session_id),
+            asyncio.to_thread(self.dsh.scenes.current, state.session_id),
+        )
+        return {"state": "running" if active else (
+                    "pending" if state.pending_upper_cursor is not None else "idle"),
+                "session_id": state.session_id,
+                "persona": persona["persona"], "scene": scene["scene"],
+                "last_seen_journal_id": state.last_seen_journal_id,
+                "pending_upper_cursor": state.pending_upper_cursor}
+
+    async def cancel(self, conversation) -> bool:
+        """Request native cancellation of this exact run without its chat lock."""
+        identity = (conversation.platform_id, conversation.bot_id, conversation.key)
+        active = self._active_runs.get(identity)
+        if active is None:
+            return False
+
+        def request():
+            # A delayed worker must not cancel the next turn of the same SID.
+            # The run's finally block marks this token before the chat lock
+            # can be released and a later turn admitted.
+            with active.lock:
+                if active.finished:
+                    return False
+                return self.dsh.cancel_session(active.session_id)
+
+        return await self._dsh_call(request)
+
+    async def resolve_pending(self, conversation, expected_pending: int, get_group=None):
+        """Drain and consume the Owner-reviewed uncertain delta without replay."""
+        if (isinstance(expected_pending, bool) or not isinstance(expected_pending, int)
+                or expected_pending <= 0):
+            raise RecoveryError("待核对 Journal 编号必须为正整数。")
+        lock = self._lock(conversation)
+        if lock.locked():
+            raise RecoveryError("当前会话仍在执行或发送，请先取消并等待结束后再核对恢复。")
+        async with lock:
+            identity = (conversation.platform_id, conversation.bot_id, conversation.key)
+            state = await asyncio.to_thread(self.state.get, *identity)
+            if state is None or state.pending_upper_cursor is None:
+                raise RecoveryError("当前会话没有待核对的执行结果。")
+            if state.pending_upper_cursor != expected_pending:
+                raise RecoveryError("待核对 Journal 编号已变化，请重新查看 /v2agent status。")
+            trace = CURRENT_TRACE.get()
+            if trace:
+                trace.session_id = state.session_id
+
+            async def drain(servers=None):
+                args = () if servers is None else (servers,)
+                await self._dsh_call(self.dsh.drain_session, state.session_id, *args)
+
+            if self.mcp is not None:
+                async def no_tool_send(_reply):
+                    raise RuntimeError("recovery cannot send through an Agent tool")
+                async with self.mcp.turn(conversation, no_tool_send, get_group) as servers:
+                    await drain(servers)
+            else:
+                await drain()
+            # Only this exact reviewed state may be consumed. It is a skipped
+            # input, not proof of a successful model turn or QQ delivery.
+            try:
+                resolved = await self._dsh_call(
+                    self.state.resolve_pending, *identity, state.session_id,
+                    state.last_seen_journal_id, expected_pending,
+                )
+                if trace:
+                    trace.emit("recovery/resolved", previous_cursor=state.last_seen_journal_id,
+                               pending_cursor=expected_pending)
+                return resolved
+            except ValueError as error:
+                raise RecoveryError("恢复期间会话状态已变化，请重新查看 /v2agent status 后核对。") from error
 
     async def _delta(self, conversation, after: int, upper: int) -> list[Any]:
         # One reverse-indexed query bounds bootstrap/backlog work. The extra
@@ -124,11 +237,43 @@ class ChatService:
         get_group=None,
     ) -> str | None:
         """Run a turn once, then send through AstrBot while holding this chat's lock."""
-        async with self._lock(conversation):
-            if self.mcp is not None:
-                async with self.mcp.turn(conversation, send, get_group) as servers:
-                    return await self._handle_locked(conversation, inbound_message_id, send, servers)
-            return await self._handle_locked(conversation, inbound_message_id, send)
+        trace = self.audit.trace(conversation, inbound_message_id, self.domain) if self.audit else None
+        started = time.monotonic()
+        if trace:
+            trace.emit("turn/queued")
+        self._queued += 1
+        waiting = True
+        with trace_scope(trace):
+            try:
+                async with self._lock(conversation):
+                    self._queued -= 1
+                    waiting = False
+                    if trace:
+                        trace.emit("turn/start", queue_ms=(time.monotonic() - started) * 1000)
+
+                    async def final_send(text):
+                        return await trace.send(send, text, "final") if trace else await send(text)
+
+                    async def tool_send(text):
+                        return await trace.send(send, text, "mcp") if trace else await send(text)
+
+                    if self.mcp is not None:
+                        async with self.mcp.turn(conversation, tool_send, get_group) as servers:
+                            result = await self._handle_locked(conversation, inbound_message_id, final_send, servers)
+                    else:
+                        result = await self._handle_locked(conversation, inbound_message_id, final_send)
+                    if trace:
+                        trace.emit("turn/duplicate" if result is None else "turn/completed",
+                                   elapsed_ms=(time.monotonic() - started) * 1000)
+                    return result
+            except BaseException as error:
+                if trace:
+                    trace.emit("turn/failed", error_type=type(error).__name__,
+                               elapsed_ms=(time.monotonic() - started) * 1000)
+                raise
+            finally:
+                if waiting:
+                    self._queued -= 1
 
     async def select_profile(self, conversation, kind: str, value: str, send,
                              get_group=None) -> dict:
@@ -148,6 +293,9 @@ class ChatService:
                     args = () if servers is None else (servers,)
                     session_id = await self._dsh_call(self.dsh.create_session, *args)
                     state = await asyncio.to_thread(self.state.get_or_create, *identity, session_id)
+                trace = CURRENT_TRACE.get()
+                if trace:
+                    trace.session_id = state.session_id
                 selected = await self._dsh_call(selector, state.session_id, value)
                 await send(selected)
                 return selected
@@ -168,6 +316,9 @@ class ChatService:
         if state is None:
             session_id = await self._dsh_call(self.dsh.create_session, *mcp_args)
             state = await asyncio.to_thread(self.state.get_or_create, *identity, session_id)
+        trace = CURRENT_TRACE.get()
+        if trace:
+            trace.session_id = state.session_id
         if state.pending_upper_cursor is not None:
             raise PendingTurnError(
                 f"DSH turn outcome is uncertain for {conversation.key}; manual recovery required"
@@ -210,6 +361,8 @@ class ChatService:
             if any(not isinstance(value, str) or not value for value in trusted_source.values()):
                 raise RuntimeError("canonical wake message has incomplete trusted source facts")
         await asyncio.to_thread(self.state.begin_turn, *identity, state.session_id, upper)
+        if trace:
+            trace.emit("dsh/start", journal_id=upper)
         # Any error after begin_turn leaves a durable pending marker. The
         # SDK stdio protocol cannot prove whether a lost call was accepted.
         run_args = (state.session_id, prompt, *mcp_args)
@@ -217,7 +370,21 @@ class ChatService:
             if not mcp_args:
                 run_args += (None,)
             run_args += (trusted_source,)
-        reply = await self._dsh_call(self.dsh.run, *run_args)
+        active = _ActiveRun(state.session_id)
+        self._active_runs[identity] = active
+
+        def run():
+            try:
+                return self.dsh.run(*run_args)
+            finally:
+                with active.lock:
+                    active.finished = True
+
+        try:
+            reply = await self._dsh_call(run)
+        finally:
+            if self._active_runs.get(identity) is active:
+                del self._active_runs[identity]
         await send(reply)
         await asyncio.to_thread(self.state.complete_turn, *identity, state.session_id, upper)
         return reply
