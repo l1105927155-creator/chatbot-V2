@@ -3,6 +3,7 @@
 用户已确认 Personal Agent-Bot 折中路线。沿用已实现并验证的 Agent Profile，推进产品闭环与真实测试群验收，不继续补完历史 Phase 5。
 
 - 目标架构：[Agent-Bot 运行时](docs/architecture/agent-bot-runtime.md)。
+- 模型自主决策与渐进式披露整改目标：[model-decision-remediation.md](docs/phases/model-decision-remediation.md)（待实施；不改变当前 QQ 验收与安全边界）。
 - 产品契约与当前阶段：[Personal Agent-Bot 产品化](docs/phases/personal-agent-bot.md)。
 - 已有实现与验证记录：[Agent Profile 验证](docs/phases/agent-profile-validation.md)。
 - 保留 AstrBot / DSH / MCP 职责、Journal 与已验证集成成果；人格、技能场景与信任域分开。
