@@ -305,6 +305,7 @@ from astrbot.core.config.default import DEFAULT_CONFIG
 c=copy.deepcopy(DEFAULT_CONFIG)
 c["dashboard"]["enable"]=False
 c["provider_settings"]["enable"]=False
+c["platform_settings"]["empty_mention_waiting"]=False
 c["disable_metrics"]=True
 c["admins_id"]=[]
 c["platform"]= [{"id":"v2-sandbox","type":"aiocqhttp","enable":True,
@@ -319,6 +320,10 @@ for key in ("password","pbkdf2_password","password_storage_upgraded","password_c
 if os.environ["SANDBOX_CONFIG_PREEXISTED"] == "1":
  comparable=copy.deepcopy(loaded)
  comparable["platform"]=c["platform"]
+ # This explicit V2 behavior update hands bare mentions to DSH. Preserve
+ # existing sandbox data and reject unrelated configuration differences.
+ if comparable.get("platform_settings",{}).get("empty_mention_waiting") is True:
+  comparable["platform_settings"]["empty_mention_waiting"]=False
  if comparable != c:
   raise SystemExit("Existing sandbox config does not match isolated defaults")
 p.write_text(json.dumps(c,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")

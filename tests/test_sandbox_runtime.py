@@ -41,6 +41,7 @@ def test_prepare_builds_isolated_default_config_and_plugin_snapshot(tmp_path: Pa
     }
     assert config["dashboard"]["enable"] is False
     assert config["provider_settings"]["enable"] is False
+    assert config["platform_settings"]["empty_mention_waiting"] is False
     assert config["disable_metrics"] is True
     assert config["admins_id"] == []
     assert config["provider"] == []
@@ -93,6 +94,28 @@ def test_prepare_is_idempotent_for_its_own_plugin_links(tmp_path: Path) -> None:
         link = data / "astrbot/data/plugins" / plugin
         assert link.is_symlink()
         assert link.resolve() == (data / "repo/astrbot-plugins" / plugin).resolve()
+
+
+def test_prepare_updates_only_legacy_bare_mention_waiter_setting(tmp_path: Path) -> None:
+    data = tmp_path / "sandbox"
+    ports = _free_ports()
+    runtime.prepare(data, ASTRBOT, ports, "disabled")
+    config_path = data / "astrbot/data/cmd_config.json"
+    current = json.loads(config_path.read_text())
+    legacy = json.loads(config_path.read_text())
+    legacy["platform_settings"]["empty_mention_waiting"] = True
+    config_path.write_text(json.dumps(legacy))
+    marker = data / "retained-test-data"
+    marker.write_text("preserve")
+    runtime.prepare(data, ASTRBOT, ports, "disabled")
+    assert json.loads(config_path.read_text()) == current
+    assert marker.read_text() == "preserve"
+    legacy["provider_settings"]["enable"] = True
+    original = json.dumps(legacy)
+    config_path.write_text(original)
+    with pytest.raises(RuntimeError, match="Existing sandbox config"):
+        runtime.prepare(data, ASTRBOT, ports, "disabled")
+    assert config_path.read_text() == original
 
 
 def test_prepare_rejects_unpinned_astrbot(tmp_path: Path) -> None:

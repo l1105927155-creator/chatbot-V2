@@ -112,6 +112,11 @@ async def test_history_search_tools_and_send_are_scoped_to_active_origin(tmp_pat
                 }
                 send_tool = next(tool for tool in listed.tools if tool.name == "qq_send_origin")
                 assert set(send_tool.inputSchema["properties"]) == {"text"}
+                assert "预计操作会让用户等待数秒以上时" in send_tool.description
+                assert "逐个工具播报" in send_tool.description
+                assert "不自动重发" in send_tool.description
+                assert "text 是发往 QQ 的纯文本" in send_tool.description
+                assert "行内代码标记" in send_tool.description
                 group_tool = next(tool for tool in listed.tools if tool.name == "current_group_info")
                 assert group_tool.inputSchema["properties"] == {}
                 schemas = {tool.name: tool.outputSchema for tool in listed.tools}

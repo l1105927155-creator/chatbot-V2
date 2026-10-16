@@ -2,6 +2,8 @@
 
 当前产品契约：[执行环境归属纠偏](docs/phases/execution-domain-correction-2026-10-16.md)。Owner 真实独立私聊使用 Linux 部署账户的主机原生文件、前台 Shell 与网络；已准入群在本群独立沙箱中执行，包括群内 Owner；普通非 Owner 私聊保持 safe-chat。两个信任域与三个工具组合不混用，人格和 Scene 不授予权限。
 
+当前追加工作：[QQ 交互补充](docs/phases/qq-interaction-follow-up-2026-10-17.md)。按用户重述的测试记录实现纯 @Bot 唤醒、耗时操作前等候说明、QQ 纯文本；分段回复及防刷屏延后，已完成的执行域不变。
+
 - 纠偏实现已随 `537f0b3` 部署；原生机制、独立模拟 QQ、真实模型、取消恢复、重启和备份恢复证据见 [实施记录](docs/execution-domain-validation-2026-10-16.md)。这不是最终真实 QQ 安全验收。
 - 最新远端审计见 [代码复审](docs/execution-domain-code-audit-2026-10-16.md)。P2 工具入口覆盖和累计群卷容量已随 `6cab564` 验证并部署，见[审计处理记录](docs/execution-domain-audit-remediation-2026-10-16.md)；保留 P3 前台/时限边界，不扩展其它执行模式或另建权限平台。
 - 用户授权按不超过五个生产群安排容量：每群1GiB、总预留5GiB、宿主至少保留1GiB余量；取消准入后数据保留并继续计入预算。预算或磁盘不足只拒绝新增，不自动删旧数据。

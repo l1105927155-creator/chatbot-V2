@@ -215,6 +215,21 @@ def test_pinned_builtin_observers_and_probe_do_not_block_or_duplicate_dsh(tmp_pa
                 await drive(event('Bot reply question','group-reply',group=group,reply_sender='900001'))
                 await drive(event('Owner group question','group-owner',user_id='900003',group=group,mention='900001'))
                 assert calls[count:]==[('chat','group-at'),('chat','group-reply'),('chat','group-owner')]
+                # A bare real @Bot reaches DSH exactly once; it does not
+                # activate AstrBot's own LLM/waiter or consume a later message.
+                count=len(calls);outbound=len(sent)
+                bare=event('','group-bare-at',group=group,mention='900001')
+                bare.message_obj.message=[At(qq='900001')]
+                bare.message_obj.raw_message['message']=[{'type':'at','data':{'qq':'900001'}}]
+                await drive(bare)
+                assert calls[count:]==[('chat','group-bare-at')]
+                assert sent[outbound:]==['fake DSH reply']
+                count=len(calls);outbound=len(sent)
+                await drive(event('','bare-other',group=group,mention='900004'))
+                await drive(event('','bare-all',group=group,mention='all'))
+                await drive(event('','bare-private'))
+                await drive(event('','bare-excluded',group=other_group,mention='900001'))
+                assert len(calls)==count and len(sent)==outbound
                 count=len(calls);outbound=len(sent)
                 await drive(event('excluded mention','excluded-at',group=other_group,mention='900001'))
                 await drive(event('excluded reply','excluded-reply',group=other_group,reply_sender='900001'))

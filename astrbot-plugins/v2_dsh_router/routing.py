@@ -39,7 +39,7 @@ def _group_trigger(event: Any, raw: Mapping, segments: list) -> bool:
 
 
 def should_route(event: Any, raw: Any) -> bool:
-    """Admit ordinary text unless a deterministic V2 handler claimed it.
+    """Admit addressed text or a bare Bot mention unless already claimed.
 
     Pinned AstrBot clears each plugin handler's result before running the next
     one, so ``event.get_result()`` is not a reliable ownership signal at the
@@ -68,6 +68,22 @@ def should_route(event: Any, raw: Any) -> bool:
         and isinstance(segment.get("data"), Mapping)
         and isinstance(segment["data"].get("text"), str)
     ).strip()
-    if not plain or plain.startswith("/") or event.get_extra("v2_deterministic_handled", False):
+    if plain.startswith("/") or event.get_extra("v2_deterministic_handled", False):
         return False
-    return True
+    if plain:
+        return True
+    # Only extend the no-text case to an actual call of this Bot. Media,
+    # reply-only messages, @all and mentions of other members stay excluded.
+    # Whitespace text segments are common in real QQ mention payloads.
+    return raw["message_type"] == "group" and all(
+        isinstance(segment, Mapping)
+        and isinstance(segment.get("data"), Mapping)
+        and (
+            (segment.get("type") == "at"
+             and str(segment["data"].get("qq", "")) == str(raw.get("self_id", "")))
+            or (segment.get("type") == "text"
+                and isinstance(segment["data"].get("text"), str)
+                and not segment["data"]["text"].strip())
+        )
+        for segment in segments
+    )

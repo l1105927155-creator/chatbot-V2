@@ -64,7 +64,7 @@ def test_command_and_deterministic_outcome_marker_block_dsh():
 
 
 def test_nontext_self_feedback_and_other_platform_are_excluded():
-    assert not module.should_route(Event(), raw(" "))
+    assert not module.should_route(Event(), raw(" ", mention=False))
     feedback = raw(post_type="message_sent")
     assert not module.should_route(Event(), feedback)
     own = raw()
@@ -72,6 +72,25 @@ def test_nontext_self_feedback_and_other_platform_are_excluded():
     assert not module.should_route(Event(), own)
     assert not module.should_route(Event(platform="other"), raw())
     assert not module.should_route(Event(stopped=True), raw())
+
+
+def test_only_real_bare_bot_mentions_are_added_to_no_text_routing():
+    message = raw(" \n ")
+    assert module.should_route(Event(), message)
+    message["message"].pop()  # Actual QQ may omit text altogether.
+    assert module.should_route(Event(), message)
+    assert not module.should_route(Event(handled=True), message)
+    for extra in (
+        {"type": "image", "data": {"file": "image.png"}},
+        {"type": "face", "data": {"id": "1"}},
+        {"type": "at", "data": {"qq": "all"}},
+        {"type": "at", "data": {"qq": "900004"}},
+        {"type": "reply", "data": {"id": "prior"}},
+        {"type": "text", "data": {"text": None}},
+    ):
+        assert not module.should_route(Event(), {**message, "message": [*message["message"], extra]})
+    assert not module.should_route(Event(), raw(" ", message_type="private"))
+    assert not module.should_route(Event(), {**message, "message": []})
 
 
 def test_group_handler_wake_prefix_nickname_and_other_mentions_do_not_trigger():
