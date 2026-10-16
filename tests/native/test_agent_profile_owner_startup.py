@@ -33,7 +33,8 @@ with TemporaryDirectory(prefix="owner-profile-startup-", dir=root / ".runtime") 
         patch=root / "dsh/profile/v2-agent-owner.patch.yml",
         instructions=root / "dsh/profile/agent-owner.md",
         provider="owner-startup-no-provider", model="owner-startup-no-model",
-        enable_authorization=True,
+        enable_authorization=True, execution_profile="owner-host",
+        owner_shell_env={"PATH": os.environ["PATH"]},
     )
     try:
         assert client.runtime.client._proc.poll() is None
@@ -43,7 +44,8 @@ with TemporaryDirectory(prefix="owner-profile-startup-", dir=root / ".runtime") 
         assert (home / "v2-turn-sources").is_dir()
         stderr = "\n".join(client.runtime.client._stderr_lines).lower()
         forbidden = ("dependencyerror", "dependency error", "err_module_not_found",
-                     "cannot find package", "failed to load plugin", "could not resolve plugin")
+                     "cannot find package", "failed to load plugin", "could not resolve plugin",
+                     "did not activate", "owner shell environment json is required")
         assert not any(marker in stderr for marker in forbidden), stderr
     finally:
         client.close()

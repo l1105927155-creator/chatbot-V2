@@ -25,13 +25,19 @@ def private_file(path: Path, content: str, mode: int = 0o600) -> Path:
 
 def config(path: Path, credential_file: Path, **changes: object) -> Path:
     data = {
-        "version": 1,
+        "version": 2,
+        "execution_contract": 2,
         "provider": "deepseek-official",
         "model": "deepseek-v4-flash",
         "allowed_conversations": ["private:1105927155"],
         "owners": [{"platform_id": "qq", "bot_id": "10001", "user_id": "1105927155"}],
         "mcp_port": 6210,
         "credential_env_file": str(credential_file),
+        "owner_workdir": str(agent_service.ROOT),
+        "group_sandbox": {
+            "storage_mib": 1024, "memory_mib": 512, "tasks": 64,
+            "cpu_quota": 100, "max_command_seconds": 60, "network": False,
+        },
     }
     data.update(changes)
     return private_file(path, json.dumps(data))
@@ -41,6 +47,23 @@ def test_config_schema_rejects_extra_keys(tmp_path: Path) -> None:
     credential = private_file(tmp_path / "key.env", "DEEPSEEK_API_KEY=secret\n")
     path = config(tmp_path / "config.json", credential, surprise=True)
     with pytest.raises(ValueError):
+        agent_service._load_config(path)
+    path = config(tmp_path / "legacy.json", credential, version=1, execution_contract=1)
+    with pytest.raises(ValueError, match="schema"):
+        agent_service._load_config(path)
+
+
+@pytest.mark.parametrize("override", [
+    {"storage_mib": 2048}, {"memory_mib": 1024}, {"tasks": 65},
+    {"cpu_quota": 200}, {"max_command_seconds": 61}, {"network": True},
+    {"memory_mib": 512.0}, {"tasks": True}, {"network": 0},
+])
+def test_config_rejects_execution_contract_drift(tmp_path: Path, override: dict) -> None:
+    credential = private_file(tmp_path / "key.env", "DEEPSEEK_API_KEY=secret\n")
+    group = dict(agent_service.GROUP_SANDBOX_CONTRACT)
+    group.update(override)
+    path = config(tmp_path / "config.json", credential, group_sandbox=group)
+    with pytest.raises(ValueError, match="verified execution contract|exact integer"):
         agent_service._load_config(path)
 
 
@@ -65,10 +88,13 @@ def test_runtime_environment_uses_config_and_removes_manager_credentials(monkeyp
     monkeypatch.setenv("V2_DSH_MODEL", "manager-override")
     monkeypatch.setenv("OPENAI_API_KEY", "manager-secret")
     monkeypatch.setenv("ASTRBOT_ROOT", "/unrelated/runtime")
+    monkeypatch.setenv("V2_EXECUTION_MIGRATE", "1")
     cfg = {
         "provider": "deepseek-official", "model": "deepseek-v4-flash",
         "owners": [{"platform_id": "qq", "bot_id": "1", "user_id": "2"}],
         "allowed_conversations": ["private:2"], "mcp_port": 6210,
+        "execution_contract": 2, "owner_workdir": str(agent_service.ROOT),
+        "group_sandbox": agent_service.GROUP_SANDBOX_CONTRACT,
     }
     env = agent_service._runtime_env(cfg)
     assert env["ASTRBOT_ROOT"] == str(agent_service.ASTRBOT)
@@ -77,6 +103,15 @@ def test_runtime_environment_uses_config_and_removes_manager_credentials(monkeyp
     assert json.loads(env["V2_QQ_OWNERS"]) == cfg["owners"]
     assert env["V2_QQ_ALLOWED_CONVERSATIONS"].split(",") == cfg["allowed_conversations"]
     assert env["V2_MCP_PORT"] == "6210" and env["LC_MESSAGES"] == "C"
+    assert env["V2_EXECUTION_CONTRACT"] == "2"
+    assert env["V2_OWNER_WORKDIR"] == str(agent_service.ROOT)
+    assert env["V2_GROUP_STORAGE_MIB"] == "1024"
+    assert env["V2_GROUP_MEMORY_MIB"] == "512"
+    assert env["V2_GROUP_TASKS"] == "64"
+    assert env["V2_GROUP_CPU_QUOTA"] == "100"
+    assert env["V2_GROUP_MAX_COMMAND_SECONDS"] == "60"
+    assert env["V2_GROUP_NETWORK"] == "0"
+    assert env["V2_EXECUTION_MIGRATE"] == "1"
     assert "DEEPSEEK_API_KEY" not in env and "OPENAI_API_KEY" not in env
 
 
@@ -94,30 +129,13 @@ def test_singleton_lock_is_nonblocking_and_private(tmp_path: Path, monkeypatch: 
         os.close(first)
 
 
-def test_prepare_requires_existing_manifest_and_image_before_reuse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    workspace = tmp_path / "workspace"
-    image = tmp_path / "workspace.ext4"
-    monkeypatch.setattr(agent_service, "WORKSPACE", workspace)
-    monkeypatch.setattr(agent_service, "IMAGE", image)
+def test_prepare_no_longer_requires_the_archived_owner_volume(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(agent_service, "PYTHON", Path(__file__))
     monkeypatch.setattr(agent_service, "DSH", Path(__file__))
     monkeypatch.setattr(agent_service.os, "access", lambda path, mode: True)
     monkeypatch.setattr(agent_service.shutil, "which", lambda name: "/usr/bin/node")
-    sys.path.insert(0, str(agent_service.ROOT / "dsh/plugins/agent-profile"))
-    import owner_volume
-    calls: list[tuple[Path, Path]] = []
-    monkeypatch.setattr(owner_volume, "_manifest", lambda w: {
-        "image": str(image), "bytes": 2 * 1024 ** 3,
-    })
-    monkeypatch.setattr(owner_volume, "prepare", lambda w, i, *, size_bytes: calls.append((w, i, size_bytes)))
-    cfg = {"credential_env_file": "/private/key.env"}
-    with pytest.raises(RuntimeError):
-        agent_service._prepare(cfg)
-    assert calls == []
-    private_file(Path(str(workspace) + ".volume.json"), "manifest")
-    private_file(image, "image")
+    cfg = {"credential_env_file": "/private/key.env", "owner_workdir": str(agent_service.ROOT)}
     agent_service._prepare(cfg)
-    assert calls == [(workspace, image, 2 * 1024 ** 3)]
 
 
 def test_rendered_user_unit_quotes_paths_and_has_graceful_stop_contract() -> None:

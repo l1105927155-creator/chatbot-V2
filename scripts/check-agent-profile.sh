@@ -13,8 +13,10 @@ node tests/native/agent-profile-decision-guide.mjs
 node tests/native/agent-profile-scenario.mjs
 node tests/native/agent-profile-web-boundaries.mjs
 node tests/native/agent-profile-owner-sandbox.mjs
+node tests/native/group-execution-boundaries.mjs
+node tests/native/agent-profile-owner-host.mjs
 "$repo_root/.runtime/astrbot/.venv/bin/python" -m pytest -q \
-  tests/native/test_agent_profile_startup.py tests/native/test_agent_profile_owner_startup.py tests/native/test_agent_profile_owner_acp.py tests/native/test_agent_profile_acp.py \
+  tests/native/test_agent_profile_startup.py tests/native/test_agent_profile_owner_startup.py tests/native/test_agent_profile_owner_host_acp.py tests/native/test_agent_profile_acp.py \
   tests/native/test_agent_profile_compaction_acp.py \
   tests/native/test_agent_profile_research.py \
   tests/native/test_agent_research_limits.py \
@@ -23,6 +25,7 @@ node tests/native/agent-profile-owner-sandbox.mjs
   tests/native/test_agent_profile_recovery.py \
   tests/native/test_agent_profile_mcp.py tests/test_persona_state.py tests/test_trust_domain.py \
   tests/native/test_owner_volume.py \
+  tests/test_group_volume.py tests/native/test_group_sandbox_runtime.py tests/native/test_group_sandbox_acp.py \
   tests/contracts/test_agent_profile_runtime.py
 "$repo_root/.runtime/astrbot/.venv/bin/python" -m pytest -q \
   tests/test_runtime_audit.py tests/contracts/test_runtime_audit_send.py \

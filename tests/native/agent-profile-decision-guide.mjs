@@ -49,7 +49,7 @@ try {
   ]
   ctx.systemPrompt.tools(() => ({ schemas: base }))
   registration = await ctx.agents.register(owner)
-  const guide = ctx.plugin(DecisionGuide)
+  const guide = ctx.plugin(DecisionGuide, { executionProfile: 'owner-host' })
   // Register while apply() is still installing guidance on the already-live
   // owner. Lifecycle listeners must be active before that awaited setup so
   // this concurrently created Agent cannot miss its scoped installation.
@@ -77,7 +77,7 @@ try {
   assert.deepEqual(changed.keep, base[3])
   assert.equal(changed.web_search.description.includes('可能变化'), true)
   assert.equal(changed.web_fetch.description.includes('具体相关 URL'), true)
-  assert.equal(changed.bash.description.includes('Owner 私聊工作区'), true)
+  assert.equal(changed.bash.description.includes('Owner 独立私聊'), true)
   for (const original of base) {
     const actual = changed[original.name]
     assert.ok(actual)
@@ -98,12 +98,15 @@ try {
   const unloaded = await ctx.systemPrompt.assemble({ scope: owner })
   assert.equal(unloaded.sections.some(section => section.name === 'v2:decision-guide'), false)
   assert.equal(byName(unloaded.tools).web_search.description, base[0].description)
-  const reloaded = ctx.plugin(DecisionGuide)
+  const reloaded = ctx.plugin(DecisionGuide, { executionProfile: 'owner-host' })
   await reloaded
   fibers.push(reloaded)
   const restored = await ctx.systemPrompt.assemble({ scope: owner })
   assert.equal(restored.sections.filter(section => section.name === 'v2:decision-guide').length, 1)
   assert.equal(byName(restored.tools).web_search.description.startsWith('用于可能变化'), true)
+  assert.match(DecisionGuide.bashGuidance('group-sandbox'), /断网.*60秒/)
+  assert.match(DecisionGuide.bashGuidance('owner-host'), /120秒.*600秒/)
+  assert.equal(DecisionGuide.bashGuidance('safe-chat'), undefined)
   console.log(JSON.stringify({ scopedGuide: true, repeatedAssemblyStable: true,
     schemaIdentityAndParametersPreserved: true, agentScopeIsolation: true,
     concurrentStartupInstall: true, unloadAndReload: true }))

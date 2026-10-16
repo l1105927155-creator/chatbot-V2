@@ -21,14 +21,14 @@ def verifier(tmp_path):
     return test
 
 
-@pytest.mark.parametrize("domain", ["chat", "owner"])
+@pytest.mark.parametrize("domain", ["chat", "owner", "owner-host", "group-" + "a" * 64])
 def test_native_result_requires_same_session_success_and_audit_call_completion(tmp_path, domain):
     test=verifier(tmp_path)
     cid='actual-call';hashed=hashlib.sha256(cid.encode()).hexdigest()[:24]
-    trace=[{'event':'tool/start','call_id':hashed,'tool':'web_fetch','session_id':'sid','domain':domain},
+    trace=[{'event':'tool/start','call_id':hashed,'tool':'web_fetch','session_id':'sid','domain':'owner' if domain.startswith('owner') else 'chat'},
            {'event':'tool/end','call_id':hashed,'status':'completed'}]
     test.trace=lambda _:trace
-    path=tmp_path/f'repo/.runtime/dsh-home-{domain}/sessions/sid/session.v4.jsonl'
+    path=tmp_path/f'repo/.runtime/dsh-home-{domain}/sessions/cwd-scope/sid/session.v4.jsonl'
     path.parent.mkdir(parents=True)
     call={'type':'tool/call','data':{'callId':cid,'name':'web_fetch','turn':3,'arguments':'{}'}}
     result={'type':'tool/result','data':{'turn':3,'message':{'toolCallId':cid,'isError':False}}}

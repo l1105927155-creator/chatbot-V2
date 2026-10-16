@@ -10,6 +10,6 @@
 - cancel/recover 必须发送普通 Owner 私聊命令。先等实际工具开始，取消后检查子进程/副作用；按证据中的 exact pending 恢复，并核对新输入没有一起消费。
 - 导出 `/api/evidence/export`，按 conversation、SID、native turn、call_id、message_id 对照 Journal/Router/审计/原生记录。回复文字和故障规则 hit 本身都不足以证明工具成功或失败。
 - 证据有界、非原子；超时、截断、游标过期、反馈缺失需如实报告。保留失败日志，不覆盖成通过。
-- 结束后仅停止自己启动的 supervisor，确认子进程退出和 Owner 卷卸载，保留测试数据与报告。
+- 结束后仅停止自己启动的 supervisor，确认子进程退出和本实例群聊卷卸载，保留测试数据与报告。
 
 完整无付费回归：`.runtime/astrbot/.venv/bin/python scripts/check-sandbox-expansion.py`。

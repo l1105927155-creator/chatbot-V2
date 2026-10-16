@@ -237,6 +237,31 @@ def test_recovery_rejects_unreviewed_or_running_state_without_drain(tmp_path, ca
     assert s.get("qq", "1", "group:3") == before
 
 
+def test_fresh_execution_session_resumes_after_migrated_cursor_without_replay(tmp_path):
+    j = journal.JournalStore(tmp_path / "journal.sqlite3")
+    old = state.StateStore(tmp_path / "legacy.sqlite3")
+    legacy = old.get_or_create("qq", "1", "group:3", "old-session")
+    first = append(j, "previously consumed", "in-1")
+    legacy = old.advance("qq", "1", "group:3", legacy.session_id, first.journal_id)
+    target = state.StateStore(tmp_path / "new-generation.sqlite3")
+    migrated = target.import_mapping(legacy, "fresh-execution-session")
+    wake = append(j, "new request", "in-2")
+    dsh = FakeDsh()
+    svc = service.ChatService(j, target, dsh, domain="chat", execution_profile="group-sandbox")
+    replies = []
+
+    async def send(text):
+        replies.append(text)
+
+    asyncio.run(svc.handle(journal.Conversation("qq", "1", "group:3"), "in-2", send))
+
+    assert migrated.last_seen_journal_id == first.journal_id
+    assert dsh.calls[0][0] == "fresh-execution-session"
+    assert "previously consumed" not in dsh.calls[0][1]
+    assert "new request" in dsh.calls[0][1]
+    assert target.get("qq", "1", "group:3").last_seen_journal_id == wake.journal_id
+
+
 def test_failed_drain_keeps_pending_and_other_conversation_unchanged(tmp_path):
     class FailedDrain(FakeDsh):
         def drain_session(self, _sid):
@@ -478,6 +503,7 @@ def test_trusted_source_with_mcp_preserves_server_binding_and_actual_requester(t
         'platform_id': 'qq', 'bot_id': '1', 'conversation_key': 'private:2',
         'requester_id': '2', 'inbound_message_id': 'private-wake',
     }
+    assert service.ChatService(j, s, dsh, trusted_sources=True).domain == "chat"
 
 
 

@@ -37,14 +37,20 @@ class ChatService:
     MAX_ROW_BYTES = 8 * 1024
 
     def __init__(self, journal: Any, state: Any, dsh: Any, mcp: Any = None,
-                 trusted_sources: bool = False, audit=None) -> None:
+                 trusted_sources: bool = False, audit=None, domain: str | None = None,
+                 execution_profile: str | None = None) -> None:
         self.journal = journal
         self.state = state
         self.dsh = dsh
         self.mcp = mcp
         self.trusted_sources = trusted_sources
         self.audit = audit
-        self.domain = "owner" if trusted_sources else "chat"
+        self.domain = domain or "chat"
+        if self.domain not in {"owner", "chat"}:
+            raise ValueError("unknown router trust domain")
+        self.execution_profile = execution_profile or ("owner-host" if self.domain == "owner" else "safe-chat")
+        if self.execution_profile not in {"owner-host", "group-sandbox", "safe-chat"}:
+            raise ValueError("unknown execution profile")
         self._queued = 0
         self._locks: dict[tuple[str, str, str], asyncio.Lock] = {}
         self._active_runs: dict[tuple[str, str, str], _ActiveRun] = {}

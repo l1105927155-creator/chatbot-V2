@@ -10,7 +10,7 @@
 2. QQ 表情、图片、文件、合并转发；测试媒体和原始消息查看。
 3. 重复入站、断连、API 超时、发送反馈丢失、显式回放和重启恢复。
 
-界面中的成员身份是本机测试数据，不能作为真实 QQ 身份凭据。Owner 测试须在启动时显式启用，使用独立的受限运行时。
+界面中的成员身份是本机测试数据，不能作为真实 QQ 身份凭据。Owner 测试须在启动时显式启用。执行契约 v2 下，模拟 Owner 也使用部署 Linux 账户的主机能力；独立测试数据目录不限制其主机权限，只对事先准备的安全文件进行验证。
 
 ## 启动与使用
 
@@ -51,7 +51,7 @@ V2_DSH_PROVIDER=deepseek-official V2_DSH_MODEL=deepseek-v4-flash \
 
 默认目录为 `.runtime/qq-sandbox/`，独立保存 AstrBot 配置、Journal、router 状态、DSH home/workspace、消息和媒体夹具。运行目录不是生产目录的备份，不读取或复制生产聊天历史、插件配置或凭据。
 
-启动器从仓库自己的 V2 插件建立快照，通过独立路径承载 Router 推导出的 DSH 数据位置；锁定版 AstrBot/DSH 可执行程序只作为代码依赖复用。升级插件后停止并重新启动沙箱即可刷新代码快照，已有测试状态继续保留。
+启动器从仓库自己的 V2 插件建立快照，通过独立路径承载 Router 推导出的 DSH 数据位置；锁定版 AstrBot/DSH 可执行程序只作为代码依赖复用。同一执行契约下，升级插件后停止并重新启动沙箱即可刷新代码快照，已有测试状态继续保留。旧契约实例不能因重启静默扩权；验证 v2 执行域请使用全新 `--data-dir`，旧实例数据保留。
 
 默认端口为 OneBot `6220`、窗口 `6221`、MCP `6222`，仅监听 loopback。模拟端只响应本机独立适配器的 API，不将消息转发到 NapCat。生产端口和服务保持独立。
 
@@ -99,14 +99,14 @@ Chromium 浏览器验收通过 7 组操作：身份切换、真实 @Bot、确定
 
 ```bash
 /home/abasun/chatbot-V2/scripts/run-sandbox.sh --dsh-mode scripted \
-  --owner-id 90009 --owner-volume-mib 32 \
+  --owner-id 90009 \
   --data-dir /home/abasun/chatbot-V2/.runtime/my-owner-sandbox \
   --onebot-port 6320 --ui-port 6321 --mcp-port 6322
 ```
 
 `scripted` 是确定性模型/网页夹具，不能证明真实模型推理或真实网站行为。`live` 使用真实 provider；`disabled`（或 `--no-dsh`）不启动自由聊天。Owner 的私聊身份只在启动时确定并写入私有场景清单；同一数据目录不能更换或取消 Owner，须创建新目录。切换窗口身份不会改变授权。同一个 Owner 在群内仍使用 chat 工具域。
 
-Owner 复用产品的 bwrap、systemd scope 和 ext4 卷限制；卷默认 1024 MiB，最小 32 MiB。启动失败直接报错，不降级为普通目录。只允许该场景卷内的受限执行；停止后卸载，数据保留。需要本机已满足产品 Owner 运行时依赖。
+执行契约 v2：Owner 私聊使用主机原生文件工具与 Bash，默认工作目录为该测试实例的 staged repo；默认120秒、最长600秒，网络按主机配置。每个准入群使用独立1GiB持久 ext4 卷、512MiB内存、64进程、1核CPU、最长60秒的断网 Bash；不暴露宿主原生文件工具。同群 Owner 也只有群聊沙箱。普通私聊保持 safe-chat。停止后仅卸载该实例的群卷，数据保留；隔离或配额不可用即拒绝执行。旧 `--owner-volume-mib` 仅兼容命令行，不改变新契约。
 
 打开“测试控制”面板：
 
@@ -134,7 +134,7 @@ Owner 复用产品的 bwrap、systemd scope 和 ext4 卷限制；卷默认 1024 
 | `POST /api/wait` | `{event:"tool/start",tool:"bash",conversation_key:"private:90009",after:"<cursor>",timeout_seconds:30}`；返回 matched 和实际事件 |
 | `GET /api/evidence` / `GET /api/evidence/export` | 只读 JSON；可带 conversation_key/session_id |
 
-省略 wait 的 after 表示只等待请求开始之后的新事件；先取 cursor 再触发消息可避免错过事件。原生探针内部接口需要进程私有令牌，助理测试应使用上述公开接口，不伪造内部事件。工具计划仍受实际工具 schema 和权限限制；不能用脚本计划给群聊增加 Bash。
+省略 wait 的 after 表示只等待请求开始之后的新事件；先取 cursor 再触发消息可避免错过事件。原生探针内部接口需要进程私有令牌，助理测试应使用上述公开接口，不伪造内部事件。工具计划仍受实际工具 schema 和逐操作身份校验限制；不能用脚本计划为普通私聊增加执行能力，或把群聊 Bash 切换为宿主执行。
 
 扩建回归命令（创建唯一独立目录、随机端口，结束自动停止并卸载）：
 
@@ -151,3 +151,13 @@ Owner 复用产品的 bwrap、systemd scope 和 ext4 卷限制；卷默认 1024 
 扩建验收结果见 [S1–S5 扩建验收](sandbox-expansion-validation-2026-10-15.md)。
 
 2026-10-15 用户要求更新后重启继续复核：默认6221后端已重启且保留原Journal/Router状态；独立scripted扩建7组、61项聚焦测试通过，新增真实DeepSeek Owner补测7组通过（含执行、取消/exact recover、model错误注入、Research和重启）。首轮验证器错误及中断记录保留；详见 [更新后复核及证据](sandbox-revalidation-2026-10-15.md)。最新对话只读副本可在 `http://127.0.0.1:6223/?run=live` 查看，原6221仍用于手动测试。
+
+## 执行契约 v2 验证入口
+
+```bash
+.runtime/astrbot/.venv/bin/python scripts/check-execution-domains.py
+V2_DSH_PROVIDER=deepseek-official V2_DSH_MODEL=deepseek-v4-flash \
+  .runtime/astrbot/.venv/bin/python scripts/check-execution-domains.py --live
+```
+
+使用全新目录、独立端口和启动时绑定的模拟 Owner，经原始事件、AstrBot 回复、canonical Journal、Router 状态、原生 Session/call/result 关联验证。scripted 仅证明程序和真实工具链路；live 另检验真实模型。运行输出 `result.json` 路径，失败保留，不覆盖成通过。资源超限、身份伪造与进程清理还须结合原生边界测试；真实 QQ 和三天观察另记。历史验收结果仅证明各自运行时的旧契约。

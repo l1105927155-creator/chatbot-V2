@@ -21,13 +21,16 @@ ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = ROOT / ".runtime"
 CONFIG_PATH = RUNTIME / "agent-service.json"
 LOCK_PATH = RUNTIME / "agent-bot.lock"
-WORKSPACE = RUNTIME / "dsh-workspace-owner"
-IMAGE = RUNTIME / "owner-storage/workspace.ext4"
 PYTHON = ROOT / ".runtime/astrbot/.venv/bin/python"
 ASTRBOT = ROOT / ".runtime/astrbot"
 DSH = ROOT / ".runtime/dsh-runtime/node_modules/.bin/dsh"
-CONFIG_KEYS = {"version", "provider", "model", "allowed_conversations", "owners",
-               "mcp_port", "credential_env_file"}
+CONFIG_KEYS = {"version", "execution_contract", "provider", "model", "allowed_conversations", "owners",
+               "mcp_port", "credential_env_file", "owner_workdir", "group_sandbox"}
+GROUP_SANDBOX_KEYS = {"storage_mib", "memory_mib", "tasks", "cpu_quota", "max_command_seconds", "network"}
+GROUP_SANDBOX_CONTRACT = {
+    "storage_mib": 1024, "memory_mib": 512, "tasks": 64,
+    "cpu_quota": 100, "max_command_seconds": 60, "network": False,
+}
 
 
 def _private_regular(path: Path) -> tuple[int, os.stat_result]:
@@ -53,7 +56,9 @@ def _load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
         except OSError:
             pass
         raise
-    if not isinstance(data, dict) or set(data) != CONFIG_KEYS or data.get("version") != 1 or type(data.get("version")) is not int:
+    if (not isinstance(data, dict) or set(data) != CONFIG_KEYS
+            or data.get("version") != 2 or type(data.get("version")) is not int
+            or data.get("execution_contract") != 2 or type(data.get("execution_contract")) is not int):
         raise ValueError("invalid service config schema")
     for key in ("provider", "model"):
         value = data[key]
@@ -77,6 +82,16 @@ def _load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
     credential = data["credential_env_file"]
     if not isinstance(credential, str) or not Path(credential).is_absolute():
         raise ValueError("credential_env_file must be an absolute path")
+    owner_workdir = data["owner_workdir"]
+    if not isinstance(owner_workdir, str) or not Path(owner_workdir).is_absolute():
+        raise ValueError("owner_workdir must be an absolute path")
+    group_sandbox = data["group_sandbox"]
+    if not isinstance(group_sandbox, dict) or set(group_sandbox) != GROUP_SANDBOX_KEYS:
+        raise ValueError("group_sandbox must match the verified execution contract")
+    if any(type(group_sandbox[key]) is not int for key in GROUP_SANDBOX_KEYS - {"network"}):
+        raise ValueError("group_sandbox integer fields must use exact integer values")
+    if type(group_sandbox["network"]) is not bool or group_sandbox != GROUP_SANDBOX_CONTRACT:
+        raise ValueError("group_sandbox must match the verified execution contract")
     return data
 
 
@@ -103,19 +118,13 @@ def _prepare(config: dict[str, Any]) -> None:
     if (not PYTHON.is_file() or not os.access(PYTHON, os.X_OK) or not DSH.exists()
             or shutil.which("node") is None):
         raise RuntimeError("pinned AstrBot/DSH runtime is incomplete")
-    # prepare() safely validates and remounts an existing matching manifest. It
-    # may create a new image, so require both known artifacts before calling it.
-    manifest = Path(str(WORKSPACE) + ".volume.json")
-    if not manifest.is_file() or not IMAGE.is_file():
-        raise RuntimeError("known bounded owner volume manifest and image are required")
-    sys.path.insert(0, str(ROOT / "dsh/plugins/agent-profile"))
-    from owner_volume import _manifest, prepare
-    volume = _manifest(WORKSPACE)
-    if volume["image"] != str(IMAGE):
-        raise RuntimeError("owner volume does not match configured backing image")
-    prepare(WORKSPACE, IMAGE, size_bytes=volume["bytes"])
     if not config["credential_env_file"]:
         raise ValueError("credential path missing")
+    workdir = Path(config["owner_workdir"]).resolve(strict=True)
+    if not workdir.is_dir():
+        raise RuntimeError("Owner working directory must be an existing directory")
+    # Runtime code prepares and verifies each admitted group's identity-keyed
+    # volume. Service preflight never creates, remounts, or adopts a group disk.
 
 
 def _runtime_env(config: dict[str, Any]) -> dict[str, str]:
@@ -126,6 +135,14 @@ def _runtime_env(config: dict[str, Any]) -> dict[str, str]:
         "V2_QQ_OWNERS": json.dumps(config["owners"], separators=(",", ":")),
         "V2_QQ_ALLOWED_CONVERSATIONS": ",".join(config["allowed_conversations"]),
         "V2_MCP_PORT": str(config["mcp_port"]),
+        "V2_EXECUTION_CONTRACT": str(config["execution_contract"]),
+        "V2_OWNER_WORKDIR": config["owner_workdir"],
+        "V2_GROUP_STORAGE_MIB": str(config["group_sandbox"]["storage_mib"]),
+        "V2_GROUP_MEMORY_MIB": str(config["group_sandbox"]["memory_mib"]),
+        "V2_GROUP_TASKS": str(config["group_sandbox"]["tasks"]),
+        "V2_GROUP_CPU_QUOTA": str(config["group_sandbox"]["cpu_quota"]),
+        "V2_GROUP_MAX_COMMAND_SECONDS": str(config["group_sandbox"]["max_command_seconds"]),
+        "V2_GROUP_NETWORK": "1" if config["group_sandbox"]["network"] else "0",
         "LC_MESSAGES": "C",
         "ASTRBOT_ROOT": str(ASTRBOT),
     })

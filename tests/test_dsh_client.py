@@ -155,6 +155,47 @@ def test_acp_startup_and_restart_do_not_create_sessions_or_prompt(tmp_path, monk
     assert all(t.config.env['V2_DSH_MODEL']=='test-model' for t in transports)
 
 
+def test_group_acp_launch_uses_private_home_but_session_cwd_is_workspace(tmp_path, monkeypatch):
+    import deepseek_harness.client
+    transports = []
+
+    class Transport:
+        def __init__(self, config):
+            self.config = config
+            self.calls = []
+            transports.append(self)
+        def start(self): pass
+        def request(self, method, params, *, response_model, **kwargs):
+            self.calls.append((method, params))
+            if method == "initialize":
+                return response_model(agentCapabilities={"sessionCapabilities": {"resume": {}}})
+            if method == "session/new":
+                return response_model(sessionId="new-group-session")
+            return response_model()
+        def close(self): pass
+
+    monkeypatch.setattr(deepseek_harness.client, "HarnessClient", Transport)
+    home = tmp_path / "private-home"
+    workspace = tmp_path / "untrusted-workspace"
+    home.mkdir(mode=0o700)
+    workspace.mkdir(mode=0o700)
+    instructions = tmp_path / "instructions.md"
+    instructions.write_text("test")
+    runtime = module.AcpRuntime(
+        dsh_bin=tmp_path / "dsh", dsh_home=home, workspace=workspace,
+        patch=tmp_path / "v2-agent-group-sandbox.patch.yml",
+        instructions=instructions, provider="test-provider", model="test-model",
+        execution_profile="group-sandbox",
+    )
+
+    assert transports[0].config.cwd == str(home)
+    assert runtime.new_session() == "new-group-session"
+    runtime.resume("new-group-session")
+    session_calls = [params for method, params in transports[0].calls if method in {"session/new", "session/resume"}]
+    assert session_calls[0]["cwd"] == session_calls[1]["cwd"] == str(workspace)
+    runtime.close()
+
+
 def test_native_mcp_bindings_follow_session_create_and_restart_resume(tmp_path):
     runtimes=[]
     class McpRuntime(Runtime):
@@ -210,6 +251,45 @@ def test_authorized_run_publishes_only_current_source_and_cleans_after_prompt(tm
     assert client.runtime.calls[-1] == (session, 'delta')
     client.close()
     assert not Path(config['source_dir']).exists()
+
+
+def test_owner_host_profile_keeps_private_home_but_accepts_host_workdir(tmp_path):
+    kw = settings(tmp_path)
+    owner_patch = tmp_path / "v2-agent-owner.patch.yml"
+    owner_patch.touch()
+    work = tmp_path / "repository"
+    work.mkdir(mode=0o755)
+    kw.update(patch=owner_patch, workspace=work, enable_authorization=True,
+              execution_profile="owner-host",
+              owner_shell_env={"PATH": "/usr/bin", "HTTPS_PROXY": "http://127.0.0.1:9"})
+    client = module.DshClient(**kw)
+    try:
+        assert client.settings["workspace"] == work
+        assert kw["dsh_home"].stat().st_mode & 0o077 == 0
+        assert not client.scope_root
+        assert client.settings["owner_shell_env"] == kw["owner_shell_env"]
+    finally:
+        client.close()
+
+
+def test_group_sandbox_profile_uses_authorized_source_and_separate_runtime(tmp_path):
+    kw = settings(tmp_path)
+    group_patch = tmp_path / "v2-agent-group-sandbox.patch.yml"
+    group_patch.touch()
+    work = tmp_path / "volume" / "workspace"
+    work.mkdir(parents=True)
+    kw.update(patch=group_patch, workspace=work, enable_authorization=True,
+              execution_profile="group-sandbox",
+              group_runtime={"workspaceRoot": str(work), "platformId": "p",
+                             "botId": "b", "groupId": "g"})
+    client = module.DshClient(**kw)
+    try:
+        assert client.turn_sources is not None
+        assert client.scope_root is None
+        assert client.settings["workspace"] == work
+        assert client.settings["group_runtime"]["groupId"] == "g"
+    finally:
+        client.close()
 
 
 def test_authorized_run_cleans_source_after_runtime_failure_and_restart_uses_new_epoch(tmp_path):

@@ -84,7 +84,8 @@ class _BearerAuth:
                         result = await result
                     # Health is loopback-only operational metadata. Never
                     # expose identities, credentials, configuration or errors.
-                    flags = {"core_ready", "ready", "closing", "onebot_connected", "owner_volume_ready",
+                    flags = {"core_ready", "ready", "closing", "onebot_connected", "owner_host_ready",
+                             "group_sandboxes_ready",
                              "acp_ready", "journal_ready", "state_ready", "degraded"}
                     numbers = {"pid", "active_turns", "queued", "pending_conversations", "quarantined_sessions"}
                     data = {key: value for key, value in result.items() if

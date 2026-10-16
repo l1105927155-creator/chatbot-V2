@@ -81,20 +81,25 @@ class FakeJournal:
 
 
 def make_router(*, connected=True, api=True, events=True, closing=False,
-                owner_volume=True, acp_ready=True, journal_ready=True,
+                owner_host_ready=True, groups_ready=True, acp_ready=True, journal_ready=True,
                 state_ready=True):
     router = V2DshRouter.__new__(V2DshRouter)
     router._initialized = True
     router._closing = closing
     router._active = set()
+    router.allowed_conversations = frozenset({"group:123", "private:7"})
     router.owners = [SimpleNamespace(platform_id="qq", bot_id="42", user_id="7")]
-    router.clients = {"chat": FakeClient(acp_ready), "owner": FakeClient(acp_ready)}
-    router.services = {"chat": FakeService(state_ready), "owner": FakeService(state_ready)}
+    router.clients = {"chat": FakeClient(acp_ready), "owner": FakeClient(acp_ready and owner_host_ready),
+                      "group:test": FakeClient(acp_ready)}
+    router.services = {"chat": FakeService(state_ready), "owner": FakeService(state_ready),
+                       "group:test": FakeService(state_ready)}
     router.mcp = SimpleNamespace(journal=FakeJournal(journal_ready))
     router.audit = SimpleNamespace(write_errors=0)
-    router._verify_workspace = ((lambda _path: os.open(os.devnull, os.O_RDONLY))
-                                if owner_volume else
-                                (lambda _path: (_ for _ in ()).throw(RuntimeError("not mounted"))))
+    verify = ((lambda _path: os.open(os.devnull, os.O_RDONLY)) if groups_ready else
+              (lambda _path: (_ for _ in ()).throw(RuntimeError("group volume unavailable"))))
+    router._group_runtimes = {"group:test": {"workspace": Path("/existing/group"),
+        "volume_module": SimpleNamespace(verified_group_workspace=verify),
+        "platform_id": "qq", "bot_id": "42", "group_id": "123"}}
     platforms = [FakePlatform(api=api, events=events)] if connected else []
     router.context = SimpleNamespace(platform_manager=SimpleNamespace(get_insts=lambda: platforms))
     return router
@@ -106,8 +111,8 @@ def test_core_ready_while_onebot_is_disconnected_without_prompt_or_session() -> 
     assert result["core_ready"] is True
     assert result["ready"] is False
     assert result["onebot_connected"] is False
-    assert result["acp_ready"] and result["journal_ready"] and result["owner_volume_ready"]
-    assert sum(client.health_calls for client in router.clients.values()) == 2
+    assert result["acp_ready"] and result["journal_ready"] and result["owner_host_ready"] and result["group_sandboxes_ready"]
+    assert sum(client.health_calls for client in router.clients.values()) >= 3
     assert all(client.prompt_calls == client.session_creations == 0 for client in router.clients.values())
 
 
@@ -119,7 +124,8 @@ def test_ready_requires_matching_onebot_api_and_event_clients() -> None:
 
 @pytest.mark.parametrize("broken,flag", [
     ({"closing": True}, "closing"),
-    ({"owner_volume": False}, "owner_volume_ready"),
+    ({"owner_host_ready": False}, "owner_host_ready"),
+    ({"groups_ready": False}, "group_sandboxes_ready"),
     ({"acp_ready": False}, "acp_ready"),
     ({"journal_ready": False}, "journal_ready"),
     ({"state_ready": False}, "state_ready"),

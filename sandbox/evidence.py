@@ -145,9 +145,23 @@ class EvidenceSnapshotter:
             result.append({"journal_id": row["journal_id"], "message": _safe({**row, "content": content})})
         return result
 
+    def state_sources(self) -> list[tuple[str, Path]]:
+        """Known legacy and execution-v2 stores, discovered read-only."""
+        sources = list(self.state_paths.items())
+        state_root = self.root / "astrbot/data/plugin_data/v2_dsh_router"
+        owner_host = state_root / "state-owner-host.sqlite3"
+        if owner_host.exists():
+            sources.append(("owner", owner_host))
+        for path in sorted(state_root.glob("state-group-*.sqlite3")):
+            # Filename is a trusted runtime mapping, not an extra trust domain.
+            suffix = path.stem.removeprefix("state-group-")
+            if len(suffix) == 64 and all(ch in "0123456789abcdef" for ch in suffix):
+                sources.append(("chat", path))
+        return sources
+
     def _states(self, conversation_key: str | None) -> list[dict[str, Any]]:
         result = []
-        for domain, path in self.state_paths.items():
+        for domain, path in self.state_sources():
             where, params = ("WHERE conversation_key=?", (conversation_key,)) if conversation_key else ("", ())
             rows = self._db_rows(path, f"SELECT * FROM conversation_state {where} ORDER BY conversation_key LIMIT ?",
                                  (*params, MAX_ROWS))

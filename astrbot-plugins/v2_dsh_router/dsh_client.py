@@ -6,6 +6,7 @@ import threading
 import stat
 import copy
 import time
+import json
 from pathlib import Path
 from typing import Any
 
@@ -30,7 +31,8 @@ except ImportError:  # pragma: no cover - exercised by tests loading this file d
 class AcpRuntime:
     """Use the pinned Python transport with DSH's native ACP methods."""
     def __init__(self, *, dsh_bin, dsh_home, workspace, patch, instructions, provider, model,
-                 source_dir=None, source_epoch=None, scope_root=None):
+                 source_dir=None, source_epoch=None, scope_root=None,
+                 execution_profile=None, owner_shell_env=None, group_runtime=None):
         from deepseek_harness.client import HarnessClient, HarnessConfig
         from pydantic import BaseModel, ConfigDict
 
@@ -67,7 +69,10 @@ class AcpRuntime:
         env = {"LC_MESSAGES": "C",
                "DSH_SYSTEM_PROMPT": instructions.read_text(encoding="utf-8"),
                "V2_DSH_PROVIDER": provider, "V2_DSH_MODEL": model}
-        if Path(patch).name in {"v2-agent-group.patch.yml", "v2-agent-owner.patch.yml"}:
+        if execution_profile:
+            env["V2_EXECUTION_PROFILE"] = execution_profile
+        if Path(patch).name in {"v2-agent-group.patch.yml", "v2-agent-owner.patch.yml",
+                                "v2-agent-group-sandbox.patch.yml"}:
             env.update(DIRECT_NETWORK_ENV)
             env.update({
                 "V2_AGENT_SKILLS_DIR": str(Path(patch).resolve().parent.parent / "skills"),
@@ -76,15 +81,32 @@ class AcpRuntime:
             })
         if Path(patch).name == "v2-agent-owner.patch.yml":
             env["V2_QQ_OWNERS"] = os.environ.get("V2_QQ_OWNERS", "[]")
+        if owner_shell_env is not None:
+            env["V2_OWNER_SHELL_ENV_JSON"] = json.dumps(owner_shell_env, separators=(",", ":"))
+        if group_runtime:
+            env.update({
+                "V2_GROUP_WORKSPACE_ROOT": str(group_runtime["workspaceRoot"]),
+                "V2_GROUP_PLATFORM_ID": str(group_runtime["platformId"]),
+                "V2_GROUP_BOT_ID": str(group_runtime["botId"]),
+                "V2_GROUP_ID": str(group_runtime["groupId"]),
+            })
         if source_dir is not None:
             env.update({"V2_TURN_SOURCE_DIR": str(source_dir),
-                        "V2_TURN_SOURCE_EPOCH": source_epoch,
-                        "V2_SCOPE_ROOT": str(scope_root)})
+                        "V2_TURN_SOURCE_EPOCH": source_epoch})
+            if scope_root is not None:
+                env["V2_SCOPE_ROOT"] = str(scope_root)
+        # The pinned CLI loads layered .env files from cwd before starting the
+        # isolated child runtime. Group workspaces are untrusted, so launch the
+        # outer DSH process from its private home; ACP sessions still receive
+        # the verified group workspace as cwd in new_session/resume below.
+        launch_cwd = str(dsh_home) if execution_profile == "group-sandbox" else self.workspace
         self.client = PromptWriteClient(HarnessConfig(
-            dsh_bin=str(dsh_bin), dsh_home=str(dsh_home), cwd=self.workspace,
+            dsh_bin=str(dsh_bin), dsh_home=str(dsh_home), cwd=launch_cwd,
             profile="sdk-minimal", patches=(str(patch),),
             env=env,
-            request_timeout_seconds=180,
+            # Owner commands can run up to 600 s in the pinned native Bash.
+            # None lets ACP use its native per-request timeout semantics.
+            request_timeout_seconds=None if execution_profile == "owner-host" else 180,
         ))
         try:
             self.client.start()
@@ -215,10 +237,19 @@ class DshClient:
     def __init__(self, *, dsh_bin: Path, dsh_home: Path, workspace: Path,
                  patch: Path, instructions: Path, provider: str | None = None,
                  model: str | None = None, harness_factory: Any = None,
-                 enable_authorization: bool = False):
+                 enable_authorization: bool = False, execution_profile: str | None = None,
+                 owner_shell_env: dict | None = None, group_runtime: dict | None = None):
         self.settings = {"dsh_bin": Path(dsh_bin).resolve(), "dsh_home": Path(dsh_home).resolve(),
                          "workspace": Path(workspace).resolve(), "patch": Path(patch).resolve(),
                          "instructions": Path(instructions).resolve()}
+        if execution_profile is not None:
+            if execution_profile not in {"owner-host", "group-sandbox", "safe-chat"}:
+                raise ValueError("unknown execution profile")
+            self.settings["execution_profile"] = execution_profile
+        if owner_shell_env is not None:
+            self.settings["owner_shell_env"] = dict(owner_shell_env)
+        if group_runtime is not None:
+            self.settings["group_runtime"] = dict(group_runtime)
         for name, value in (("provider", provider), ("model", model)):
             value = value if value is not None else os.environ.get("V2_DSH_" + name.upper())
             if not isinstance(value, str) or not value or value != value.strip() or any(ord(c) < 32 for c in value):
@@ -227,25 +258,40 @@ class DshClient:
         for key in ("dsh_bin", "patch", "instructions"):
             if not self.settings[key].is_file():
                 raise FileNotFoundError("V2 pinned DSH runtime or profile assets are missing")
-        owner_profile = self.settings["patch"].name == "v2-agent-owner.patch.yml"
+        owner_profile = (self.settings["patch"].name == "v2-agent-owner.patch.yml"
+                         or execution_profile == "owner-host")
         if owner_profile:
-            if Path(dsh_home).is_symlink() or Path(workspace).is_symlink():
+            if Path(dsh_home).is_symlink() or (execution_profile is None and Path(workspace).is_symlink()):
                 raise ValueError("owner runtime directory must not be a symlink")
-            home, work = self.settings["dsh_home"], self.settings["workspace"]
-            if home.is_relative_to(work) or work.is_relative_to(home):
-                raise ValueError("owner DSH home and workspace must be disjoint")
             if enable_authorization is not True:
                 raise ValueError("owner Profile requires host-issued trusted source authorization")
-        for key in ("dsh_home", "workspace"):
-            if owner_profile:
-                _prepare_owner_directory(Path(dsh_home if key == "dsh_home" else workspace))
-            else:
-                self.settings[key].mkdir(parents=True, exist_ok=True)
+            if execution_profile is None:
+                home, work = self.settings["dsh_home"], self.settings["workspace"]
+                if home.is_relative_to(work) or work.is_relative_to(home):
+                    raise ValueError("owner DSH home and workspace must be disjoint")
+        if enable_authorization and (execution_profile is not None or owner_profile):
+            _prepare_owner_directory(self.settings["dsh_home"])
+        else:
+            self.settings["dsh_home"].mkdir(parents=True, exist_ok=True)
+        if owner_profile and execution_profile is None:
+            _prepare_owner_directory(self.settings["workspace"])
+        elif not owner_profile and self.settings["patch"].name != "v2-agent-group-sandbox.patch.yml":
+            self.settings["workspace"].mkdir(parents=True, exist_ok=True)
+        elif owner_profile:
+            # For owner-host cwd is the real project root, not a private DSH home.
+            if self.settings["workspace"].is_symlink():
+                raise ValueError("owner working directory must not be a symlink")
+        elif self.settings["patch"].name == "v2-agent-group-sandbox.patch.yml":
+            if self.settings["workspace"].is_symlink():
+                raise ValueError("group workspace must not be a symlink")
         if not isinstance(enable_authorization, bool):
             raise ValueError("enable_authorization must be a bool")
         self.enable_authorization = enable_authorization
         self.turn_sources = TurnSourcePublisher(self.settings["dsh_home"]) if enable_authorization else None
-        self.scope_root = self.settings["dsh_home"] / "v2-conversation-scopes" if enable_authorization else None
+        # Legacy scoped executor configuration is not carried into the new
+        # owner-host or group-sandbox generations.
+        self.scope_root = (self.settings["dsh_home"] / "v2-conversation-scopes"
+                           if enable_authorization and execution_profile is None else None)
         self._lock = threading.Lock()
         self._close_lock = threading.Lock()
         self._session_locks = {}
@@ -255,20 +301,23 @@ class DshClient:
         self._closed = False
         self._runtime_stopped = False
         self._sources_closed = self.turn_sources is None
+        profile_patch_names = {"v2-agent-group.patch.yml", "v2-agent-owner.patch.yml",
+                               "v2-agent-group-sandbox.patch.yml"}
         self.personas = (PersonaStateStore(self.settings["dsh_home"] / "agent-bot-personas")
-                         if self.settings["patch"].name in {"v2-agent-group.patch.yml", "v2-agent-owner.patch.yml"} else None)
+                         if self.settings["patch"].name in profile_patch_names else None)
         self.scenes = (SceneStateStore(self.settings["dsh_home"] / "agent-bot-scenes")
-                       if self.settings["patch"].name in {"v2-agent-group.patch.yml", "v2-agent-owner.patch.yml"} else None)
+                       if self.settings["patch"].name in profile_patch_names else None)
         # Initialize the shared transport without creating a session or running
         # inference. Provider availability is established by real turns.
         try:
             if self.scope_root is not None:
                 self.scope_root.mkdir(mode=0o700, parents=True, exist_ok=True)
                 os.chmod(self.scope_root, 0o700)
-                # Only the native profile extension can access this configured root.
+                self.settings["scope_root"] = self.scope_root
+            if self.turn_sources is not None:
+                # Only the trusted native profile extension can access these facts.
                 self.settings.update(source_dir=self.turn_sources.directory,
-                                     source_epoch=self.turn_sources.epoch,
-                                     scope_root=self.scope_root)
+                                     source_epoch=self.turn_sources.epoch)
             self.runtime = (harness_factory or AcpRuntime)(**self.settings)
         except BaseException as startup_error:
             if self.turn_sources is not None:

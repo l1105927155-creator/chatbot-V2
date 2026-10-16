@@ -418,11 +418,11 @@ class SandboxApp:
     def _session_conversation(self, session_id):
         if not session_id:
             return None
-        for domain, path in self.evidence.state_paths.items():
+        keys = set()
+        for _domain, path in self.evidence.state_sources():
             rows = self.evidence._db_rows(path, "SELECT conversation_key FROM conversation_state WHERE session_id=?", (str(session_id),))
-            if rows:
-                return rows[0]["conversation_key"]
-        return None
+            keys.update(row["conversation_key"] for row in rows)
+        return next(iter(keys)) if len(keys) == 1 else None
 
     async def api_claim(self, request):
         self._native_authorized(request)

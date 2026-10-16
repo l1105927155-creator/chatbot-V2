@@ -1,0 +1,108 @@
+# Admitted groups receive one identity-keyed isolated execution environment.
+# File access is provided only through confined foreground Bash, never native FS tools.
+- id: persistent-bash
+  disabled: true
+- id: persistent-pwsh
+  disabled: true
+- id: terminal-bash
+  disabled: true
+- id: terminal-pwsh
+  disabled: true
+- id: jobs
+  disabled: true
+- id: sdk-app-startup
+  disabled: true
+- id: sdk-jsonrpc-server
+  disabled: true
+- id: sandbox-policy
+  config:
+    mode: workspace-write
+    workspaceRoot: !!js process.env.V2_GROUP_WORKSPACE_ROOT
+- id: sandbox
+  disabled: true
+- id: subprocess
+  disabled: true
+- insert:
+    - id: token-meter
+      name: '@deepseek-ai/dsh-token-meter'
+    - id: skill
+      name: '@deepseek-ai/dsh-skill'
+    - id: v2-agent-scenario
+      name: ../plugins/agent-profile/scenario.mjs
+      config:
+        stateRoot: !!js process.env.V2_SCENE_STATE_ROOT
+        skillsDir: !!js process.env.V2_AGENT_SKILLS_DIR
+        executionSkills: true
+    - id: v2-group-sandbox
+      name: ../plugins/agent-profile/group-sandbox.mjs
+      config:
+        sourceRoot: !!js process.env.V2_TURN_SOURCE_DIR
+        epoch: !!js process.env.V2_TURN_SOURCE_EPOCH
+        workspaceRoot: !!js process.env.V2_GROUP_WORKSPACE_ROOT
+        platformId: !!js process.env.V2_GROUP_PLATFORM_ID
+        botId: !!js process.env.V2_GROUP_BOT_ID
+        groupId: !!js process.env.V2_GROUP_ID
+    - id: v2-group-subprocess
+      name: ../plugins/agent-profile/group-subprocess.mjs
+    - id: tool-skill
+      name: '@deepseek-ai/dsh-tool-skill'
+    - id: bash-sandbox
+      name: '@deepseek-ai/dsh-bash-sandbox'
+      config:
+        timeoutMs: 60000
+        maxTimeoutMs: 60000
+    - id: tool-bash
+      name: '@deepseek-ai/dsh-tool-bash'
+      config:
+        enableRunInBackground: false
+        promoteOnTimeout: false
+    - id: shell-env
+      name: '@deepseek-ai/dsh-shell-env'
+    - id: web
+      name: '@deepseek-ai/dsh-web'
+      config:
+        searchProvider: deepseek-official
+        fetchProvider: http
+    - id: web-search-deepseek
+      name: '@deepseek-ai/dsh-web-search-deepseek'
+    - id: web-fetch-http
+      name: '@deepseek-ai/dsh-web-fetch-http'
+      config:
+        maxResponseBytes: 262144
+        maxBodyChars: 65536
+        timeoutMs: 30000
+        maxRedirects: 3
+    - id: tool-web
+      name: '@deepseek-ai/dsh-tool-web'
+      config:
+        searchMaxQueries: 2
+        searchMaxResults: 8
+        searchTimeoutMs: 60000
+        fetchTimeoutMs: 30000
+        fetchMaxOutputChars: 32000
+    - id: tool-call-timeout-policy
+      name: '@deepseek-ai/dsh-tool-call-timeout-policy'
+    - id: compaction-basic
+      name: '@deepseek-ai/dsh-compaction-basic'
+      config:
+        auto: true
+        thresholdRatio: 0.8
+        headroomTokens: 4096
+        retainRatio: 0.16
+        maxTokens: 1024
+    - id: v2-agent-persona
+      name: ../plugins/agent-profile/persona.mjs
+      config:
+        stateRoot: !!js process.env.V2_PERSONA_STATE_ROOT
+    - id: v2-agent-decision-guide
+      name: ../plugins/agent-profile/decision-guide.mjs
+      config:
+        executionProfile: group-sandbox
+    - id: v2-acp-startup
+      name: '@deepseek-ai/dsh-acp-app'
+    - id: v2-acp
+      name: '@deepseek-ai/dsh-acp'
+      inject: [acpAppStartup, loader]
+      config:
+        provider: !!js process.env.V2_DSH_PROVIDER
+        model: !!js process.env.V2_DSH_MODEL

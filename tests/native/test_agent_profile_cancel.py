@@ -62,7 +62,7 @@ async def scenario(base):
     journal = JournalStore(base / "journal.sqlite3")
     state = StateStore(base / "state.sqlite3")
     audit = AuditStore(base / "audit")
-    service = ChatService(journal, state, dsh, trusted_sources=True, audit=audit)
+    service = ChatService(journal, state, dsh, trusted_sources=True, audit=audit, domain="owner")
     conversation = Conversation("qq", "bot", "private:owner")
     journal.append(message_from_onebot("qq", {
         "post_type":"message", "message_type":"private", "self_id":"bot",

@@ -73,7 +73,7 @@ function assertPrivateDirectory(root) {
 export async function apply(ctx, config) {
   const root = config?.stateRoot
   const skillsDir = config?.skillsDir
-  const ownerSkills = config?.ownerSkills === true
+  const ownerSkills = config?.ownerSkills === true || config?.executionSkills === true
   assertPrivateDirectory(root)
   if (typeof skillsDir !== 'string' || !isAbsolute(skillsDir)) throw new Error('absolute skillsDir required')
   const fibers = new Map()

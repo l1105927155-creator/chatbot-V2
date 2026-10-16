@@ -90,7 +90,8 @@ async def scenario(base):
             provider="recovery-acceptance", model="scripted",
             enable_authorization=owner,
         )
-        service = ChatService(journal, state, first, trusted_sources=owner)
+        service = ChatService(journal, state, first, trusted_sources=owner,
+                              domain="owner" if owner else "chat")
         sends = []
         async def send(value): sends.append(value)
         turn = asyncio.create_task(service.handle(conversation, "old-turn", send))
@@ -134,7 +135,8 @@ async def scenario(base):
                 dsh_home=home, workspace=workspace, patch=profile, instructions=instructions,
                 provider="recovery-acceptance", model="scripted", enable_authorization=owner,
             )
-            service = ChatService(journal, StateStore(state.path), second, trusted_sources=owner)
+            service = ChatService(journal, StateStore(state.path), second, trusted_sources=owner,
+                                  domain="owner" if owner else "chat")
         before_recovery_calls = len(trace.read_text().splitlines())
         resolved = await service.resolve_pending(conversation, 1)
         assert resolved.session_id == sid

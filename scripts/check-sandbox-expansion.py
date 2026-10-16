@@ -42,8 +42,11 @@ class Expansion(base.Smoke):
         self.log = (self.directory / "runtime.log").open("ab")
         self.process = subprocess.Popen(cmd, cwd=ROOT, stdout=self.log, stderr=subprocess.STDOUT, start_new_session=True)
         self.wait(lambda: self.http("/api/state").get("connected"), "Owner isolated runtime ready", timeout=90)
-        self.workspace = self.directory / "repo/.runtime/dsh-workspace-owner"
-        assert os.path.ismount(self.workspace), "Owner workspace is not a real bounded mount"
+        self.workspace = self.directory / "repo"
+        def health_ready():
+            with urlopen(f"http://127.0.0.1:{self.mcp}/healthz", timeout=3) as response:
+                return json.load(response).get("ready")
+        self.wait(health_ready, "execution contract ready", timeout=90)
 
     def evidence(self, key=None):
         return self.request("GET", "/api/evidence" + ("?conversation_key=" + key if key else ""))
@@ -88,7 +91,7 @@ class Expansion(base.Smoke):
         try:
             self.start()
             assert self.http("/api/state")["scenario"]["owner_id"] == self.owner
-            self.check("startup-bound Owner with real bounded volume and separate domains")
+            self.check("startup-bound Owner host and separate group execution domains")
             self.request("POST", "/api/conversations", {"type": "group", "id": "91999", "title": "排除测试群"})
             before = len(self.events())
             event = self.wake(excluded)
@@ -111,10 +114,12 @@ class Expansion(base.Smoke):
             assert (self.workspace / "expansion.txt").read_text() == "OWNER_READY"
             states = self.evidence()["states"]
             assert any(s["domain"] == "owner" and s["conversation_key"] == owner for s in states)
-            self.plan(group, kind="tool", name="bash", arguments={"command": "printf ESCAPED > group-escape.txt", "workdir": "."})
-            self.answer(self.wake(group, sender=self.owner), "unavailable")
+            self.plan(group, kind="tool", name="bash", arguments={"command": "printf ESCAPED > group-escape.txt", "description": "Verify same Owner in group uses isolated workspace", "workdir": "."})
+            self.answer(self.wake(group, sender=self.owner))
+            groups = list((self.directory / "repo/.runtime/group-storage").glob("*/workspace/group-escape.txt"))
+            assert len(groups) == 1 and groups[0].read_text() == "ESCAPED"
             assert not (self.workspace / "group-escape.txt").exists()
-            self.check("Owner controls and confined Bash succeed; same identity in group cannot execute")
+            self.check("Owner host Bash and group Owner sandbox Bash use separate filesystems")
 
             # Scope/phase/nth: other conversations and earlier invocations do not consume the rule.
             rule = self.fault(group, "model", "truncate", nth=2, phase="after", limit_chars=5, delay_ms=1)
@@ -149,7 +154,7 @@ class Expansion(base.Smoke):
                 "description": "Sandbox cancellable descendant", "workdir": "."}, text_after="MUST_NOT_COMPLETE")
             pending_input = self.wake(owner, sender=self.owner)
             self.wait_native({"event": "tool/start", "tool": "bash", "conversation_key": owner}, after=cursor)
-            self.wait(lambda: (self.workspace / "cancel-ready.txt").exists(), "actual bounded Bash started")
+            self.wait(lambda: (self.workspace / "cancel-ready.txt").exists(), "actual host Bash started")
             cursor = self.http("/api/events")["cursor"]
             self.answer(self.wake(owner, "/v2agent cancel", sender=self.owner), "已请求取消")
             self.wait_native({"event": "dsh/stop", "stop_reason": "cancelled", "conversation_key": owner}, after=cursor)

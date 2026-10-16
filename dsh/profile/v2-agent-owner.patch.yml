@@ -1,4 +1,4 @@
-# Owner private-chat Agent Profile. Tool execution is admitted per current trusted turn.
+# Owner private-chat Agent Profile. Host tools require a fresh trusted source on each call.
 - id: persistent-bash
   disabled: true
 - id: persistent-pwsh
@@ -13,20 +13,41 @@
   disabled: true
 - id: sdk-jsonrpc-server
   disabled: true
-- id: sandbox
-  disabled: true
 - id: sandbox-policy
   config:
-    mode: workspace-write
+    mode: danger-full-access
     workspaceRoot: !!js process.cwd()
 - insert:
-    - id: v2-owner-sandbox
-      name: ../plugins/agent-profile/owner-sandbox.mjs
+    - id: v2-owner-host-guard
+      name: ../plugins/agent-profile/owner-host-guard.mjs
       config:
         sourceRoot: !!js process.env.V2_TURN_SOURCE_DIR
         epoch: !!js process.env.V2_TURN_SOURCE_EPOCH
         owners: !!js process.env.V2_QQ_OWNERS
-        workspaceRoot: !!js process.cwd()
+    - id: v2-owner-host-shell-env
+      name: ../plugins/agent-profile/owner-host-shell-env.mjs
+      config:
+        environment: !!js process.env.V2_OWNER_SHELL_ENV_JSON
+    - id: fs-local
+      name: '@deepseek-ai/dsh-fs-local'
+      config:
+        cwd: !!js process.cwd()
+    - id: tool-fs
+      name: '@deepseek-ai/dsh-tool-fs'
+    - id: tool-fs-search
+      name: '@deepseek-ai/dsh-tool-fs-search'
+      config:
+        sampleOverCapGlobResults: false
+    - id: fs-observation-policy
+      name: '@deepseek-ai/dsh-fs-observation-policy'
+    - id: bash-local
+      name: '@deepseek-ai/dsh-bash-local'
+      config:
+        cwd: !!js process.cwd()
+        timeoutMs: 120000
+        maxTimeoutMs: 600000
+    - id: bash-sandbox
+      disabled: true
     - id: token-meter
       name: '@deepseek-ai/dsh-token-meter'
     - id: skill
@@ -37,6 +58,7 @@
         stateRoot: !!js process.env.V2_SCENE_STATE_ROOT
         skillsDir: !!js process.env.V2_AGENT_SKILLS_DIR
         ownerSkills: true
+        executionProfile: owner-host
     - id: tool-skill
       name: '@deepseek-ai/dsh-tool-skill'
     - id: web
@@ -77,13 +99,10 @@
         stateRoot: !!js process.env.V2_PERSONA_STATE_ROOT
     - id: v2-agent-decision-guide
       name: ../plugins/agent-profile/decision-guide.mjs
+      config:
+        executionProfile: owner-host
     - id: shell-env
       name: '@deepseek-ai/dsh-shell-env'
-    - id: bash-sandbox
-      name: '@deepseek-ai/dsh-bash-sandbox'
-      config:
-        timeoutMs: 60000
-        maxTimeoutMs: 60000
     - id: tool-bash
       name: '@deepseek-ai/dsh-tool-bash'
       config:

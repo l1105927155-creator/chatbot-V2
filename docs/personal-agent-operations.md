@@ -4,23 +4,35 @@
 
 ## 服务配置与启动
 
-`scripts/agent-service.py` 使用 `.runtime/agent-service.json`（当前用户所有、0600、普通文件），严格要求以下字段：
+`scripts/agent-service.py` 使用 `.runtime/agent-service.json`（当前用户所有、0600、普通文件），严格要求执行契约版本2。旧 version 1 配置会直接拒绝，不能因更新代码静默获得新权限：
 
 ```json
 {
-  "version": 1,
+  "version": 2,
+  "execution_contract": 2,
   "provider": "deepseek-official",
   "model": "deepseek-v4-flash",
   "allowed_conversations": ["private:1105927155"],
   "owners": [{"platform_id": "v2-phase1-napcat", "bot_id": "2869323076", "user_id": "1105927155"}],
   "mcp_port": 6210,
+  "owner_workdir": "/absolute/path/to/chatbot-V2",
+  "group_sandbox": {
+    "storage_mib": 1024,
+    "memory_mib": 512,
+    "tasks": 64,
+    "cpu_quota": 100,
+    "max_command_seconds": 60,
+    "network": false
+  },
   "credential_env_file": "/absolute/path/to/private-provider.env"
 }
 ```
 
 凭据文件必须为当前用户所有的0600普通文件。只读取其中 `DEEPSEEK_API_KEY`，不运行 shell、不做变量展开、不加载其他旧服务配置。密钥不进入仓库或 unit。不要将凭据内容贴到日志或聊天。
 
-首次部署先按 `scripts/owner-workspace.py` 准备已知固定容量卷；服务只接受匹配的已有 manifest/image，不能用空配置悄悄初始化工作区。启动会按 manifest 容量验证、必要时重新挂载，因此需要已配置的非交互 sudo mount/chown 权限。Owner 工具仍在独立的断网、资源受限沙箱中运行。
+Owner 私聊以 `owner_workdir` 为默认 cwd，按部署 Linux 用户权限访问主机；不使用旧 Owner ext4 镜像。已准入群首次运行时为 platform、Bot、group ID 创建固定1GiB持久卷，启动/执行逐次验证身份、挂载和隔离；每群512MiB内存、64 tasks、1核、单命令最长60秒，Shell断网。卷或配额不能验证时拒绝执行。旧 Owner 卷和工作区作为归档数据保留，不会自动转换或分配给群。
+
+首次执行契约迁移必须先停服务，创建新格式备份，再用同一备份显式授权迁移。服务必须在启动时收到 `V2_EXECUTION_MIGRATE=1`；Router 还要求 `.runtime/execution-migration-approved.json` 中有 `scripts/agent-backup.py authorize-migration` 写入的备份摘要。pending/quarantine 会阻止会话迁移，不能手动删除后重试。迁移成功会消费授权标记；后续普通重启无需该环境变量。
 
 ```bash
 .runtime/astrbot/.venv/bin/python scripts/agent-service.py preflight
@@ -50,16 +62,20 @@ Owner 命令：`/v2agent status`、`metrics`、`persona list`、`scene list`、`
 
 ## 停止写入的备份与恢复
 
-备份覆盖唯一 Journal、chat/owner 状态、人格/场景、原生 Session、chat workspace、Owner镜像和manifest，以及存在的 AstrBot配置和非密钥服务配置。Owner工作区只备份镜像，避免重复/不一致。**AstrBot配置含 dashboard 密码散列和 JWT 秘密，整个备份按凭据材料保护**；外部 provider env 文件不打包，恢复时必须另行保留它。
+备份覆盖唯一 Journal、Router 映射和状态、safe-chat/Owner-host/各群的 DSH home、人格/Scene、原生 Session、群持久卷，以及旧 Owner 工作区、镜像和 manifest；同时备份 AstrBot 配置及非密钥服务配置。旧 Owner 数据原样保留，不转成主机文件或群工作区。Owner-host 可对主机执行操作，备份仅覆盖 Bot 管理的数据，不提供任意主机操作回滚。**AstrBot配置含 dashboard 密码散列和 JWT 秘密，整个备份按凭据材料保护**；外部 provider env 文件不打包，恢复时必须另行保留它。
 
 ```bash
 systemctl --user stop chatbot-v2-agent.service
 install -d -m 700 .runtime/backups
 .runtime/astrbot/.venv/bin/python scripts/agent-backup.py backup --output .runtime/backups/runtime-UNIQUE.tar.gz
+.runtime/astrbot/.venv/bin/python scripts/agent-backup.py authorize-migration .runtime/backups/runtime-UNIQUE.tar.gz
+systemctl --user set-environment V2_EXECUTION_MIGRATE=1
 systemctl --user start chatbot-v2-agent.service
+.runtime/astrbot/.venv/bin/python scripts/agent-service.py health --systemd --ready --timeout 30
+systemctl --user unset-environment V2_EXECUTION_MIGRATE
 ```
 
-工具持有与服务相同的锁，并检查当前UID相关进程的实际 AstrBot root / DSH_HOME，拒绝在运行时复制。它验证已知卷后正常卸载，不使用 lazy umount；可从已卸载的已知卷重试备份。备份后卷保持未挂载，服务负责重新挂载。输出为0600压缩包和SHA256 sidecar；每个文件另有manifest哈希。
+工具持有与服务相同的锁，并检查当前UID相关进程的实际 AstrBot root / DSH_HOME，拒绝在运行时复制。它验证已知卷，正常卸载已挂载群卷，不使用 lazy umount；所有群卷及 DSH home 均纳入备份。备份后卷保持未挂载，服务负责在启用会话时重新挂载。输出为0600压缩包和SHA256 sidecar；每个文件另有manifest哈希。授权迁移操作还会重新验证备份和停止写入状态，只保存其摘要，不会改变执行域配置。
 
 恢复步骤：停止服务和其他使用相同数据的进程；保留当前全部组件到私有隔离目录；保持 Owner 卷未挂载；将 `scripts/agent-backup.py` 中 `COMPONENTS` 对应目标全部移走后执行：
 
@@ -69,6 +85,6 @@ systemctl --user start chatbot-v2-agent.service
 .runtime/astrbot/.venv/bin/python scripts/agent-service.py health --systemd --ready --timeout 30
 ```
 
-恢复要求相同仓库绝对路径及相同 `upstream.lock.json`，先验证完整包、路径/类型/哈希，再写入；拒绝已有目标、祖先符号链接、特殊文件和路径穿越，不覆盖现存数据。Owner镜像按完整字节恢复，重新验证物理预留空间。切换后核对 SID/cursor/pending、Journal和工作区哨兵；失败先停服务，把新恢复组件隔离，再放回原组件。不要以清空 pending 或新建 Session 代替恢复。
+恢复要求相同仓库绝对路径及相同 `upstream.lock.json`，先验证完整包、路径/类型/哈希，再写入；拒绝已有目标、祖先符号链接、特殊文件和路径穿越，不覆盖现存数据。工具可读取旧格式 version 1 备份以恢复旧运行时代码；新执行域迁移只接受 version 2 备份。Owner 旧镜像和各群镜像均按完整字节恢复并保持未挂载；服务需按当前代码重新验证身份、容量及映射。切换后核对 SID/cursor/pending、Journal和工作区哨兵；失败先停服务，把新恢复组件隔离，再放回原组件。不要以清空 pending 或新建 Session 代替恢复。
 
 2026-10-15 的正式还原演练已保留原组件及备份于忽略目录 `.runtime/agent-ops-validation/`；这是含凭据材料的本机证据，不应提交。2026-10-16已部署`a0bfe2f`并接入主群1055300305，保留Owner私聊，994363760不准入；最新备份与接入证据位于`.runtime/group-onboarding-20261016/`。真实群固定故事与3天观察尚未完成，详见验收清单。

@@ -174,7 +174,10 @@ def _stage_dsh_repo(staged_repo: Path, data_dir: Path, dsh_mode: str) -> None:
         staged_probe = probe_dir / "probe.mjs"
         shutil.copy2(probe_source, staged_probe)
         staged_probe.chmod(0o600)
-        for profile_name in ("v2-agent-group.patch.yml", "v2-agent-owner.patch.yml"):
+        for profile_name in ("v2-agent-group.patch.yml", "v2-agent-owner.patch.yml",
+                             "v2-agent-group-sandbox.patch.yml"):
+            if not (profiles / profile_name).exists():
+                continue
             patch = profiles / profile_name
             with patch.open("a", encoding="utf-8") as stream:
                 stream.write(
@@ -265,6 +268,8 @@ def prepare(data_dir: Path, astrbot_source: Path, ports: dict[str, int], dsh_mod
         if previous.get("format") != 1 or Path(previous.get("data_dir", "")).resolve() != data_dir.resolve():
             raise RuntimeError(f"Refusing to adopt unrelated sandbox directory: {data_dir}")
         _assert_owner_unchanged(previous, owner)
+        if dsh_mode != "disabled" and previous.get("execution_contract") != 2:
+            raise RuntimeError("Sandbox execution contract changed; use a fresh --data-dir; existing sessions are preserved")
     elif data_dir.exists() and any(data_dir.iterdir()):
         # Existing unmanifested directories are never implicitly adopted.
         raise RuntimeError(f"Refusing to adopt unmanifested sandbox directory: {data_dir}")
@@ -391,7 +396,7 @@ p.chmod(0o600)
     onebot_dir = data_dir / "onebot"
     _mkdir_private(onebot_dir)
     details = {
-        "format": 1, "data_dir": str(data_dir), "astrbot_source": str(source),
+        "format": 1, "execution_contract": 2, "data_dir": str(data_dir), "astrbot_source": str(source),
         "astrbot_root": str(astrbot_root), "staged_repo": str(staged_repo),
         "plugin_snapshot": str(staged_repo / "astrbot-plugins"),
         "onebot_dir": str(onebot_dir), "onebot_token_file": str(token_path),
@@ -437,7 +442,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--owner-id", help="Opt into one immutable synthetic Owner private chat")
     parser.add_argument("--owner-volume-mib", type=int, default=1024,
-                        help="Bounded Owner workspace capacity (default: 1024 MiB)")
+                        help="Deprecated compatibility option; Owner now uses host execution, groups always have 1024 MiB")
     parser.add_argument("--no-dsh", action="store_true", help="Disable free-form DSH replies")
     parser.add_argument("--dsh-mode", choices=("live", "scripted", "disabled"), default=None)
     return parser
@@ -497,7 +502,11 @@ def _run(details: dict, astrbot_source: Path, ports: dict[str, int], mode: str,
                         "V2_QQ_OWNERS": json.dumps([details["owner"]] if details["owner"] else [], separators=(",", ":")),
                         "V2_QQ_ALLOWED_CONVERSATIONS": "group:91000,private:90001,private:90002" +
                             ((",private:" + details["owner"]["user_id"]) if details["owner"] else ""),
-                        "V2_MCP_PORT": str(ports["mcp"]), "SANDBOX_SCENARIO_DB": details["scenario_db"]})
+                        "V2_MCP_PORT": str(ports["mcp"]), "SANDBOX_SCENARIO_DB": details["scenario_db"],
+                        "V2_EXECUTION_CONTRACT": "2", "V2_OWNER_WORKDIR": details["staged_repo"],
+                        "V2_GROUP_STORAGE_MIB": "1024", "V2_GROUP_MEMORY_MIB": "512",
+                        "V2_GROUP_TASKS": "64", "V2_GROUP_CPU_QUOTA": "100",
+                        "V2_GROUP_MAX_COMMAND_SECONDS": "60", "V2_GROUP_NETWORK": "0"})
     astrbot_env.update({
         "SANDBOX_DSH_MODE": mode,
         "SANDBOX_OWNER_ID": details["owner"]["user_id"] if details["owner"] else "",
@@ -528,11 +537,7 @@ def _run(details: dict, astrbot_source: Path, ports: dict[str, int], mode: str,
                 pass
 
     old_handlers = {s: signal.signal(s, stop) for s in (signal.SIGINT, signal.SIGTERM)}
-    volume_prepared = False
     try:
-        if details["owner"]:
-            _owner_volume(details, "prepare", owner_volume_mib)
-            volume_prepared = True
         children.append(subprocess.Popen(server_cmd, cwd=ROOT, env=env, start_new_session=True))
         # Wait for UI readiness; child exit or timeout aborts before AstrBot boot.
         deadline = time.monotonic() + 20
@@ -581,8 +586,17 @@ def _run(details: dict, astrbot_source: Path, ports: dict[str, int], mode: str,
             child.wait()
         for sig, handler in old_handlers.items():
             signal.signal(sig, handler)
-        if volume_prepared:
-            _owner_volume(details, "unmount")
+        # Group volumes are independent of the synthetic Owner. Unmount only
+        # this stopped scenario's volumes; never adopt production paths.
+        import importlib.util
+        helper = ROOT / "dsh/plugins/agent-profile/owner_volume.py"
+        spec = importlib.util.spec_from_file_location("sandbox_volume_cleanup", helper)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        group_root = Path(details["staged_repo"]) / ".runtime/group-storage"
+        for workspace in group_root.glob("*/workspace"):
+            if os.path.ismount(workspace):
+                module.unmount(workspace)
 
 
 if __name__ == "__main__":

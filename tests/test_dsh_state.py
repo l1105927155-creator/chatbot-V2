@@ -191,6 +191,48 @@ def test_get_or_create_is_atomic_for_concurrent_callers(tmp_path):
     assert len(set(session_ids)) == 1
 
 
+def test_execution_generation_import_keeps_only_clean_cursor_and_uses_fresh_session(tmp_path):
+    old = state.StateStore(tmp_path / "old.sqlite3")
+    legacy = old.get_or_create(PLATFORM, BOT, GROUP, "legacy-native-sid")
+    old.advance(PLATFORM, BOT, GROUP, legacy.session_id, 27)
+    legacy = old.get(PLATFORM, BOT, GROUP)
+    fresh = state.StateStore(tmp_path / "new.sqlite3")
+
+    migrated = fresh.import_mapping(legacy, "new-native-sid")
+    assert migrated.session_id == "new-native-sid"
+    assert migrated.last_seen_journal_id == 27
+    assert migrated.pending_upper_cursor is None
+    assert old.get(PLATFORM, BOT, GROUP) == legacy
+
+
+def test_execution_generation_import_refuses_pending_and_preserves_target(tmp_path):
+    old = state.StateStore(tmp_path / "old.sqlite3")
+    pending = old.get_or_create(PLATFORM, BOT, GROUP, "legacy-native-sid")
+    old.begin_turn(PLATFORM, BOT, GROUP, pending.session_id, 9)
+    fresh = state.StateStore(tmp_path / "new.sqlite3")
+    with pytest.raises(RuntimeError, match="pending conversation"):
+        fresh.import_mapping(old.get(PLATFORM, BOT, GROUP), "new-native-sid")
+    assert fresh.get(PLATFORM, BOT, GROUP) is None
+
+    source = old.get(PLATFORM, BOT, GROUP)
+    source = state.SessionState(source.platform_id, source.bot_id, source.conversation_key,
+                                source.session_id, 8, None)
+    existing = fresh.get_or_create(PLATFORM, BOT, GROUP, "already-migrated")
+    assert fresh.import_mapping(source, "another-new-sid") == existing
+
+
+def test_unconfigured_dynamic_group_with_legacy_state_fails_closed_without_backup_gate(tmp_path):
+    old = state.StateStore(tmp_path / "legacy.sqlite3")
+    legacy = old.get_or_create(PLATFORM, BOT, GROUP, "old-group-session")
+    fresh = state.StateStore(tmp_path / "new-group.sqlite3")
+    assert not state.migration_needed(None, None, authorized=False)
+    with pytest.raises(RuntimeError, match="verified-backup authorization"):
+        state.migration_needed(legacy, None, authorized=False)
+    assert state.migration_needed(legacy, None, authorized=True)
+    target = fresh.get_or_create(PLATFORM, BOT, GROUP, "fresh-group-session")
+    assert not state.migration_needed(legacy, target, authorized=False)
+
+
 @pytest.mark.parametrize("cursor", [-1, 1.5, True])
 def test_invalid_identity_and_cursor_are_rejected(tmp_path, cursor):
     store = state.StateStore(tmp_path / "dsh-state.sqlite3")

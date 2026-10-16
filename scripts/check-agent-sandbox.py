@@ -161,8 +161,9 @@ class Acceptance(smoke.Smoke):
         found=[]
         domains={row.get('domain','chat') for row in starts.values()}
         assert domains <= {'chat','owner'}, 'invalid audit domain'
-        for path in (path for domain in domains for path in
-                     (self.directory/('repo/.runtime/dsh-home-'+domain)).rglob('session.v4.jsonl')):
+        # The exact audit SID still determines provenance after per-group homes.
+        for path in (path for home in (self.directory/'repo/.runtime').glob('dsh-home-*')
+                     for path in home.rglob('session.v4.jsonl')):
             sid=path.parent.name
             calls={};results=[]
             for line in path.read_text().splitlines():

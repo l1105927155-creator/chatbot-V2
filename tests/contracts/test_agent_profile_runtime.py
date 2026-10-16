@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_real_router_profiles_and_control_without_model_or_qq():
     runtime = ROOT / ".runtime/astrbot"
     worker = textwrap.dedent(r'''
-        import asyncio, copy, os, tempfile
+        import asyncio, copy, hashlib, os, tempfile
         from pathlib import Path
         from astrbot.core.config.default import DEFAULT_CONFIG
         from astrbot.core.star.star_manager import PluginManager
@@ -30,10 +30,33 @@ def test_real_router_profiles_and_control_without_model_or_qq():
                 base=Path(directory)
                 star.StarTools.get_data_dir=staticmethod(lambda name:base/'data'/name)
                 original=router_module.start_client
+                class Volumes:
+                    def paths(self,root,platform,bot,group):
+                        key=hashlib.sha256((platform+'\0'+bot+'\0'+group).encode()).hexdigest()
+                        directory=base/'volumes'/key
+                        return {'key':key,'directory':directory,'workspace':directory/'workspace',
+                                'image':directory/'workspace.ext4'}
+                    def prepare_group(self,root,platform,bot,group):
+                        workspace=self.paths(root,platform,bot,group)['workspace']
+                        workspace.mkdir(parents=True,exist_ok=True)
+                        return {'workspace':str(workspace)}
+                    def verified_group_workspace(self,workspace):
+                        return os.open(workspace,os.O_RDONLY|os.O_DIRECTORY)
+                    def unmount_group(self,workspace):
+                        return None
+                router_module._group_runtime_module=lambda _repo:Volumes()
                 async def isolated_client(**settings):
-                    domain='owner' if settings.get('enable_authorization') else 'chat'
-                    settings['dsh_home']=base/domain/'home'
-                    settings['workspace']=base/domain/'workspace'
+                    profile=settings['execution_profile']
+                    if profile=='owner-host':
+                        settings['dsh_home']=base/'owner-host'/'home'
+                        work=base/'owner-host'/'workspace';work.mkdir(parents=True,exist_ok=True)
+                        settings['workspace']=work
+                    elif profile=='group-sandbox':
+                        group=settings['group_runtime']['groupId']
+                        settings['dsh_home']=base/'group'/group/'home'
+                    else:
+                        settings['dsh_home']=base/'chat'/'home'
+                        settings['workspace']=base/'chat'/'workspace'
                     return await original(**settings)
                 router_module.start_client=isolated_client
                 manager=PluginManager(Context(),config)
@@ -55,10 +78,18 @@ def test_real_router_profiles_and_control_without_model_or_qq():
                     async def send(self,chain):replies.append(chain.get_plain_text())
                     async def get_group(self):return {}
                 try:
-                    assert set(router.clients)=={'chat','owner'}
+                    group_name=next(name for name in router.clients if name.startswith('group:'))
+                    group_service=router.services[group_name]
+                    group_client=router.clients[group_name]
+                    assert set(router.clients)=={'chat','owner',group_name}
                     assert not any(client._sessions for client in router.clients.values())
+                    prior_allowed=router.allowed_conversations
+                    router.allowed_conversations=frozenset((*prior_allowed,'group:43'))
+                    readiness=await router.health()
+                    assert readiness['group_sandboxes_ready'] is False
+                    router.allowed_conversations=prior_allowed
                     await router.configure_agent(Event(), 'status', '')
-                    assert replies[-1]=='Agent：尚未开始；人格：default；场景：casual-chat；模式：Owner 受限操作。'
+                    assert replies[-1]=='Agent：尚未开始；人格：default；场景：casual-chat；模式：Owner 主机执行。'
                     await router.configure_agent(Event(), 'metrics', '')
                     assert replies[-1]=='当前运行周期：排队 0；运行会话 0；DSH请求 0；完成 0；失败/暂停 0；平均耗时 暂无；审计写入错误 0。'
                     await router.configure_agent(Event(), 'persona', 'list')
@@ -76,12 +107,12 @@ def test_real_router_profiles_and_control_without_model_or_qq():
                     assert router.services['owner'].state.get('contract','900001','private:900003').session_id==private.session_id
                     assert owner.scenes.current(private.session_id)['scene']=='research'
                     await router.configure_agent(Event(group=True), 'persona', 'companion')
-                    group=router.services['chat'].state.get('contract','900001','group:42')
+                    group=group_service.state.get('contract','900001','group:42')
                     assert group is not None
-                    assert router.clients['chat'].personas.current(group.session_id)['persona']=='companion'
+                    assert group_client.personas.current(group.session_id)['persona']=='companion'
                     assert owner.personas.current(private.session_id)['persona']=='analyst'
                     await router.configure_agent(Event(group=True), 'status', '')
-                    assert replies[-1]=='Agent：空闲；人格：companion；场景：casual-chat；模式：安全聊天。'
+                    assert replies[-1]=='Agent：空闲；人格：companion；场景：casual-chat；模式：群聊隔离执行。'
                     router.services['owner'].state.begin_turn('contract','900001','private:900003',private.session_id,1)
                     await router.configure_agent(Event(), 'status', '')
                     assert 'Agent：结果待核对；人格：analyst；场景：research' in replies[-1]
@@ -99,12 +130,12 @@ def test_real_router_profiles_and_control_without_model_or_qq():
                     assert resolved.session_id==private.session_id
                     assert owner.personas.current(private.session_id)['persona']=='analyst'
                     assert owner.scenes.current(private.session_id)['scene']=='research'
-                    assert router.services['chat'].state.get('contract','900001','group:42')==group
+                    assert group_service.state.get('contract','900001','group:42')==group
                     await router.configure_agent(Event(), 'recover', '1')
                     assert '没有待核对' in replies[-1]
                     await router.configure_agent(Event(user=900004), 'persona', 'developer')
                     assert replies[-1]=='仅 Bot 所有者可以使用 Agent 控制命令。'
-                    assert len(owner._sessions)==0 and len(router.clients['chat']._sessions)==1
+                    assert len(owner._sessions)==0 and len(group_client._sessions)==1
                     assert private.last_seen_journal_id==0 and group.last_seen_journal_id==0
                     print('REAL_ROUTER_PROFILES_CONTROL_OK')
                 finally:
@@ -117,6 +148,7 @@ def test_real_router_profiles_and_control_without_model_or_qq():
              "V2_DSH_PROVIDER":"deepseek-official", "V2_DSH_MODEL":"deepseek-v4-flash",
              "V2_QQ_OWNERS":'[{"platform_id":"contract","bot_id":"900001","user_id":"900003"}]',
              "V2_QQ_ALLOWED_CONVERSATIONS":"private:900003,group:42", "V2_MCP_PORT":"0",
+             "V2_EXECUTION_CONTRACT":"2", "V2_OWNER_WORKDIR":str(ROOT),
              "DEEPSEEK_API_KEY":""},
         capture_output=True, text=True, timeout=60,
     )

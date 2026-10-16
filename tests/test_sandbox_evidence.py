@@ -265,3 +265,30 @@ def test_lifecycle_keeps_newest_when_sources_and_archives_exceed_limit(tmp_path)
     assert rows[1]["event"] == "turn/completed"
     rows = EvidenceSnapshotter(root).lifecycle_events(after_cursor="1999", limit=1)
     assert rows[0]["runtime_event_id"] == "2000"
+
+
+def test_new_execution_homes_keep_two_domains_and_exact_session_filter(tmp_path):
+    root = _root(tmp_path)
+    state_root = root / 'astrbot/data/plugin_data/v2_dsh_router'
+    _state(state_root / 'state-owner-host.sqlite3', 'private:90009', 'host-sid')
+    _state(state_root / ('state-group-' + 'a' * 64 + '.sqlite3'), 'group:91000', 'group-a-sid')
+    _state(state_root / ('state-group-' + 'b' * 64 + '.sqlite3'), 'group:91999', 'group-b-sid')
+    snapshot = EvidenceSnapshotter(root)
+    states = snapshot.snapshot()['states']
+    assert {(row['domain'], row['session_id']) for row in states} == {
+        ('owner', 'host-sid'), ('chat', 'group-a-sid'), ('chat', 'group-b-sid')}
+    filtered = snapshot.snapshot(session_id='group-a-sid')['states']
+    assert len(filtered) == 1 and filtered[0]['conversation_key'] == 'group:91000'
+
+
+def test_native_script_claim_resolves_new_group_and_owner_stores(tmp_path):
+    from sandbox.server import SandboxApp
+    root = _root(tmp_path)
+    state_root = root / 'astrbot/data/plugin_data/v2_dsh_router'
+    _state(state_root / 'state-owner-host.sqlite3', 'private:90009', 'owner-new')
+    _state(state_root / ('state-group-' + 'c' * 64 + '.sqlite3'), 'group:91000', 'group-new')
+    app = SandboxApp.__new__(SandboxApp)
+    app.evidence = EvidenceSnapshotter(root)
+    assert app._session_conversation('owner-new') == 'private:90009'
+    assert app._session_conversation('group-new') == 'group:91000'
+    assert app._session_conversation('missing') is None

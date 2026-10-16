@@ -1,4 +1,4 @@
-# Stable group-chat Agent Profile over the pinned sdk-minimal ACP composition.
+# safe-chat Profile (historical filename), used for ordinary non-Owner private chats.
 # No generic host file, terminal, shell, jobs, or Phase 5 permission tools.
 - id: persistent-bash
   disabled: true

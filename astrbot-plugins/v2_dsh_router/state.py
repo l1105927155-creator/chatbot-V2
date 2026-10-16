@@ -27,6 +27,18 @@ class SessionState:
     pending_upper_cursor: int | None
 
 
+def migration_needed(source: SessionState | None, target: SessionState | None,
+                     *, authorized: bool) -> bool:
+    """Decide whether a source mapping can be copied into a new generation."""
+    if source is None or target is not None:
+        return False
+    if source.pending_upper_cursor is not None:
+        raise RuntimeError("pending legacy conversation blocks execution migration")
+    if not authorized:
+        raise RuntimeError("legacy mapping requires verified-backup authorization")
+    return True
+
+
 class StateStore:
     """SQLite state for the stable V2 conversation-to-DSH-session mapping."""
 
@@ -154,6 +166,42 @@ class StateStore:
                 identity,
             ).fetchone()
         return self._row(row) if row is not None else None
+
+    def export_rows(self) -> list[SessionState]:
+        """Return a stable snapshot for an explicit execution-generation migration."""
+        with self._db() as conn:
+            rows = conn.execute("SELECT * FROM conversation_state ORDER BY platform_id,bot_id,conversation_key").fetchall()
+        return [self._row(row) for row in rows]
+
+    def import_mapping(self, state: SessionState, session_id: str) -> SessionState:
+        """Copy only a clean consumed cursor into a fresh native Session mapping.
+
+        Pending state is deliberately not transferable: its side effects and DSH
+        acceptance status must be reviewed before a generation can be migrated.
+        """
+        if state.pending_upper_cursor is not None:
+            raise RuntimeError("pending conversation cannot be migrated")
+        identity = self._identity(state.platform_id, state.bot_id, state.conversation_key)
+        session_id = self._session_id(session_id)
+        cursor = self._cursor(state.last_seen_journal_id)
+        with self._db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                "SELECT * FROM conversation_state WHERE platform_id=? AND bot_id=? AND conversation_key=?",
+                identity,
+            ).fetchone()
+            if existing is None:
+                conn.execute(
+                    "INSERT INTO conversation_state(platform_id,bot_id,conversation_key,session_id,last_seen_journal_id) VALUES(?,?,?,?,?)",
+                    (*identity, session_id, cursor),
+                )
+                existing = conn.execute(
+                    "SELECT * FROM conversation_state WHERE platform_id=? AND bot_id=? AND conversation_key=?",
+                    identity,
+                ).fetchone()
+            elif existing["pending_upper_cursor"] is not None:
+                raise RuntimeError("target conversation has a pending turn")
+            return self._row(existing)
 
     def health_counts(self) -> dict:
         """Read operational counts without creating a conversation or Session."""
