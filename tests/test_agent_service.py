@@ -162,3 +162,28 @@ def test_health_url_rejects_non_local_hosts() -> None:
     assert agent_service._local_health_url("http://127.0.0.1:6210/healthz") == "http://127.0.0.1:6210/healthz"
     with pytest.raises(ValueError):
         agent_service._local_health_url("http://example.com:6210/healthz")
+
+
+def test_group_storage_policy_default_and_explicit_budget(tmp_path):
+    credential = private_file(tmp_path / "key.env", "DEEPSEEK_API_KEY=secret\n")
+    path = config(tmp_path / "default.json", credential)
+    settings = agent_service._load_config(path)
+    assert agent_service._runtime_env(settings)["V2_GROUP_TOTAL_STORAGE_MIB"] == "5120"
+    assert agent_service._runtime_env(settings)["V2_GROUP_MIN_FREE_MIB"] == "1024"
+    policy = {"total_mib": 2048, "min_free_mib": 2048, "inactive_data": "retain"}
+    explicit = agent_service._load_config(config(tmp_path / "explicit.json", credential, group_storage_policy=policy))
+    assert agent_service._runtime_env(explicit)["V2_GROUP_TOTAL_STORAGE_MIB"] == "2048"
+    assert agent_service._runtime_env(explicit)["V2_GROUP_MIN_FREE_MIB"] == "2048"
+
+
+@pytest.mark.parametrize("override", [
+    {"total_mib": True}, {"total_mib": 1024.0}, {"total_mib": 1536},
+    {"total_mib": 0}, {"min_free_mib": 0}, {"min_free_mib": True},
+    {"inactive_data": "delete"}, {"extra": 1},
+])
+def test_group_storage_policy_cannot_silently_remove_limits_or_data(tmp_path, override):
+    credential = private_file(tmp_path / "key.env", "DEEPSEEK_API_KEY=secret\n")
+    policy = dict(agent_service.GROUP_STORAGE_POLICY_DEFAULT) | override
+    path = config(tmp_path / "config.json", credential, group_storage_policy=policy)
+    with pytest.raises(ValueError, match="group_storage_policy"):
+        agent_service._load_config(path)

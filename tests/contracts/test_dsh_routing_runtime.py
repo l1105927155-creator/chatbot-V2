@@ -73,13 +73,31 @@ def test_pinned_builtin_observers_and_probe_do_not_block_or_duplicate_dsh(tmp_pa
             router_module.start_client=start_client
             with tempfile.TemporaryDirectory() as temp:
                 star.StarTools.get_data_dir=staticmethod(lambda name:Path(temp)/name)
+                # Router startup prepares every admitted group. Keep this
+                # contract isolated from the production 1 GiB volume helper.
+                class FakeGroupVolumes:
+                    def paths(self,root,platform,bot,group):
+                        import hashlib
+                        key=hashlib.sha256((platform+'\0'+bot+'\0'+group).encode()).hexdigest()
+                        directory=Path(temp)/'fake-group-volumes'/key
+                        return {'key':key,'directory':directory,'workspace':directory/'workspace',
+                                'image':directory/'workspace.ext4'}
+                    def prepare_group(self,root,platform,bot,group):
+                        workspace=self.paths(root,platform,bot,group)['workspace']
+                        workspace.mkdir(parents=True,exist_ok=True)
+                        return {'workspace':str(workspace)}
+                    def verified_group_workspace(self,workspace):
+                        return os.open(workspace,os.O_RDONLY|os.O_DIRECTORY)
+                    def unmount_group(self,workspace):return None
+                router_module._group_runtime_module=lambda _repo:FakeGroupVolumes()
                 manager=PluginManager(Context(),config)
                 for name in ('astrbot','v2_ai_gate','v2_phase1_probe','v2_dsh_router','test_deterministic'):
                     assert (await manager.load(specified_dir_name=name))[0]
                 router=star_map['data.plugins.v2_dsh_router.main'].star_cls
                 calls=[];sent=[];selections=[];cancellations=[];recoveries=[]
                 class Service:
-                    def __init__(self,domain):self.domain=domain
+                    def __init__(self,domain,profile):
+                        self.domain=domain;self.profile=profile;self.execution_profile=profile
                     async def handle(self,conversation,message_id,send,**kwargs):
                         calls.append((self.domain,message_id));await send('fake DSH reply')
                     async def select_profile(self,conversation,kind,value,send,**kwargs):
@@ -94,8 +112,10 @@ def test_pinned_builtin_observers_and_probe_do_not_block_or_duplicate_dsh(tmp_pa
                         from types import SimpleNamespace
                         recoveries.append((self.domain,conversation.key,expected_pending))
                         return SimpleNamespace(last_seen_journal_id=expected_pending)
-                router.services['chat']=Service('chat')
-                router.services['owner']=Service('owner')
+                router.services['chat']=Service('chat','safe-chat')
+                router.services['owner']=Service('owner','owner-host')
+                group_name=next(name for name in router.services if name.startswith('group:'))
+                router.services[group_name]=Service('chat','group-sandbox')
                 ctx=PipelineContext(astrbot_config=config,plugin_manager=manager,astrbot_config_id='v2-phase3-contract')
                 waking,process,respond=WakingCheckStage(),ProcessStage(),RespondStage()
                 for stage in (waking,process,respond):await stage.initialize(ctx)
@@ -143,7 +163,9 @@ def test_pinned_builtin_observers_and_probe_do_not_block_or_duplicate_dsh(tmp_pa
                 assert sent[-2:]==['人格已切换为 analyst，下轮生效。','场景已切换为 research，下轮生效。']
                 assert len(calls)==before
                 await drive(event('/v2agent status','owner-status','900003'))
-                assert sent[-1]=='Agent：空闲；人格：analyst；场景：research；模式：Owner 受限操作。'
+                assert sent[-1]=='Agent：空闲；人格：analyst；场景：research；模式：Owner 主机执行。'
+                await drive(event('/v2agent status','owner-group-status','900003',group='1055300305'))
+                assert sent[-1]=='Agent：空闲；人格：analyst；场景：research；模式：群聊隔离执行。'
                 await drive(event('/v2agent persona list','owner-list','900003'))
                 assert sent[-1]=='可用人格：analyst、companion、default、developer'
                 await drive(event('/v2agent status','nonowner-status'))
@@ -199,6 +221,10 @@ def test_pinned_builtin_observers_and_probe_do_not_block_or_duplicate_dsh(tmp_pa
                 assert len(calls)==count and len(sent)==outbound
                 # Swap admission without changing event content or trust domain.
                 router.allowed_conversations=frozenset({'group:'+other_group})
+                await router._ensure_group_service('contract','900001',other_group)
+                admitted_group_name=next(name for name,identity in router._group_runtimes.items()
+                                         if identity['group_id']==other_group)
+                router.services[admitted_group_name]=Service('chat','group-sandbox')
                 await drive(event('former group','former-at',group=group,mention='900001'))
                 assert len(calls)==count
                 await drive(event('now admitted','admitted-at',group=other_group,mention='900001'))
@@ -246,7 +272,8 @@ def test_pinned_builtin_observers_and_probe_do_not_block_or_duplicate_dsh(tmp_pa
         asyncio.run(main())
     ''')
     result = subprocess.run([str(runtime/'.venv/bin/python'),'-c',script],cwd=runtime,
-        env={**os.environ,'ASTRBOT_ROOT':str(runtime),'V2_REPO_ROOT':str(root),'V2_QQ_ALLOWED_CONVERSATIONS':'private:900002,private:900003,group:1055300305',
+        env={**os.environ,'ASTRBOT_ROOT':str(runtime),'V2_REPO_ROOT':str(root),'V2_EXECUTION_CONTRACT':'2',
+             'V2_OWNER_WORKDIR':str(root),'V2_QQ_ALLOWED_CONVERSATIONS':'private:900002,private:900003,group:1055300305',
              'V2_QQ_OWNERS':'[{"platform_id":"contract","bot_id":"900001","user_id":"900003"}]',
              'V2_MCP_PORT':'0','V2_DSH_PROVIDER':'test-provider','V2_DSH_MODEL':'test-model'},
         capture_output=True,text=True,timeout=45)

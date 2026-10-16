@@ -180,6 +180,9 @@ def test_backup_restore_preserves_real_group_volume_and_router_state(tmp_path, m
             path.chmod(0o600)
         else:
             path.mkdir(parents=True, exist_ok=True)
+    # Match the deployed runtime parent; group provisioning refuses foreign
+    # writers even when the invoking shell happens to use umask 0002.
+    (root / ".runtime").chmod(0o755)
     plugin = root / "dsh/plugins/agent-profile"
     plugin.mkdir(parents=True)
     for name in ("group_volume.py", "owner_volume.py"):
@@ -199,7 +202,8 @@ def test_backup_restore_preserves_real_group_volume_and_router_state(tmp_path, m
     router_state.mkdir(parents=True, exist_ok=True)
     (router_state / f"state-group-{key}.sqlite3").write_bytes(b"router-group-mapping")
     sentinel = workspace / "persisted.txt"
-    sentinel.write_text("survives real unmount, archive, restore, and remount")
+    expected_content = "survives real unmount, archive, restore, and remount"
+    sentinel.write_text(expected_content)
     output_dir = tmp_path / "backups"
     output_dir.mkdir(mode=0o700)
     archive = output_dir / "group-runtime.tar.gz"
@@ -220,7 +224,7 @@ def test_backup_restore_preserves_real_group_volume_and_router_state(tmp_path, m
         assert (session_home / "native.json").read_text() == '{"sessionId":"group-session"}'
         reopened = group_volume.prepare_group(root / ".runtime", *identity)
         assert reopened["key"] == key
-        assert (Path(reopened["workspace"]) / "persisted.txt").read_text() == sentinel.read_text()
+        assert (Path(reopened["workspace"]) / "persisted.txt").read_text() == expected_content
     finally:
         if os.path.ismount(workspace):
             group_volume.unmount_group(workspace)

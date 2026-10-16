@@ -15,16 +15,20 @@ PYTHON = ROOT / ".runtime/astrbot/.venv/bin/python"
 
 def test_group_profile_executes_real_native_bash_inside_verified_group_scope(tmp_path):
     worker = r'''
-import json, os, signal, sys, time
+import asyncio, json, os, signal, sys, threading, time
 from concurrent.futures import ThreadPoolExecutor
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from deepseek_harness.client import HarnessClient, HarnessConfig
 from pydantic import BaseModel, ConfigDict
 root = Path(os.environ["V2_REPO_ROOT"])
 sys.path.insert(0, str(root / "astrbot-plugins/v2_dsh_router"))
+sys.path.insert(0, str(root / "astrbot-plugins/v2_journal"))
 sys.path.insert(0, str(root / "dsh/plugins/agent-profile"))
 from turn_source import TurnSourcePublisher
 from group_volume import prepare_group, unmount_group
+from journal import JournalStore, Conversation, message_from_onebot
+from mcp_server import McpServer
 from sys import version_info
 class ObjectResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
@@ -34,8 +38,25 @@ base = Path(os.environ["V2_GROUP_TEST_ROOT"])
 identity = "group-acceptance-" + str(os.getpid())
 volume = prepare_group(base, "group-test-platform", "group-test-bot", identity)
 workspace = Path(volume["workspace"])
+host_sentinel = base / "owner-private-sentinel.txt"
+host_sentinel.write_text("OWNER_PRIVATE_SENTINEL_9a71d3", encoding="utf-8")
+host_probe_executed = base / "host-probe-executed"
+http_hits = []
+class SentinelHandler(BaseHTTPRequestHandler):
+  def do_GET(self):
+    http_hits.append(self.path)
+    body = b"OWNER_HTTP_SENTINEL"
+    self.send_response(200); self.send_header("Content-Length", str(len(body)))
+    self.end_headers(); self.wfile.write(body)
+  def log_message(self, *_args): pass
+sentinel_http = HTTPServer(("127.0.0.1", 0), SentinelHandler)
+http_thread = threading.Thread(target=sentinel_http.serve_forever, daemon=True)
+http_thread.start()
 home = base / ("home-" + volume["key"])
 home.mkdir(mode=0o700)
+# Project-controlled launch configuration must not enter the host Agent.
+(workspace / ".env").write_text("V2_AUDIT_PROJECT_ENV_SENTINEL=group-workspace\n")
+(home / ".env").write_text("V2_AUDIT_HOME_ENV_SENTINEL=private-home\n")
 spill_root = home / "native-spill-tmp"
 spill_root.mkdir(mode=0o700)
 site_packages = home / "payload" / "lib" / f"python{version_info.major}.{version_info.minor}" / "site-packages"
@@ -61,6 +82,8 @@ env = {
   "V2_GROUP_WORKSPACE_ROOT":str(workspace), "V2_GROUP_PLATFORM_ID":"group-test-platform",
   "V2_GROUP_BOT_ID":"group-test-bot", "V2_GROUP_ID":identity,
   "V2_GROUP_PROBE_LOG":str(log), "V2_GROUP_COMMAND":str(command_file),
+  "V2_GROUP_HOST_SENTINEL":str(host_sentinel),
+  "V2_GROUP_HOST_PROBE_EXECUTED":str(host_probe_executed),
   "TMPDIR":str(spill_root),
   "PYTHONUSERBASE":str(site_packages.parents[2]),
   "GROUP_SECRET_SENTINEL":"must-be-cleared",
@@ -72,13 +95,39 @@ settings = HarnessConfig(
   env=env, request_timeout_seconds=30,
 )
 client = HarnessClient(settings)
+def append_message(kind, peer, mid, text):
+  raw = {"post_type":"message", "message_type":kind, "self_id":"group-test-bot",
+    "user_id":"member-1", "message_id":mid,
+    "message":[{"type":"text", "data":{"text":text}}]}
+  raw["group_id" if kind == "group" else "user_id"] = peer
+  journal.append(message_from_onebot("group-test-platform", raw))
+journal = JournalStore(base / "canonical-journal.sqlite3")
+append_message("group", identity, "group-marker", "group-visible-history")
+append_message("group", "other-group", "other-marker", "OTHER_GROUP_PRIVATE_SENTINEL")
+append_message("private", "1105927155", "owner-marker", "OWNER_PRIVATE_HISTORY_SENTINEL")
+mcp_server = McpServer(journal)
+mcp_loop = asyncio.new_event_loop()
+mcp_thread = threading.Thread(target=mcp_loop.run_forever, daemon=True)
+mcp_thread.start()
+def mcp_call(awaitable):
+  return asyncio.run_coroutine_threadsafe(awaitable, mcp_loop).result(timeout=10)
+mcp_call(mcp_server.start(0))
+sent_messages = []
+async def send_message(text): sent_messages.append(text)
+async def group_info(): return {"name":"isolated test group", "member_count":2}
+mcp_turn = mcp_server.turn(Conversation("group-test-platform", "group-test-bot", "group:" + identity),
+                           send_message, group_info)
+mcp_servers = mcp_call(mcp_turn.__aenter__())
 try:
   client.start()
   request(client, "initialize", {"protocolVersion":1,"clientCapabilities":{},
     "clientInfo":{"name":"group-bash-acceptance","version":"0.1.0"}})
-  sid = request(client, "session/new", {"cwd":str(workspace),"mcpServers":[]})["sessionId"]
-  def run(prompt, command, timeout=None, workdir=None):
-    command_file.write_text(json.dumps({"command":command,
+  sid = request(client, "session/new", {"cwd":str(workspace),"mcpServers":mcp_servers})["sessionId"]
+  def run(prompt, command="", timeout=None, workdir=None, tool_name="bash", arguments=None):
+    previous_calls = len(log.read_text().splitlines()) if log.exists() else 0
+    tool_call_id = "group-audit-" + str(previous_calls + 1)
+    command_file.write_text(json.dumps({"command":command, "toolName":tool_name,
+      **({} if arguments is None else {"arguments":arguments}),
       **({} if timeout is None else {"timeoutMs":timeout}),
       **({} if workdir is None else {"workdir":workdir})}))
     nonce = publisher.publish(sid, {
@@ -91,6 +140,12 @@ try:
       assert result["stopReason"] == "end_turn", result
     finally:
       assert publisher.cleanup(sid, nonce)
+    new_calls = [json.loads(line) for line in log.read_text().splitlines()[previous_calls:]]
+    tool_results = [message for call in new_calls for message in call["messages"]
+                    if message.get("role") == "tool" and message.get("toolCallId") == tool_call_id]
+    assert len(tool_results) == 1, (tool_call_id, tool_results)
+    return "\n".join(block.get("text", "") for block in tool_results[0].get("content", [])
+                     if block.get("type") == "text")
   # Actual native tool metadata and a successful workspace operation.
   run("group success", "printf '%s\\n' \"$HOME\" > home.txt; pwd > cwd.txt; printf ok > marker.txt; "
       "test ! -e /etc/shadow && test -z \"${GROUP_SECRET_SENTINEL:-}\"")
@@ -98,6 +153,72 @@ try:
   assert (workspace / "cwd.txt").read_text().strip() == "/workspace"
   assert (workspace / "marker.txt").read_text() == "ok"
   assert not host_sitecustomize_marker.exists(), "untrusted Python sitecustomize ran before sandbox setup"
+  # Lock the exact complete model-facing inventory for this pinned Profile,
+  # including three SDK resource tools (visible but denied) and five scoped MCP tools.
+  initial = json.loads(log.read_text().splitlines()[0])
+  inventory = set(initial["tools"])
+  expected = {"bash", "skill", "web_search", "web_fetch", "host_probe",
+              "list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource",
+              "mcp__astrbot__history_recent", "mcp__astrbot__history_before",
+              "mcp__astrbot__history_search", "mcp__astrbot__current_group_info",
+              "mcp__astrbot__qq_send_origin"}
+  assert inventory == expected, sorted(inventory)
+  schemas = {tool["name"]:tool for tool in initial["toolSchemas"]}
+  assert set(schemas) == expected
+  assert {"file_path", "path"}.isdisjoint(schemas["web_fetch"]["parameters"].get("properties", {}))
+  assert "name" in schemas["skill"]["parameters"]["properties"]
+  # SDK resource tools are loaded by the pinned client, but must fail closed
+  # under the group guard even when an MCP server exposes resources.
+  denied_resources = []
+  for name in ("list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"):
+    result = run("group SDK resource tool denied " + name, tool_name=name,
+                 arguments={"server":"astrbot", "uri":"file:///etc/passwd"})
+    assert "authorization denied: unavailable tool" in result, (name, result)
+    denied_resources.append(name)
+  # The five profile-allowed MCP tools are host services by design. Exercise
+  # every schema against an isolated journal and an in-memory send callback.
+  search_result = json.loads(run("group scoped MCP search", tool_name="mcp__astrbot__history_search",
+                                 arguments={"query":"PRIVATE_SENTINEL"}))
+  assert search_result == {"entries":[]}, search_result
+  recent_result = json.loads(run("group scoped MCP recent", tool_name="mcp__astrbot__history_recent",
+                                 arguments={"limit":10}))
+  assert [row["content"]["text"] for row in recent_result["entries"]] == ["group-visible-history"]
+  group_conversation = Conversation("group-test-platform", "group-test-bot", "group:" + identity)
+  group_row = journal.recent(group_conversation, 10)[0]
+  before_result = json.loads(run("group scoped MCP before", tool_name="mcp__astrbot__history_before",
+                                 arguments={"before_id":group_row.journal_id + 1, "limit":10}))
+  assert [row["content"]["text"] for row in before_result["entries"]] == ["group-visible-history"]
+  info_result = json.loads(run("group scoped MCP current info", tool_name="mcp__astrbot__current_group_info"))
+  assert info_result["id"] == identity and info_result["member_count"] == 2
+  send_result = json.loads(run("group scoped MCP send mock", tool_name="mcp__astrbot__qq_send_origin",
+                               arguments={"text":"local mock only"}))
+  assert send_result["submitted"] is True and send_result["platform_confirmed"] is False
+  assert sent_messages == ["local mock only"]
+  # The sandbox guard denies a newly registered extension before its host-side
+  # implementation can read the Owner sentinel.
+  host_probe_result = run("group extension host read denied", tool_name="host_probe")
+  assert "authorization denied: unavailable tool" in host_probe_result
+  assert not host_probe_executed.exists()
+  # Skill lookup accepts catalog names only; a path-shaped name cannot turn the
+  # host-side read-only skills provider into an arbitrary filesystem reader.
+  skill_result = run("group skill path traversal denied", tool_name="skill",
+                     arguments={"name":str(host_sentinel)})
+  assert "invalid skill name" in skill_result
+  # web_fetch is intentionally a controlled host service. Its native provider
+  # rejects file: URLs before reading host files; only public HTTP(S) is allowed.
+  file_url_result = run("group web file URL denied", tool_name="web_fetch",
+                        arguments={"url":host_sentinel.as_uri()})
+  assert 'unsupported URL scheme "file:"' in file_url_result
+  loopback_result = run("group web loopback URL denied", tool_name="web_fetch",
+                        arguments={"url":f"http://127.0.0.1:{sentinel_http.server_port}/owner-data"})
+  assert "non-public IP address" in loopback_result, loopback_result
+  calls = [json.loads(line) for line in log.read_text().splitlines()]
+  transcript = json.dumps([call["messages"] for call in calls], ensure_ascii=False)
+  assert "OWNER_PRIVATE_SENTINEL_9a71d3" not in transcript, transcript[-5000:]
+  assert "OWNER_PRIVATE_HISTORY_SENTINEL" not in transcript, transcript[-5000:]
+  assert "OTHER_GROUP_PRIVATE_SENTINEL" not in transcript, transcript[-5000:]
+  assert not http_hits, http_hits
+  assert not host_probe_executed.exists()
   # Inspect the actual live scope before the native subprocess provider reaps it.
   command_file.write_text(json.dumps({"command":"cat /proc/self/cgroup > cgroup.txt; sleep 2"}))
   cgroup_prompt = "group cgroup limits"
@@ -238,8 +359,27 @@ try:
   assert not scope_dir.exists(), f"SIGKILL left managed subprocess scope {kill_unit} alive"
   calls = [json.loads(line) for line in log.read_text().splitlines()]
   assert all("bash" in call["tools"] for call in calls)
-  print(json.dumps({"native_group_bash":True,"cgroup":cgroup,"pids_created":pids_created,
-                    "pids_failed":pids_failed,"memory_limit":536870912}))
+  evidence = {
+    "native_group_bash": True,
+    "profile_tool_schemas": sorted(inventory - {"host_probe"}),
+    "test_only_tool_schemas": ["host_probe"],
+    "mcp_tools_called": sorted(name for name in expected if name.startswith("mcp__astrbot__")),
+    "sdk_resource_tools_denied": denied_resources,
+    "unknown_extension_denied": "authorization denied: unavailable tool" in host_probe_result,
+    "skill_path_denied": "invalid skill name" in skill_result,
+    "web_file_url_denied": 'unsupported URL scheme "file:"' in file_url_result,
+    "web_loopback_url_denied": not http_hits,
+    "owner_and_other_group_sentinels_absent": all(
+      marker not in transcript for marker in ("OWNER_PRIVATE_HISTORY_SENTINEL", "OTHER_GROUP_PRIVATE_SENTINEL")
+    ),
+    "mock_send_calls": len(sent_messages),
+    "cgroup": cgroup,
+    "pids_created": pids_created,
+    "pids_failed": pids_failed,
+    "memory_limit": 536870912,
+  }
+  (base / "tool-audit-evidence.json").write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
+  print(json.dumps(evidence, ensure_ascii=False))
 except BaseException:
   print("\n".join(client._stderr_lines), file=sys.stderr)
   raise
@@ -249,6 +389,14 @@ finally:
     subprocess.run(['/usr/bin/systemctl', '--user', 'kill', '--kill-whom=all', '--signal=SIGKILL', kill_unit],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
   publisher.close()
+  mcp_call(mcp_turn.__aexit__(None, None, None))
+  mcp_call(mcp_server.close())
+  mcp_loop.call_soon_threadsafe(mcp_loop.stop)
+  mcp_thread.join(timeout=3)
+  mcp_loop.close()
+  sentinel_http.shutdown()
+  http_thread.join(timeout=3)
+  sentinel_http.server_close()
   if os.path.ismount(workspace): unmount_group(workspace)
 '''
     worker_root = tmp_path / "isolated"

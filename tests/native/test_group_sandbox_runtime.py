@@ -67,8 +67,15 @@ def test_namespace_mount_environment_network_cgroup_and_persistence(group_volume
     assert os.statvfs(workspace).f_blocks * os.statvfs(workspace).f_frsize <= 1024 ** 3
 
     group_volume.unmount_group(workspace)
+    # A crash residue for a different, incomplete allocation must block new
+    # allocations while leaving this verified existing group usable.
+    orphan = workspace.parent.parent / ("f" * 64)
+    orphan.mkdir(mode=0o700)
+    (orphan / "workspace.ext4").write_bytes(b"incomplete new allocation")
     group_volume.prepare_group(storage_root, "platform-test", "bot-test", identity)
     assert (workspace / "persistent.txt").read_text() == "survives-remount"
+    with pytest.raises((OSError, ValueError)):
+        group_volume.prepare_group(storage_root, "platform-test", "bot-test", "new-with-residue")
 
 
 def test_group_pid_namespace_kills_descendants_when_bash_exits(group_volume_runtime):

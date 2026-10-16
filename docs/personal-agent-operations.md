@@ -24,6 +24,11 @@
     "max_command_seconds": 60,
     "network": false
   },
+  "group_storage_policy": {
+    "total_mib": 5120,
+    "min_free_mib": 1024,
+    "inactive_data": "retain"
+  },
   "credential_env_file": "/absolute/path/to/private-provider.env"
 }
 ```
@@ -31,6 +36,12 @@
 凭据文件必须为当前用户所有的0600普通文件。只读取其中 `DEEPSEEK_API_KEY`，不运行 shell、不做变量展开、不加载其他旧服务配置。密钥不进入仓库或 unit。不要将凭据内容贴到日志或聊天。
 
 Owner 私聊以 `owner_workdir` 为默认 cwd，按部署 Linux 用户权限访问主机；不使用旧 Owner ext4 镜像。已准入群首次运行时为 platform、Bot、group ID 创建固定1GiB持久卷，启动/执行逐次验证身份、挂载和隔离；每群512MiB内存、64 tasks、1核、单命令最长60秒，Shell断网。卷或配额不能验证时拒绝执行。旧 Owner 卷和工作区作为归档数据保留，不会自动转换或分配给群。
+
+群卷累计预算默认5GiB（五个1GiB卷），包含取消准入后保留的卷。`group_storage_policy` 可显式设置总预算和宿主余量；省略时使用以上保守默认。新卷创建前检查全部保留卷的预留量及宿主可用空间，创建后至少保留1GiB空闲空间，另留8MiB元数据余量。预算或空间不足即拒绝新卷，不降低每群配额，不挪用旧卷。不同群并发创建使用同一个分配锁，不能同时通过预算检查后超额分配。
+
+取消准入仅阻止后续路由，群卷、原生 home 和状态均保留，重启后仍计入总预算；本次不增加自动清理或自动归档任务。需要回收时由 Owner 明确决定，停写、备份、核对卷身份和历史后再单独处理。已存在的合法卷即使宿主余量变少，仍可验证并恢复挂载，不因“新增卷预算”被删除或格式化。未完成的新卷创建失败会回滚该次新分配；旧数据和其它群不参与回滚。
+
+Owner 的“主机能力”仍限于前台执行：Bash 默认120秒、最长600秒，未开放后台 Jobs、持久终端或自动提权。遇到真实任务因此无法完成时按具体故事评审，不为了“完整 DSH”自动放开其它模式。
 
 首次执行契约迁移必须先停服务，创建新格式备份，再用同一备份显式授权迁移。服务必须在启动时收到 `V2_EXECUTION_MIGRATE=1`；Router 还要求 `.runtime/execution-migration-approved.json` 中有 `scripts/agent-backup.py authorize-migration` 写入的备份摘要。pending/quarantine 会阻止会话迁移，不能手动删除后重试。迁移成功会消费授权标记；后续普通重启无需该环境变量。
 
@@ -50,7 +61,7 @@ systemctl --user enable --now chatbot-v2-agent.service
 
 `GET http://127.0.0.1:6210/healthz` 仅返回就绪布尔值、PID和计数，不返回身份、凭据或聊天内容，也不授予 MCP 访问权限。健康检查不会创建 Session 或调用模型。
 
-- `core_ready`：初始化完成、未关闭、Journal/状态库可读、双 ACP 进程和读线程正常、Owner 卷校验通过。核心未就绪返回503。
+- `core_ready`：初始化完成、未关闭、Journal/状态库可读、各 ACP 进程和读线程正常、Owner 主机运行时与已准入群的独立卷就绪。核心未就绪返回503。
 - `ready`：核心正常且 OneBot API/event WebSocket 已连接。通道断连仍返回200、`ready=false`，避免外部通道故障引起重启循环。
 - `pending_conversations` / `quarantined_sessions`：需要核对的会话；不能通过重启宣称操作未发生。
 

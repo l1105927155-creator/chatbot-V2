@@ -26,6 +26,7 @@ ASTRBOT = ROOT / ".runtime/astrbot"
 DSH = ROOT / ".runtime/dsh-runtime/node_modules/.bin/dsh"
 CONFIG_KEYS = {"version", "execution_contract", "provider", "model", "allowed_conversations", "owners",
                "mcp_port", "credential_env_file", "owner_workdir", "group_sandbox"}
+GROUP_STORAGE_POLICY_DEFAULT = {"total_mib": 5120, "min_free_mib": 1024, "inactive_data": "retain"}
 GROUP_SANDBOX_KEYS = {"storage_mib", "memory_mib", "tasks", "cpu_quota", "max_command_seconds", "network"}
 GROUP_SANDBOX_CONTRACT = {
     "storage_mib": 1024, "memory_mib": 512, "tasks": 64,
@@ -56,7 +57,7 @@ def _load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
         except OSError:
             pass
         raise
-    if (not isinstance(data, dict) or set(data) != CONFIG_KEYS
+    if (not isinstance(data, dict) or set(data) not in (CONFIG_KEYS, CONFIG_KEYS | {"group_storage_policy"})
             or data.get("version") != 2 or type(data.get("version")) is not int
             or data.get("execution_contract") != 2 or type(data.get("execution_contract")) is not int):
         raise ValueError("invalid service config schema")
@@ -92,6 +93,13 @@ def _load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
         raise ValueError("group_sandbox integer fields must use exact integer values")
     if type(group_sandbox["network"]) is not bool or group_sandbox != GROUP_SANDBOX_CONTRACT:
         raise ValueError("group_sandbox must match the verified execution contract")
+    policy = data.get("group_storage_policy", GROUP_STORAGE_POLICY_DEFAULT)
+    if (not isinstance(policy, dict) or set(policy) != set(GROUP_STORAGE_POLICY_DEFAULT)
+            or type(policy["total_mib"]) is not int or policy["total_mib"] < 1024
+            or policy["total_mib"] % 1024 != 0
+            or type(policy["min_free_mib"]) is not int or policy["min_free_mib"] < 1024
+            or policy["inactive_data"] != "retain"):
+        raise ValueError("group_storage_policy requires whole GiB budget, >=1 GiB headroom and retained inactive data")
     return data
 
 
@@ -129,6 +137,7 @@ def _prepare(config: dict[str, Any]) -> None:
 
 def _runtime_env(config: dict[str, Any]) -> dict[str, str]:
     env = dict(os.environ)
+    policy = config.get("group_storage_policy", GROUP_STORAGE_POLICY_DEFAULT)
     env.update({
         "V2_DSH_PROVIDER": config["provider"],
         "V2_DSH_MODEL": config["model"],
@@ -137,6 +146,8 @@ def _runtime_env(config: dict[str, Any]) -> dict[str, str]:
         "V2_MCP_PORT": str(config["mcp_port"]),
         "V2_EXECUTION_CONTRACT": str(config["execution_contract"]),
         "V2_OWNER_WORKDIR": config["owner_workdir"],
+        "V2_GROUP_TOTAL_STORAGE_MIB": str(policy["total_mib"]),
+        "V2_GROUP_MIN_FREE_MIB": str(policy["min_free_mib"]),
         "V2_GROUP_STORAGE_MIB": str(config["group_sandbox"]["storage_mib"]),
         "V2_GROUP_MEMORY_MIB": str(config["group_sandbox"]["memory_mib"]),
         "V2_GROUP_TASKS": str(config["group_sandbox"]["tasks"]),
