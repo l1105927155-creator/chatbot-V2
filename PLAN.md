@@ -1,19 +1,21 @@
-# 当前实施入口（2026-10-14）
+# 当前实施入口（2026-10-16：执行环境归属纠偏）
 
-用户已确认 Personal Agent-Bot 折中路线。沿用已实现并验证的 Agent Profile，推进产品闭环与真实测试群验收，不继续补完历史 Phase 5。
+2026-10-16 用户纠正执行环境归属：**Owner 私聊应使用主机完整可用环境，群聊应使用资源受限执行沙箱**。当前部署仍为旧折中实现（Owner 受限、群聊无 Shell），不可把已有旧合同测试当作新合同验收。具体要求与迁移/验收差距见 [执行环境归属纠偏](docs/phases/execution-domain-correction-2026-10-16.md)。历史分阶段记录保留，不覆盖本次要求。
 
 - 目标架构：[Agent-Bot 运行时](docs/architecture/agent-bot-runtime.md)。
 - 模型自主决策与渐进式披露整改：[目标](docs/phases/model-decision-remediation.md)及[实现/验证](docs/model-decision-validation-2026-10-16.md)（已实现并完成独立沙箱核心验收；保留模型附加事实误述记录，真实 QQ 验收仍独立未完成）。
 - 产品契约与当前阶段：[Personal Agent-Bot 产品化](docs/phases/personal-agent-bot.md)。
 - 已有实现与验证记录：[Agent Profile 验证](docs/phases/agent-profile-validation.md)。
 - 保留 AstrBot / DSH / MCP 职责、Journal 与已验证集成成果；人格、技能场景与信任域分开。
-- Owner 仅在身份核验通过的独立私聊执行受限操作，无逐操作审批。群聊仅 @Bot 或引用 Bot 唤醒；人格和场景不扩权。
+- Owner 仅在真实身份核验通过的独立私聊使用 DSH 的主机环境与原生工具，遵守运行用户的 OS 权限、无 QQ 逐操作审批；群聊仅 @Bot 或引用 Bot 唤醒，并可在**待实现、待验收的隔离沙箱**内使用受控执行；人格和场景不扩权。
 - 最终真实验收使用群 1055300305 与 994363760 对比白名单，固定场景通过后连续试用 3 天。
 - 下方是历史 V2 分阶段基线，不覆盖当前产品契约；历史 Phase 5 的共享群聊执行/名单不重新启用。
 
 ## 当前交付状态与后续安排（2026-10-16）
 
-主目标是让 Personal Agent-Bot 在真实 QQ 中可靠工作：群聊、人格/技能、上下文与历史、Owner 私聊受限执行、Research，以及可核对的取消/恢复和运维。完整完成标准仍是两群固定场景验收后连续试用3天。
+> **执行域验收变更**：下述既有部署、受限 Owner 执行及旧版群聊场景仅是历史实现状态。新的 Owner 主机权限、群聊受控执行尚未实现/验收；不得将现有主群准入解释为已允许群聊执行。先按 [纠偏文档](docs/phases/execution-domain-correction-2026-10-16.md)评审并实施执行域迁移，再按新合同进行完整验收；旧验收记录继续保留。
+
+主目标是让 Personal Agent-Bot 在真实 QQ 中可靠工作：群聊、人格/技能、上下文与历史、**Owner 主机执行与群聊沙箱执行**、Research，以及可核对的取消/恢复和运维。现有执行环境不符合新产品合同。完整完成标准仍是两群固定场景验收后连续试用3天。
 
 - **已实现并部署**：触发/会话隔离、人格/场景、历史补读与原生压缩、受限Owner执行、Research、cancel/recover、审计/指标、健康、systemd自启动及备份恢复；决策/Skill整改和中文版指南已随`a0bfe2f`重启加载。用户已授权并完成主群1055300305接入，保留Owner私聊；994363760保持未准入对照。
 - **已有证据**：主产品统一回归200项；真实provider上下文/Research测试；正式1GiB工作区备份还原与故障重启；新版沙箱61项回归、7组scripted故事及7组真实DeepSeek Owner故事。沙箱检查同时核对原始事件、平台反馈、canonical Journal、Router和原生工具，不替代真实QQ。
