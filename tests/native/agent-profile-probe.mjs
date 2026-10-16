@@ -37,6 +37,7 @@ class AcceptanceAdapter extends LlmAdapter {
       sessionId: options.sessionId,
       purpose: options.purpose ?? null,
       messages: options.messages,
+      toolSchemas: options.tools ?? [],
       tools: (options.tools ?? []).map(schema => schema.name).sort(),
       skills: agent ? (await this.ctx.skills.list({ scope: agent })).map(skill => skill.name).sort() : [],
       reply: text,

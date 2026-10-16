@@ -33,7 +33,7 @@ class ResearchAdapter extends LlmAdapter {
       { name: 'web_search', arguments: { queries: ['fixture query'] } },
       { name: 'web_fetch', arguments: { url: SEARCH_URL } },
     ]
-    const revokedResearchScripts = [
+    const sharedResearchScripts = [
       { name: 'skill', arguments: { name: 'web-research' } },
     ]
     const casualScripts = [
@@ -46,7 +46,7 @@ class ResearchAdapter extends LlmAdapter {
     const script = research
       ? call <= researchScripts.length
         ? researchScripts[call - 1]
-        : call === 5 ? revokedResearchScripts[0] : undefined
+        : call === 5 ? sharedResearchScripts[0] : undefined
       : casualScripts[call - 1]
     if (script) {
       yield { type: 'block-start', index: 0, blockType: 'tool-call' }
@@ -57,9 +57,13 @@ class ResearchAdapter extends LlmAdapter {
       yield { type: 'finish', reason: { kind: 'tool-calls' } }
       return
     }
-    const text = research && call <= 4
+    const text = research && call === 4
       ? `Fixture finding: [page](${SEARCH_URL})`
-      : 'The unavailable skill was not loaded.'
+      : call === 6
+        ? 'The research guide remains available in the casual scene.'
+        : !research && call === 2
+          ? 'The research guide loaded for an evidence-based question.'
+          : 'No additional research method was needed.'
     yield { type: 'block-start', index: 0, blockType: 'text' }
     yield { type: 'text-delta', index: 0, text }
     yield { type: 'block-end', index: 0, block: { type: 'text', text } }

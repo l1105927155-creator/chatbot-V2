@@ -212,7 +212,7 @@ class ChatService:
                 "conversation": conversation.key[:256],
                 "latest_user_journal_id": wake_id,
                 "instruction": "Reply to the latest ordinary user message using this ordered QQ journal delta. "
-                               "Query the scoped Journal tools for omitted or truncated original facts.",
+                               "Use scoped history only if needed facts are missing from available context.",
                 "history_window": {
                     "after_journal_id": after,
                     "through_journal_id": wake_id,

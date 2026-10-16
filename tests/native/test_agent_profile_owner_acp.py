@@ -151,9 +151,16 @@ with TemporaryDirectory(prefix="owner-profile-acp-", dir=root / ".runtime") as t
         assert len(calls)==(1 if mode == "cancel" else 2),calls
         assert calls[0]["runtime"]["sandbox"] == "OwnerSandbox", calls[0]["runtime"]
         assert calls[0]["tools"] == ["bash", "skill", "web_fetch", "web_search"], calls[0]["tools"]
+        request_schemas = {schema["name"]: schema for schema in calls[0]["toolSchemas"]}
+        assert "facts may have changed" in request_schemas["web_search"]["description"]
+        assert "specific relevant URL" in request_schemas["web_fetch"]["description"]
+        assert "Owner-private workspace" in request_schemas["bash"]["description"]
+        for model_call in calls:
+            message_text = json.dumps(model_call["messages"])
+            assert message_text.count("Use the information already visible") == 1, message_text
         assert "trusted owner" in json.dumps(calls[0]["messages"])
-        assert "Inspect and modify files" in json.dumps(calls[0]["messages"])
-        assert "Develop and validate a task" in json.dumps(calls[0]["messages"])
+        assert "Load before an Owner workspace file inspection or edit" in json.dumps(calls[0]["messages"])
+        assert "Load for software or repository changes" in json.dumps(calls[0]["messages"])
         observed=json.dumps(calls[-1]["messages"])
         if mode in ("timeout", "cancel"):
             time.sleep(3)

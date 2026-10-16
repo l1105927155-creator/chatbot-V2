@@ -1,6 +1,6 @@
 ---
 name: development
-description: Develop and validate a task in the isolated workspace, preserving existing project changes and following its instructions.
+description: Load for software or repository changes that need planning, implementation, or validation. Load filesystem for workspace actions; these guides do not provide tools or grant execution access.
 ---
 Load the filesystem skill before taking workspace actions. A scene or persona never grants tools; if the required execution tool is absent, provide analysis within the available capabilities.
 

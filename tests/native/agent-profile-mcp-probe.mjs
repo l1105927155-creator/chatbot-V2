@@ -17,6 +17,7 @@ class McpProbeAdapter extends LlmAdapter {
     const call = ++this.count
     appendFileSync(process.env.V2_MCP_PROBE_OUTPUT, JSON.stringify({
       call, sessionId: options.sessionId, tools, messages: options.messages,
+      toolSchemas: options.tools ?? [],
     }) + '\n')
     if (call === 1) {
       if (!tools.includes('mcp__astrbot__history_search')) {

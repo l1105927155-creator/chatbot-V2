@@ -9,6 +9,7 @@ python3 scripts/verify-dsh-source.py upstream.lock.json \
 node tests/native/agent-profile-foundation.mjs
 node tests/native/agent-profile-compaction.mjs
 node tests/native/agent-profile-persona-lifecycle.mjs
+node tests/native/agent-profile-decision-guide.mjs
 node tests/native/agent-profile-scenario.mjs
 node tests/native/agent-profile-web-boundaries.mjs
 node tests/native/agent-profile-owner-sandbox.mjs

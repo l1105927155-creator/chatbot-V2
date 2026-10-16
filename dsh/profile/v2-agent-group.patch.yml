@@ -66,6 +66,8 @@
       name: ../plugins/agent-profile/persona.mjs
       config:
         stateRoot: !!js process.env.V2_PERSONA_STATE_ROOT
+    - id: v2-agent-decision-guide
+      name: ../plugins/agent-profile/decision-guide.mjs
     - id: v2-acp-startup
       name: '@deepseek-ai/dsh-acp-app'
     - id: v2-acp

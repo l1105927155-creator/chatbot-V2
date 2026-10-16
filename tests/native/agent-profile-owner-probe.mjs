@@ -14,7 +14,7 @@ class OwnerProbeAdapter extends LlmAdapter {
     const call = ++this.count
     const tools = (options.tools ?? []).map(tool => tool.name).sort()
     appendFileSync(process.env.V2_OWNER_PROBE_OUTPUT, JSON.stringify({
-      call, tools, messages: options.messages, runtime: this.runtimeFacts,
+      call, tools, toolSchemas: options.tools ?? [], messages: options.messages, runtime: this.runtimeFacts,
     }) + '\n')
     if (call % 2 === 1) {
       if (!tools.includes('bash')) throw new Error('owner Bash tool missing')

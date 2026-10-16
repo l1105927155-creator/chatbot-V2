@@ -109,7 +109,12 @@ with TemporaryDirectory(prefix="agent-profile-acp-", dir=root / ".runtime") as t
         assert calls[0]["sessionId"] == session_id
         assert "You are the Agent-Bot" in json.dumps(calls[0]["messages"])
         assert calls[0]["tools"] == initial["tools"]
+        request_schemas = {schema["name"]: schema for schema in calls[0]["toolSchemas"]}
+        assert "facts may have changed" in request_schemas["web_search"]["description"]
+        assert "specific relevant URL" in request_schemas["web_fetch"]["description"]
+        assert "bash" not in request_schemas
         assert calls[0]["skills"] == initial["skills"]
+        assert json.dumps(calls[0]["messages"]).count("Use the information already visible") == 1
 
         def change_count():
             return len(skill_changes.read_text(encoding="utf-8").splitlines()) if skill_changes.exists() else 0
@@ -137,6 +142,7 @@ with TemporaryDirectory(prefix="agent-profile-acp-", dir=root / ".runtime") as t
         assert len(calls) == 2, calls
         assert calls[1]["sessionId"] == session_id
         assert "analytical Agent-Bot" in json.dumps(calls[1]["messages"])
+        assert json.dumps(calls[1]["messages"]).count("Use the information already visible") == 1
         assert "You are the Agent-Bot" not in json.dumps(calls[1]["messages"])
         assert calls[1]["tools"] == initial["tools"]
         assert "web-research" in calls[1]["skills"], calls[1]["skills"]
@@ -174,6 +180,7 @@ with TemporaryDirectory(prefix="agent-profile-acp-", dir=root / ".runtime") as t
         assert len(calls) == 3, calls
         assert calls[2]["sessionId"] == session_id
         assert "analytical Agent-Bot" in json.dumps(calls[2]["messages"])
+        assert json.dumps(calls[2]["messages"]).count("Use the information already visible") == 1
         assert calls[2]["tools"] == initial["tools"]
         assert calls[2]["skills"] == resumed["skills"]
         resumed_history = json.dumps(calls[2]["messages"])

@@ -110,6 +110,23 @@ async def scenario(base):
         assert all(call["sessionId"] == sid for call in calls)
         assert "mcp__astrbot__history_search" in calls[0]["tools"]
         assert "bash" not in calls[0]["tools"] and "read" not in calls[0]["tools"]
+        # Inspect the assembled model request, beyond MCP tools/list metadata.
+        schemas = {tool["name"]: tool for tool in calls[0]["toolSchemas"]}
+        assert "ordinary conversation" in schemas["web_search"]["description"]
+        assert "untrusted" in schemas["web_fetch"]["description"]
+        for call in calls:
+            assert json.dumps(call["messages"]).count("Use the information already visible") == 1
+        recent = schemas["mcp__astrbot__history_recent"]
+        assert "ordinary chat" in recent["description"]
+        assert "untrusted" in recent["description"]
+        search = schemas["mcp__astrbot__history_search"]
+        assert "not semantic search" in " ".join(search["description"].split())
+        assert set(search["parameters"]["properties"]) == {"query", "before_id", "limit"}
+        assert "exclusive" in schemas["mcp__astrbot__history_before"]["description"]
+        assert "partial" in schemas["mcp__astrbot__current_group_info"]["description"]
+        send = schemas["mcp__astrbot__qq_send_origin"]
+        assert "platform_confirmed=false" in send["description"]
+        assert set(send["parameters"]["properties"]) == {"text"}
         observed = json.dumps(calls[1]["messages"], ensure_ascii=False)
         assert "older context: yellow pear" in observed, observed
         assert "other group secret violet melon" not in observed, observed

@@ -1,6 +1,6 @@
 ---
 name: filesystem
-description: Inspect and modify files inside the isolated owner workspace using the available confined Bash tool.
+description: Load before an Owner workspace file inspection or edit. It provides method guidance only; proceed with file operations only when the trusted Profile actually exposes confined Bash.
 ---
 Check which tools are actually available. This skill grants no file or shell access. If Bash is absent, explain the available conversation capabilities instead of claiming a file operation.
 

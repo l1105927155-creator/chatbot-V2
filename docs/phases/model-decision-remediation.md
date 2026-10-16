@@ -1,6 +1,6 @@
 # Agent-Bot 模型决策与渐进式披露整改目标
 
-> 状态：待实施 / 待验收（2026-10-15）
+> 状态：已实现；独立 live 沙箱核心验收及产品回归通过（2026-10-16）。模型附加事实误述、非确定性和未覆盖范围见[实现与验证记录](../model-decision-validation-2026-10-16.md)。真实 QQ 验收仍独立未完成。
 > 依据：用户提供的《Bot 模型决策参考设计模式》，按现有 Personal Agent-Bot 架构调整。
 > 当前产品契约：[personal-agent-bot.md](personal-agent-bot.md)；运行时边界：[agent-bot-runtime.md](../architecture/agent-bot-runtime.md)；测试环境：[sandbox.md](../sandbox.md)。
 

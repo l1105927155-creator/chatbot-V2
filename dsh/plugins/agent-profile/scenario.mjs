@@ -9,9 +9,11 @@ export const name = 'v2-agent-scenario'
 export const inject = ['agents', 'skills']
 
 export const SCENARIOS = Object.freeze({
-  'casual-chat': Object.freeze(['chat-history']),
+  // Context lookup and external research are cross-scene methods: the scene
+  // should focus method discovery, not make these capabilities unknowable.
+  'casual-chat': Object.freeze(['chat-history', 'web-research']),
   research: Object.freeze(['chat-history', 'web-research']),
-  development: Object.freeze(['chat-history', 'filesystem', 'development']),
+  development: Object.freeze(['chat-history', 'web-research', 'filesystem', 'development']),
 })
 const DEFAULT_SCENE = 'casual-chat'
 
@@ -46,6 +48,18 @@ export function readScene(root, sessionId) {
   return { revision: state.revision, scene: state.scene }
 }
 
+// Owner-domain guide discovery comes from the trusted Profile patch, never
+// from conversation text or scene state. Runtime tool schemas and guards
+// continue to control what can actually execute.
+export function skillsForScene(scene, ownerSkills = false) {
+  const visible = new Set(SCENARIOS[scene])
+  if (ownerSkills === true) {
+    visible.add('filesystem')
+    visible.add('development')
+  }
+  return visible
+}
+
 function assertPrivateDirectory(root) {
   if (typeof root !== 'string' || !isAbsolute(root)) throw new Error('absolute scene stateRoot required')
   mkdirSync(root, { recursive: true, mode: 0o700 })
@@ -59,6 +73,7 @@ function assertPrivateDirectory(root) {
 export async function apply(ctx, config) {
   const root = config?.stateRoot
   const skillsDir = config?.skillsDir
+  const ownerSkills = config?.ownerSkills === true
   assertPrivateDirectory(root)
   if (typeof skillsDir !== 'string' || !isAbsolute(skillsDir)) throw new Error('absolute skillsDir required')
   const fibers = new Map()
@@ -162,7 +177,9 @@ export async function apply(ctx, config) {
     const fiber = agent.ctx.inject(['skills'], scope => {
       scope.skills.registerProvider(control => {
         let last = readScene(root, agent.session.id)
-        const permitted = name => SCENARIOS[readScene(root, agent.session.id).scene].includes(name)
+        const permitted = name => skillsForScene(
+          readScene(root, agent.session.id).scene, ownerSkills,
+        ).has(name)
         const invalidateIfChanged = () => {
           let next
           try { next = readScene(root, agent.session.id) }
@@ -186,7 +203,7 @@ export async function apply(ctx, config) {
               await usePolling()
               observation = await native.list(options)
             }
-            const visible = new Set(SCENARIOS[readScene(root, agent.session.id).scene])
+            const visible = skillsForScene(readScene(root, agent.session.id).scene, ownerSkills)
             const filter = candidates => candidates.filter(item => visible.has(item.name))
             return Array.isArray(observation)
               ? filter(observation)

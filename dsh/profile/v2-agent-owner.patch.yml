@@ -36,6 +36,7 @@
       config:
         stateRoot: !!js process.env.V2_SCENE_STATE_ROOT
         skillsDir: !!js process.env.V2_AGENT_SKILLS_DIR
+        ownerSkills: true
     - id: tool-skill
       name: '@deepseek-ai/dsh-tool-skill'
     - id: web
@@ -74,6 +75,8 @@
       name: ../plugins/agent-profile/persona.mjs
       config:
         stateRoot: !!js process.env.V2_PERSONA_STATE_ROOT
+    - id: v2-agent-decision-guide
+      name: ../plugins/agent-profile/decision-guide.mjs
     - id: shell-env
       name: '@deepseek-ai/dsh-shell-env'
     - id: bash-sandbox

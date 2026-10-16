@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 PYTHON = ROOT / ".runtime" / "astrbot" / ".venv" / "bin" / "python"
 
 
-def test_group_profile_native_web_research_and_scene_revocation():
+def test_group_profile_native_web_research_is_discoverable_across_scenes():
     worker = r'''
 import json, os, shutil, sys
 from pathlib import Path
@@ -111,25 +111,25 @@ with TemporaryDirectory(prefix="agent-profile-research-", dir=root / ".runtime")
         })
         assert research_result["stopReason"] == "end_turn", research_result
 
-        # Change this durable Session back to casual-chat and request the skill
-        # again. The tool set remains fixed while the scoped catalog denies it.
+        # Change this durable Session back to casual-chat. Research guidance
+        # remains discoverable across scenes while tools stay unchanged.
         assert scene_store.select(research_session, "casual-chat") == {
             "revision": 2, "scene": "casual-chat",
         }
-        revoked_result = request(client, "session/prompt", {
+        shared_result = request(client, "session/prompt", {
             "sessionId": research_session,
-            "prompt": [{"type": "text", "text": "The research scene is over; try loading web-research again."}],
+            "prompt": [{"type": "text", "text": "Use web-research to check a current fact."}],
         })
-        assert revoked_result["stopReason"] == "end_turn", revoked_result
+        assert shared_result["stopReason"] == "end_turn", shared_result
         request(client, "session/close", {"sessionId": research_session})
 
-        # Keep a fresh casual-chat Session to verify independent scope isolation.
+        # A fresh casual-chat Session can also load the method guide.
         casual_session = request(client, "session/new", {
             "cwd": str(workspace), "mcpServers": [],
         })["sessionId"]
         casual_result = request(client, "session/prompt", {
             "sessionId": casual_session,
-            "prompt": [{"type": "text", "text": "Try loading web-research in casual chat."}],
+            "prompt": [{"type": "text", "text": "Load web-research for a current fact."}],
         })
         assert casual_result["stopReason"] == "end_turn", casual_result
         request(client, "session/close", {"sessionId": casual_session})
@@ -163,23 +163,13 @@ with TemporaryDirectory(prefix="agent-profile-research-", dir=root / ".runtime")
     assert "fixture fetched page content: cobalt lantern" in after_fetch, after_fetch
     assert "fixture search excerpt: green comet" in after_fetch, after_fetch
 
-    def tool_results(value):
-        if isinstance(value, dict):
-            if value.get("role") == "tool":
-                return [json.dumps(value, ensure_ascii=False)]
-            return [text for child in value.values() for text in tool_results(child)]
-        if isinstance(value, list):
-            return [text for child in value for text in tool_results(child)]
-        return []
-
-    revoked_results = tool_results(research_calls[5]["messages"])
-    assert revoked_results, research_calls[5]["messages"]
-    assert "unknown or no longer available" in revoked_results[-1], revoked_results
+    shared_history = json.dumps(research_calls[5]["messages"], ensure_ascii=False)
+    assert "Use the available native `web_search`" in shared_history, shared_history
 
     casual_calls = model_calls[casual_session]
     assert len(casual_calls) == 2, casual_calls
     casual_history = json.dumps(casual_calls[1]["messages"], ensure_ascii=False)
-    assert "unknown or no longer available" in casual_history, casual_history
+    assert "Use the available native `web_search`" in casual_history, casual_history
     assert all(call["tools"] == expected_tools for call in casual_calls)
 
     provider_calls = [json.loads(line) for line in providers_output.read_text(encoding="utf-8").splitlines()]
@@ -192,8 +182,8 @@ with TemporaryDirectory(prefix="agent-profile-research-", dir=root / ".runtime")
         "native_tools": expected_tools,
         "tool_timeouts_ms": {"web_search": 60000, "web_fetch": 30000},
         "research_tool_steps": 3,
-        "same_session_skill_revocation": True,
-        "casual_chat_skill_rejected": True,
+        "research_skill_available_across_scenes": True,
+        "casual_chat_skill_body_loaded_on_request": True,
         "real_model_provider_requests": 0,
         "public_network_requests": 0,
         "qq_requests": 0,
@@ -216,4 +206,4 @@ with TemporaryDirectory(prefix="agent-profile-research-", dir=root / ".runtime")
         raise AssertionError(f"native web research ACP exceeded 90 seconds\n{stdout}\n{stderr}")
     assert process.returncode == 0, stdout + stderr
     assert '"native_ctx_web_fixture_chain": true' in stdout
-    assert '"casual_chat_skill_rejected": true' in stdout
+    assert '"research_skill_available_across_scenes": true' in stdout

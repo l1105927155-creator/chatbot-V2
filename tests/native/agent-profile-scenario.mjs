@@ -82,12 +82,23 @@ async function eventually(check, timeout = 3000) {
   }
   assert.fail('timed out waiting for scoped skill catalog invalidation')
 }
+async function beforeStep(agent, messages = []) {
+  return ctx.waterfall('agent/pre-step', {
+    agent, messages, turn: 1, step: 1, signal: new AbortController().signal,
+  }, async () => ({ kind: 'enter', messages }))
+}
+const textOf = messages => messages.flatMap(message => message.content ?? [])
+  .filter(block => block.type === 'text').map(block => block.text).join('\n')
 const names = agent => ctx.skills.list({ scope: agent }).then(list => list.map(skill => skill.name).sort())
 const load = (agent, name, id) => ctx.tools.execute({
   name: 'skill', arguments: { name }, agent, callId: ToolCallId(id),
   signal: new AbortController().signal,
 })
 try {
+  assert.deepEqual([...Scenario.skillsForScene('casual-chat')].sort(), ['chat-history', 'web-research'])
+  assert.deepEqual([...Scenario.skillsForScene('casual-chat', true)].sort(), [
+    'chat-history', 'development', 'filesystem', 'web-research',
+  ])
   await mount(SystemPrompt, { includeRuntimeContext: false, includeHarnessIdentity: false })
   await mount(ToolRuntime)
   await mount(SkillRegistry)
@@ -96,27 +107,66 @@ try {
   const scenarioFiber = await mount(Scenario, { stateRoot, skillsDir })
   const first = await create('scenario-a')
   const second = await create('scenario-b')
-  assert.deepEqual(await names(first), ['chat-history'])
-  assert.deepEqual(await names(second), ['chat-history'])
+  assert.deepEqual(await names(first), ['chat-history', 'web-research'])
+  assert.deepEqual(await names(second), ['chat-history', 'web-research'])
+  const defaultCatalog = await beforeStep(first)
+  const defaultCatalogText = textOf(defaultCatalog.messages)
+  assert.match(defaultCatalogText, /chat-history/)
+  assert.match(defaultCatalogText, /web-research/)
+  assert.doesNotMatch(defaultCatalogText, /History instructions|Research instructions/)
+  assert.ok((await ctx.skills.list({ scope: first })).every(item => !Object.hasOwn(item, 'content')))
   for (let i = 0; i < 20; i++) {
     const extra = await create('scale-' + i)
-    assert.deepEqual(await names(extra), ['chat-history'])
+    assert.deepEqual(await names(extra), ['chat-history', 'web-research'])
   }
   assert.ok(seenProviders.size <= 2, 'all sessions share one provider, with at most one watcher fallback replacement')
   assert.deepEqual(ctx.tools.schemas(first).map(s => s.name), ['skill'])
-  assert.equal((await load(first, 'web-research', 'scenario-deny-before')).isError, true)
-  assert.equal(await ctx.skills.get('web-research', { scope: first }), undefined)
+  assert.equal((await load(first, 'web-research', 'scenario-load-default')).isError, false)
+  assert.ok(await ctx.skills.get('web-research', { scope: first }))
   const originalSession = first.session
   writeScene(first, 'research', 1)
   await eventually(async () => JSON.stringify(await names(first)) === JSON.stringify(['chat-history', 'web-research']))
   assert.equal(first.session, originalSession)
-  assert.deepEqual(await names(second), ['chat-history'])
+  assert.deepEqual(await names(second), ['chat-history', 'web-research'])
   assert.equal((await load(first, 'web-research', 'scenario-allow')).isError, false)
-  assert.equal((await load(second, 'web-research', 'scenario-isolated')).isError, true)
-  writeScene(first, 'casual-chat', 2)
-  await eventually(async () => JSON.stringify(await names(first)) === JSON.stringify(['chat-history']))
-  assert.equal((await load(first, 'web-research', 'scenario-deny-after')).isError, true)
-  assert.equal(await ctx.skills.get('web-research', { scope: first }), undefined)
+  writeScene(first, 'development', 2)
+  await eventually(async () => JSON.stringify(await names(first)) === JSON.stringify([
+    'chat-history', 'development', 'filesystem', 'web-research',
+  ]))
+  assert.equal((await load(first, 'filesystem', 'scenario-development-filesystem')).isError, false)
+  const developmentCatalog = await beforeStep(first)
+  const developmentCatalogText = textOf(developmentCatalog.messages)
+  assert.match(developmentCatalogText, /filesystem/)
+  assert.match(developmentCatalogText, /Test filesystem/)
+  assert.doesNotMatch(developmentCatalogText, /Workspace filesystem instructions/)
+  assert.ok((await ctx.skills.list({ scope: first })).every(item => !Object.hasOwn(item, 'content')))
+  const filesystemBody = await load(first, 'filesystem', 'scenario-native-filesystem-load')
+  assert.equal(filesystemBody.isError, false)
+  assert.match(JSON.stringify(filesystemBody.content), /Workspace filesystem instructions/)
+  assert.equal((await load(second, 'filesystem', 'scenario-isolated')).isError, true)
+  writeScene(second, 'development', 1)
+  await eventually(async () => JSON.stringify(await names(second)) === JSON.stringify([
+    'chat-history', 'development', 'filesystem', 'web-research',
+  ]))
+  assert.equal((await load(second, 'development', 'scenario-group-development-guide')).isError, false)
+  assert.deepEqual(ctx.tools.schemas(second).map(s => s.name), ['skill'], 'group development guide cannot grant shell tools')
+  writeScene(first, 'casual-chat', 3)
+  await eventually(async () => JSON.stringify(await names(first)) === JSON.stringify(['chat-history', 'web-research']))
+  assert.equal(await ctx.skills.get('filesystem', { scope: first }), undefined)
+  assert.equal((await load(first, 'filesystem', 'scenario-filesystem-revoked')).isError, true)
+  const staleCatalogInput = [
+    ...developmentCatalog.messages,
+    { source: { kind: 'user' }, content: [{ type: 'text', text: '/filesystem' }] },
+  ]
+  const casualStep = await beforeStep(first, staleCatalogInput)
+  const casualStepText = textOf(casualStep.messages)
+  assert.doesNotMatch(casualStepText, /Workspace filesystem instructions/)
+  assert.equal(casualStep.messages.some(message => message.source?.kind === 'skill-invocation'), false)
+  const casualCatalog = casualStep.messages.find(message => message.source?.kind === 'skill-catalog')
+  assert.ok(casualCatalog)
+  assert.deepEqual(casualCatalog.source.entries.map(entry => entry.name).sort(), ['chat-history', 'web-research'])
+  assert.equal((await load(first, 'web-research', 'scenario-load-casual')).isError, false)
+  assert.ok(await ctx.skills.get('web-research', { scope: first }))
   assert.deepEqual(ctx.tools.schemas(first).map(s => s.name), ['skill'])
   assert.deepEqual(ctx.tools.schemas(second).map(s => s.name), ['skill'])
   assert.throws(() => Scenario.readScene(stateRoot, ''), /session ID required/)
@@ -142,16 +192,17 @@ try {
   assert.equal(disposedProviders.size, seenProviders.size, 'scenario unload must await shared native watcher drain')
   assert.deepEqual(await names(first), [])
   assert.deepEqual(await names(second), [])
-  await mount(Scenario, { stateRoot, skillsDir })
-  assert.deepEqual(await names(first), ['chat-history'])
-  assert.deepEqual(await names(second), ['chat-history'])
+  await mount(Scenario, { stateRoot, skillsDir, ownerSkills: true })
+  assert.deepEqual(await names(first), ['chat-history', 'development', 'filesystem', 'web-research'])
+  assert.deepEqual(await names(second), ['chat-history', 'development', 'filesystem', 'web-research'])
   writeScene(first, 'research', 5)
-  await eventually(async () => JSON.stringify(await names(first)) === JSON.stringify(['chat-history', 'web-research']))
-  assert.deepEqual(await names(second), ['chat-history'])
+  await eventually(async () => JSON.stringify(await names(first)) === JSON.stringify(['chat-history', 'development', 'filesystem', 'web-research']))
+  assert.deepEqual(await names(second), ['chat-history', 'development', 'filesystem', 'web-research'])
   writeScene(first, 'development', 6)
-  await eventually(async () => JSON.stringify(await names(first)) === JSON.stringify(['chat-history', 'development', 'filesystem']))
+  await eventually(async () => JSON.stringify(await names(first)) === JSON.stringify(['chat-history', 'development', 'filesystem', 'web-research']))
+  assert.equal((await load(first, 'filesystem', 'scenario-owner-filesystem')).isError, false)
   assert.equal((await load(first, 'development', 'scenario-development')).isError, false)
-  assert.deepEqual(await names(second), ['chat-history'])
+  assert.deepEqual(await names(second), ['chat-history', 'development', 'filesystem', 'web-research'])
   assert.deepEqual(ctx.tools.schemas(first).map(s => s.name), ['skill'], 'development scene cannot grant shell tools')
   console.log(JSON.stringify({
     sameSessionScenarioSwitch: true, scopedAgentIsolation: true,
