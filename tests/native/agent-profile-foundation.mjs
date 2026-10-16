@@ -48,13 +48,13 @@ try {
   const session = first.agent.session
   const prompt = async agent => renderPrompt(await ctx.systemPrompt.assemble({ scope: agent }))
   const before = await prompt(first.agent)
-  assert.match(before, /default Agent-Bot/)
+  assert.match(before, /默认 Agent-Bot/)
   const schemasBefore = ctx.tools.schemas(first.agent).map(t => t.name)
   first.state.select('analyst')
   const after = await prompt(first.agent)
-  assert.match(after, /analytical Agent-Bot/)
-  assert.doesNotMatch(after, /default Agent-Bot/)
-  assert.match(await prompt(second.agent), /default Agent-Bot/)
+  assert.match(after, /分析型 Agent-Bot/)
+  assert.doesNotMatch(after, /默认 Agent-Bot/)
+  assert.match(await prompt(second.agent), /默认 Agent-Bot/)
   assert.equal(first.agent.session, session, 'persona switch must retain the same native Session object')
   assert.deepEqual(ctx.tools.schemas(first.agent).map(t => t.name), schemasBefore, 'persona cannot change tool composition')
   assert.throws(() => first.state.select('../../etc/passwd'), /unknown persona/)
@@ -66,7 +66,7 @@ try {
     callId: ToolCallId('profile-skill-1'), signal: new AbortController().signal,
   })
   assert.equal(loaded.isError, false)
-  assert.match(JSON.stringify(loaded), /cannot grant permissions/)
+  assert.match(JSON.stringify(loaded), /不能授予权限/)
   const missing = await ctx.tools.execute({
     name: 'skill', arguments: { name: 'missing' }, agent: first.agent,
     callId: ToolCallId('profile-skill-2'), signal: new AbortController().signal,
@@ -77,7 +77,7 @@ try {
   const disposedScope = scopes.shift()
   await disposedScope.dispose()
   assert.throws(() => first.state.select('default'), /scope disposed/)
-  assert.match(await prompt(second.agent), /default Agent-Bot/)
+  assert.match(await prompt(second.agent), /默认 Agent-Bot/)
   console.log(JSON.stringify({
     nativeSessionRetained: true, scopedPersonaReplacement: true,
     nativeFilesystemSkillDiscovery: true, nativeSkillToolLoad: true,

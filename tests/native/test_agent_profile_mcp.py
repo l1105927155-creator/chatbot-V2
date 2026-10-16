@@ -112,17 +112,17 @@ async def scenario(base):
         assert "bash" not in calls[0]["tools"] and "read" not in calls[0]["tools"]
         # Inspect the assembled model request, beyond MCP tools/list metadata.
         schemas = {tool["name"]: tool for tool in calls[0]["toolSchemas"]}
-        assert "ordinary conversation" in schemas["web_search"]["description"]
-        assert "untrusted" in schemas["web_fetch"]["description"]
+        assert "普通交流" in schemas["web_search"]["description"]
+        assert "不可信" in schemas["web_fetch"]["description"]
         for call in calls:
-            assert json.dumps(call["messages"]).count("Use the information already visible") == 1
+            assert json.dumps(call["messages"], ensure_ascii=False).count("当前可见信息足够时") == 1
         recent = schemas["mcp__astrbot__history_recent"]
-        assert "ordinary chat" in recent["description"]
-        assert "untrusted" in recent["description"]
+        assert "普通交流" in recent["description"]
+        assert "不可信" in recent["description"]
         search = schemas["mcp__astrbot__history_search"]
-        assert "not semantic search" in " ".join(search["description"].split())
+        assert "不是语义搜索" in " ".join(search["description"].split())
         assert set(search["parameters"]["properties"]) == {"query", "before_id", "limit"}
-        assert "exclusive" in schemas["mcp__astrbot__history_before"]["description"]
+        assert "不包含该ID" in schemas["mcp__astrbot__history_before"]["description"]
         assert "partial" in schemas["mcp__astrbot__current_group_info"]["description"]
         send = schemas["mcp__astrbot__qq_send_origin"]
         assert "platform_confirmed=false" in send["description"]

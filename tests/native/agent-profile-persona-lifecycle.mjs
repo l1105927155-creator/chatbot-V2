@@ -43,21 +43,21 @@ try {
   const render = async () => renderPrompt(await ctx.systemPrompt.assemble({ scope: agent }))
   const personaFiber = ctx.plugin(Persona, { stateRoot: root })
   await personaFiber
-  assert.match(await render(), /You are the Agent-Bot/)
+  assert.match(await render(), /你是这段 QQ 对话中的 Agent-Bot/)
   assert.match(await render(), /Deployment baseline/)
   writeFileSync(Persona.statePath(root, agent.session.id),
     JSON.stringify({ revision: 1, persona: 'analyst' }), { mode: 0o600 })
-  assert.match(await render(), /analytical Agent-Bot/)
+  assert.match(await render(), /分析型 Agent-Bot/)
   assert.match(await render(), /Deployment baseline/)
   await agentEvents(ctx, agent).serial('agent/created', { agent, source: 'resume' })
-  assert.match(await render(), /analytical Agent-Bot/)
+  assert.match(await render(), /分析型 Agent-Bot/)
   assert.match(await render(), /Deployment baseline/)
   await personaFiber.dispose()
-  assert.doesNotMatch(await render(), /analytical Agent-Bot/)
+  assert.doesNotMatch(await render(), /分析型 Agent-Bot/)
 
   const reloaded = ctx.plugin(Persona, { stateRoot: root })
   await reloaded
-  assert.match(await render(), /analytical Agent-Bot/)
+  assert.match(await render(), /分析型 Agent-Bot/)
   assert.match(await render(), /Deployment baseline/)
   const stateFile = Persona.statePath(root, agent.session.id)
   chmodSync(stateFile, 0o644)
@@ -69,7 +69,7 @@ try {
   symlinkSync(target, stateFile)
   await assert.rejects(render(), /ELOOP/)
   await reloaded.dispose()
-  assert.doesNotMatch(await render(), /analytical Agent-Bot/)
+  assert.doesNotMatch(await render(), /分析型 Agent-Bot/)
   console.log(JSON.stringify({
     hotLoadExistingAgent: true, duplicateCreatedEventIdempotent: true,
     promptUpdatesWithoutSessionReplacement: true, unloadAndReload: true,

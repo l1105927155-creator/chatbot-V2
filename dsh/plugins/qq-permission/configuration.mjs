@@ -13,14 +13,14 @@ render: (_args, value) => [{type:'text', text:JSON.stringify(value)}]}
 
 export function apply(ctx) {
   ctx.tools.register({name:'conversation_scope_get',
-    description:'Read the latest public operation/file scope and revision for this QQ conversation.',
+    description:'读取当前 QQ 会话最新的公开操作/文件 scope 及 revision。',
     parameters:{type:'object', properties:{}, additionalProperties:false}, output,
     execute:async () => {
       const authority=ctx.v2Authority, source=authority.current()
       return authority.store.get(identity(source))
     }})
   ctx.tools.register({name:'conversation_scope_update',
-    description:'Owner only: atomically replace this conversation ordinary scope using expected_revision. Paths are exact files, relative to the session workspace or absolute. No other conversation can be targeted.',
+    description:'仅限 Owner：使用 expected_revision 原子替换当前会话的普通用户 scope。路径须为精确文件，可相对 Session 工作区或使用绝对路径；不能操作其他会话。',
     parameters:{type:'object', properties:{expected_revision:{type:'integer',minimum:0},ordinary:ordinarySchema},
       required:['expected_revision','ordinary'], additionalProperties:false}, output,
     execute:async (args, exec) => {

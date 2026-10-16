@@ -157,19 +157,19 @@ with TemporaryDirectory(prefix="agent-profile-research-", dir=root / ".runtime")
     after_skill = json.dumps(research_calls[1]["messages"], ensure_ascii=False)
     after_search = json.dumps(research_calls[2]["messages"], ensure_ascii=False)
     after_fetch = json.dumps(research_calls[3]["messages"], ensure_ascii=False)
-    assert "Use the available native `web_search`" in after_skill, after_skill
+    assert "使用当前可用的原生 web_search" in after_skill, after_skill
     assert "https://fixture.test/page" in after_search, after_search
     assert "fixture search excerpt: green comet" in after_search, after_search
     assert "fixture fetched page content: cobalt lantern" in after_fetch, after_fetch
     assert "fixture search excerpt: green comet" in after_fetch, after_fetch
 
     shared_history = json.dumps(research_calls[5]["messages"], ensure_ascii=False)
-    assert "Use the available native `web_search`" in shared_history, shared_history
+    assert "使用当前可用的原生 web_search" in shared_history, shared_history
 
     casual_calls = model_calls[casual_session]
     assert len(casual_calls) == 2, casual_calls
     casual_history = json.dumps(casual_calls[1]["messages"], ensure_ascii=False)
-    assert "Use the available native `web_search`" in casual_history, casual_history
+    assert "使用当前可用的原生 web_search" in casual_history, casual_history
     assert all(call["tools"] == expected_tools for call in casual_calls)
 
     provider_calls = [json.loads(line) for line in providers_output.read_text(encoding="utf-8").splitlines()]

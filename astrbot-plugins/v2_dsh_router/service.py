@@ -211,8 +211,8 @@ class ChatService:
             header = {
                 "conversation": conversation.key[:256],
                 "latest_user_journal_id": wake_id,
-                "instruction": "Reply to the latest ordinary user message using this ordered QQ journal delta. "
-                               "Use scoped history only if needed facts are missing from available context.",
+                "instruction": "根据按顺序提供的 QQ Journal 增量，回应最新的普通用户消息。"
+                               "仅在可用上下文缺少所需事实时，查询当前会话的历史。",
                 "history_window": {
                     "after_journal_id": after,
                     "through_journal_id": wake_id,

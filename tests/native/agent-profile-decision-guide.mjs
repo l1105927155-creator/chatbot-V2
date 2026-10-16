@@ -63,7 +63,7 @@ try {
   const global = await ctx.systemPrompt.assemble()
 
   const text = renderPrompt(one)
-  assert.match(text, /Use the information already visible/)
+  assert.match(text, /当前可见信息足够时/)
   assert.equal(one.sections.filter(section => section.name === 'v2:decision-guide').length, 1)
   assert.equal(two.sections.filter(section => section.name === 'v2:decision-guide').length, 1)
   assert.equal(untouched.sections.some(section => section.name === 'v2:decision-guide'), false)
@@ -75,9 +75,9 @@ try {
   const untouchedTools = byName(untouched.tools)
   const newAgentTools = byName(newlyCreated.tools)
   assert.deepEqual(changed.keep, base[3])
-  assert.equal(changed.web_search.description.includes('may have changed'), true)
-  assert.equal(changed.web_fetch.description.includes('specific relevant URL'), true)
-  assert.equal(changed.bash.description.includes('Owner-private workspace'), true)
+  assert.equal(changed.web_search.description.includes('可能变化'), true)
+  assert.equal(changed.web_fetch.description.includes('具体相关 URL'), true)
+  assert.equal(changed.bash.description.includes('Owner 私聊工作区'), true)
   for (const original of base) {
     const actual = changed[original.name]
     assert.ok(actual)
@@ -103,7 +103,7 @@ try {
   fibers.push(reloaded)
   const restored = await ctx.systemPrompt.assemble({ scope: owner })
   assert.equal(restored.sections.filter(section => section.name === 'v2:decision-guide').length, 1)
-  assert.equal(byName(restored.tools).web_search.description.startsWith('Use when facts may have changed'), true)
+  assert.equal(byName(restored.tools).web_search.description.startsWith('用于可能变化'), true)
   console.log(JSON.stringify({ scopedGuide: true, repeatedAssemblyStable: true,
     schemaIdentityAndParametersPreserved: true, agentScopeIsolation: true,
     concurrentStartupInstall: true, unloadAndReload: true }))

@@ -73,6 +73,16 @@
 
 日志保留在`.runtime/model-decision-{profile-gate,final-profile-gate,refined-focused,final-delta-tests,sandbox-tests,sandbox-extra-tests,expansion}.log`。原有生产服务与默认手动沙箱保持运行，本轮仅结束自己的独立实例。
 
+## 同日后续：指南语言整理
+
+按用户要求，行为决策、人格和群聊互动指南优先中文；工具名称、API参数和技术标识保留原始英文；技术型Skill以清楚、易维护为准。规则已写入`AGENTS.md`。
+
+- 中文：共享决策指南、group/Owner Profile、六份正式/实验人格、chat-history/web-research及实验历史指南、MCP说明、输入提示；历史qq-agent及其工具说明也做等义翻译，未重新启用。
+- 保留英文：filesystem/development两份技术Skill、原生工具技术说明及错误/诊断信息。原生描述仍完整保留在中文适用说明之后；没有翻译`history_search`、`web_fetch`、`before_id`等标识或改变schema。
+- 前文英文词数和历史测试记录保留当时版本，不作为当前中文版的词数或验证结果。新版实际ACP加载、Persona切换/resume、Skill加载、MCP schema及Owner边界聚焦回归38项通过，另有3项原生机制检查通过。独立审核未发现译文改变关键业务或权限语义。
+
+中文版独立live场景`.runtime/model-decisions-chinese-dda2ad161e/`的D1–D8共12项核心检查全部通过，137.25秒。停止后核对46条Journal、2条Router状态、134条audit、224条lifecycle，收发differences为空；行为源码哈希一致，无相关运行进程，Owner卷卸载。保存原始事件/API、逐项证据、原生Session、`sources/`、`stopped-evidence.json`及`stopped-verification.json`。此次仅一轮抽样，不据此宣称模型行为普遍等同；未连接真实QQ、未重启生产或默认手动沙箱。聚焦回归和live日志分别为`.runtime/chinese-guidance-focused.log`与`.runtime/chinese-guidance-live.log`。
+
 ## 验收边界
 
 - 模型结果有非确定性，有限抽样不是所有自然语言输入的保证；必要查询是否成功、结果是否支持回答，与不必要调用一起判断。

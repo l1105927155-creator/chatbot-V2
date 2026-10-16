@@ -89,7 +89,7 @@ with TemporaryDirectory(prefix="agent-profile-acp-", dir=root / ".runtime") as t
         assert initial["source"] == "startup"
         assert "skill" in initial["tools"]
         assert "chat-history" in initial["skills"]
-        assert "You are the Agent-Bot" in initial["prompt"]
+        assert "你是这段 QQ 对话中的 Agent-Bot" in initial["prompt"]
         forbidden = {"bash", "terminal", "persistent_bash", "filesystem", "read_file",
                      "write_file", "edit_file", "jobs", "exec"}
         assert forbidden.isdisjoint(initial["tools"]), initial["tools"]
@@ -107,14 +107,14 @@ with TemporaryDirectory(prefix="agent-profile-acp-", dir=root / ".runtime") as t
         calls = ordinary_calls()
         assert len(calls) == 1, calls
         assert calls[0]["sessionId"] == session_id
-        assert "You are the Agent-Bot" in json.dumps(calls[0]["messages"])
+        assert "你是这段 QQ 对话中的 Agent-Bot" in json.dumps(calls[0]["messages"], ensure_ascii=False)
         assert calls[0]["tools"] == initial["tools"]
         request_schemas = {schema["name"]: schema for schema in calls[0]["toolSchemas"]}
-        assert "facts may have changed" in request_schemas["web_search"]["description"]
-        assert "specific relevant URL" in request_schemas["web_fetch"]["description"]
+        assert "可能变化" in request_schemas["web_search"]["description"]
+        assert "具体相关 URL" in request_schemas["web_fetch"]["description"]
         assert "bash" not in request_schemas
         assert calls[0]["skills"] == initial["skills"]
-        assert json.dumps(calls[0]["messages"]).count("Use the information already visible") == 1
+        assert json.dumps(calls[0]["messages"], ensure_ascii=False).count("当前可见信息足够时") == 1
 
         def change_count():
             return len(skill_changes.read_text(encoding="utf-8").splitlines()) if skill_changes.exists() else 0
@@ -141,9 +141,9 @@ with TemporaryDirectory(prefix="agent-profile-acp-", dir=root / ".runtime") as t
         calls = ordinary_calls()
         assert len(calls) == 2, calls
         assert calls[1]["sessionId"] == session_id
-        assert "analytical Agent-Bot" in json.dumps(calls[1]["messages"])
-        assert json.dumps(calls[1]["messages"]).count("Use the information already visible") == 1
-        assert "You are the Agent-Bot" not in json.dumps(calls[1]["messages"])
+        assert "分析型 Agent-Bot" in json.dumps(calls[1]["messages"], ensure_ascii=False)
+        assert json.dumps(calls[1]["messages"], ensure_ascii=False).count("当前可见信息足够时") == 1
+        assert "你是这段 QQ 对话中的 Agent-Bot" not in json.dumps(calls[1]["messages"], ensure_ascii=False)
         assert calls[1]["tools"] == initial["tools"]
         assert "web-research" in calls[1]["skills"], calls[1]["skills"]
         request(first, "session/close", {"sessionId": session_id})
@@ -167,7 +167,7 @@ with TemporaryDirectory(prefix="agent-profile-acp-", dir=root / ".runtime") as t
         resumed = json.loads(probe_output.read_text(encoding="utf-8"))
         assert resumed["sessionId"] == session_id
         assert resumed["source"] == "resume"
-        assert "analytical Agent-Bot" in resumed["prompt"]
+        assert "分析型 Agent-Bot" in resumed["prompt"]
         assert resumed["tools"] == initial["tools"]
         assert resumed["skills"] == calls[1]["skills"]
         resumed_turn = request(resumed_client, "session/prompt", {
@@ -179,11 +179,11 @@ with TemporaryDirectory(prefix="agent-profile-acp-", dir=root / ".runtime") as t
                  if json.loads(line)["purpose"] is None]
         assert len(calls) == 3, calls
         assert calls[2]["sessionId"] == session_id
-        assert "analytical Agent-Bot" in json.dumps(calls[2]["messages"])
-        assert json.dumps(calls[2]["messages"]).count("Use the information already visible") == 1
+        assert "分析型 Agent-Bot" in json.dumps(calls[2]["messages"], ensure_ascii=False)
+        assert json.dumps(calls[2]["messages"], ensure_ascii=False).count("当前可见信息足够时") == 1
         assert calls[2]["tools"] == initial["tools"]
         assert calls[2]["skills"] == resumed["skills"]
-        resumed_history = json.dumps(calls[2]["messages"])
+        resumed_history = json.dumps(calls[2]["messages"], ensure_ascii=False)
         assert "first acceptance turn" in resumed_history
         assert "second acceptance turn" in resumed_history
         request(resumed_client, "session/close", {"sessionId": session_id})
