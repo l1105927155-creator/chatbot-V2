@@ -17,6 +17,7 @@ node tests/native/group-execution-boundaries.mjs
 node tests/native/agent-profile-owner-host.mjs
 "$repo_root/.runtime/astrbot/.venv/bin/python" -m pytest -q \
   tests/native/test_agent_profile_startup.py tests/native/test_agent_profile_owner_startup.py tests/native/test_agent_profile_owner_host_acp.py tests/native/test_agent_profile_acp.py \
+  tests/native/test_agent_model_defaults.py \
   tests/native/test_agent_profile_compaction_acp.py \
   tests/native/test_agent_profile_research.py \
   tests/native/test_agent_research_limits.py \

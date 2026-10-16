@@ -98,6 +98,12 @@ try {
   assert.match(text, /普通快速命令、快速查询和简单交流不例行发送/)
   assert.match(text, /不逐个工具播报/)
   assert.match(text, /QQ 回复使用自然、简洁的纯文本/)
+  assert.match(text, /默认用1到3句回答/)
+  assert.match(text, /不要为了显得周到而把简答扩写成说明书/)
+  assert.match(text, /先精简，再判断是否需要分段/)
+  assert.match(text, /每段通常约300到500字/)
+  assert.match(text, /最终回复不得重发已发送正文/)
+  assert.match(text, /通常控制在三条以内/)
   assert.match(text, /网页工具结果若附带 Markdown 引用建议，QQ 回复仍按本条使用裸 URL/)
   assert.match(text, /避免 Markdown 标题、粗体、表格、行内代码标记、代码围栏和 Markdown 链接/)
   assert.match(text, /代码正文与技术标识保持原义，保留代码本身必需的字符/)
@@ -155,6 +161,8 @@ try {
   for (const profile of ['group-sandbox', 'owner-host']) {
     assert.match(DecisionGuide.bashGuidance(profile), /等待数秒以上时.*qq_send_origin/)
   }
+  assert.doesNotMatch(text, /仅用于任务另需的一条独立消息/)
+  assert.doesNotMatch(text, /不要在最终回复中重复其正文/)
   assert.equal(DecisionGuide.bashGuidance('safe-chat'), undefined)
   console.log(JSON.stringify({ scopedGuide: true, repeatedAssemblyStable: true,
     schemaIdentityAndParametersPreserved: true, agentScopeIsolation: true,

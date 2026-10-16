@@ -43,6 +43,8 @@ Owner 私聊以 `owner_workdir` 为默认 cwd，按部署 Linux 用户权限访�
 
 Owner 的“主机能力”仍限于前台执行：Bash 默认120秒、最长600秒，未开放后台 Jobs、持久终端或自动提权。遇到真实任务因此无法完成时按具体故事评审，不为了“完整 DSH”自动放开其它模式。
 
+三个生产 Profile 的 DeepSeek 默认 `reasoningEffort` 为 `low`（仍启用思考），`defaultContextWindow` 为1,000,000 tokens；80%自动压缩阈值保持。窗口是输入与输出合计的本地计量，不是回复长度目标。默认回复简短，必要长答才按语义分段；分段字数、通常三条以内均为指南，没有发送硬配额。更改默认参数不清理会话；原来跟随 provider 默认的会话恢复后采用新默认，显式选择过不同 effort 的会话须按实际 ACP 配置另行核对。
+
 首次执行契约迁移必须先停服务，创建新格式备份，再用同一备份显式授权迁移。服务必须在启动时收到 `V2_EXECUTION_MIGRATE=1`；Router 还要求 `.runtime/execution-migration-approved.json` 中有 `scripts/agent-backup.py authorize-migration` 写入的备份摘要。pending/quarantine 会阻止会话迁移，不能手动删除后重试。迁移成功会消费授权标记；后续普通重启无需该环境变量。
 
 ```bash

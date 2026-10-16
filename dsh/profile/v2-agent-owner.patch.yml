@@ -1,4 +1,8 @@
 # Owner private-chat Agent Profile. Host tools require a fresh trusted source on each call.
+- id: llm-deepseek
+  config:
+    reasoningEffort: low
+    defaultContextWindow: 1000000
 - id: persistent-bash
   disabled: true
 - id: persistent-pwsh

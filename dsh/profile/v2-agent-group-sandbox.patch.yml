@@ -1,5 +1,9 @@
 # Admitted groups receive one identity-keyed isolated execution environment.
 # File access is provided only through confined foreground Bash, never native FS tools.
+- id: llm-deepseek
+  config:
+    reasoningEffort: low
+    defaultContextWindow: 1000000
 - id: persistent-bash
   disabled: true
 - id: persistent-pwsh

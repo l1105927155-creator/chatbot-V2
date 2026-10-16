@@ -1,5 +1,9 @@
 # safe-chat Profile (historical filename), used for ordinary non-Owner private chats.
 # No generic host file, terminal, shell, jobs, or Phase 5 permission tools.
+- id: llm-deepseek
+  config:
+    reasoningEffort: low
+    defaultContextWindow: 1000000
 - id: persistent-bash
   disabled: true
 - id: persistent-pwsh
