@@ -1,6 +1,6 @@
 # 执行域纠偏验证与部署记录（2026-10-16）
 
-状态：实现及隔离验证完成，正式迁移结果见下文；真实 QQ 复测和三天观察另行记录。
+状态：实现、隔离验证及正式服务迁移完成；已具备用户真实 QQ 复测条件，三天观察另行记录。
 
 ## 实现
 
@@ -39,7 +39,23 @@
 
 ## 正式迁移
 
-待写入本次停写备份、旧/新 SID 与 cursor 对照、实际进程配置和健康结果。迁移前再次核对 pending、quarantine 与活动轮次；不自动清除任何 pending。
+正式部署代码：`537f0b3`。保持准入 `private:1105927155` 与主群 `group:1055300305`，`group:994363760` 继续作为未准入对照。
+
+迁移前健康 ready、active/queued/pending/quarantine 全为0。正常停写后生成并校验 `runtime-before.tar.gz`，显式升级配置和一次性迁移标记；Owner 与主群均创建新原生 SID，成功 cursor、人格和 Scene 与旧状态一致。旧原生 Session 保留，旧 Owner 卷卸载归档；没有转换或交给群聊。
+
+实际进程核对到 `safe-chat`、`owner-host`、`group-sandbox` 三种组合：Owner 进程 cwd 为部署仓库，群进程 cwd 为其私有 home；群 Session cwd 为本群卷。启动和后续正常重启前后 Journal 的 count/max ID 均一致，没有自动重放或测试 QQ 出站。
+
+新契约停写备份 `runtime-after.tar.gz` 也实际完成并校验 SHA-256；随后不带一次性迁移环境正常重启，原生映射及 cursor 保持。最终服务 PID `1346655`，Owner-host／群沙箱／OneBot／Journal／ACP 均 ready，无 degraded、pending 或 quarantine。
+
+证据目录：`.runtime/execution-domain-deployment-20261016-144255/`，包含迁移前后配置（私有文件）、状态、Journal 计数、实际进程 cwd／Profile、两份备份及摘要、`deployment-after.json` 和 `restart-and-backup-after.json`。实施早期遗留在默认位置的未分配测试卷因目录权限不符合新契约，已在停写后原样移入该目录 `preexisting-unassigned-group-storage` 保留；没有放宽校验或将其分配给真实群。
+
+未向真实 QQ 发送验收消息；用户可开始下面的复测。
+
+## 用户复测步骤
+
+1. Owner 独立私聊：请 Bot 报告当前工作目录，在 `/tmp/v2-owner-retest.txt` 写入独特标记并读回；按需要核验正常网络与超过60秒的安全命令。
+2. 主群 `1055300305`：真实 @Bot，先由两名成员分别写读 `/workspace/group-retest.txt`；再请求读取上一步确实存在的宿主 `/tmp/v2-owner-retest.txt`，应无法读取。Owner 在群内也只能操作本群沙箱。
+3. 普通非 Owner 私聊保持 safe-chat；未准入群 `994363760` 不应因普通 @请求获得 DSH 自由聊天或执行能力。确定性插件仍按自身规则处理。
 
 ## 未覆盖范围
 
