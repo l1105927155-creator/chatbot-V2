@@ -46,6 +46,10 @@ Owner 已使用部署账户的主机文件和网络权限，但保持原计划�
 
 ## 部署与剩余验收
 
-部署结果在本次停写备份、明确写入容量策略和重启核对后补记。当前真实准入仍为主群1055300305和 Owner 私聊；994363760保持对照。
+2026-10-17（北京时间）已部署整改提交 `6cab564`。正式服务正常停写后，先保存完整备份及校验和，再在私有 `agent-service.json` 显式写入5GiB/1GiB/retain策略，普通重启，不重新迁移或重建 Session。
+
+部署证据：`.runtime/execution-audit-deployment-20261017-022421/`。包含停写后的 Router/Journal 快照、备份和校验和、前后配置、启动后实际进程中选定的非敏感环境变量，以及就绪结果。新进程 PID `1427919`；`ready`、`onebot_connected`、`owner_host_ready`、`group_sandboxes_ready` 均为 true，active/queued/pending/quarantine 均为0。所有 Session映射和cursor、Journal行数及最大ID与停写时完全相同；本次未自动重放或发送真实QQ消息。
+
+实际进程读取 `V2_GROUP_TOTAL_STORAGE_MIB=5120`、`V2_GROUP_MIN_FREE_MIB=1024`、`V2_EXECUTION_CONTRACT=2`。主群现有卷经过 `enumerate_groups(require_mounted=True)` 的挂载身份验证，仍为独立1GiB，只有一个生产群卷。当前真实准入仍为主群1055300305和 Owner 私聊；994363760保持对照，未因预算扩大而自动准入。P2两项的本次代码及隔离验证已收口，P3保持原定前台执行边界。
 
 真实 QQ 多成员文件/Shell、Owner 主机任务、取消/恢复、故障与连续3天观察仍由实际使用验收记录，不能由本次静态复审、原生机制测试或模拟 QQ 代替。
