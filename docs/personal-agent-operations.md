@@ -71,4 +71,4 @@ systemctl --user start chatbot-v2-agent.service
 
 恢复要求相同仓库绝对路径及相同 `upstream.lock.json`，先验证完整包、路径/类型/哈希，再写入；拒绝已有目标、祖先符号链接、特殊文件和路径穿越，不覆盖现存数据。Owner镜像按完整字节恢复，重新验证物理预留空间。切换后核对 SID/cursor/pending、Journal和工作区哨兵；失败先停服务，把新恢复组件隔离，再放回原组件。不要以清空 pending 或新建 Session 代替恢复。
 
-2026-10-15 的正式还原演练已保留原组件及备份于忽略目录 `.runtime/agent-ops-validation/`；这是含凭据材料的本机证据，不应提交。当前只准入 Owner 私聊，真实群验收尚未开始。
+2026-10-15 的正式还原演练已保留原组件及备份于忽略目录 `.runtime/agent-ops-validation/`；这是含凭据材料的本机证据，不应提交。2026-10-16已部署`a0bfe2f`并接入主群1055300305，保留Owner私聊，994363760不准入；最新备份与接入证据位于`.runtime/group-onboarding-20261016/`。真实群固定故事与3天观察尚未完成，详见验收清单。
