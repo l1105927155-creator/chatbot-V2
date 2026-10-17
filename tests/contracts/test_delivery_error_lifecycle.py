@@ -20,6 +20,7 @@ async def main():
     router.allowed_conversations = {'group:42'}
     router.owners = frozenset()
     router.logger = logging.getLogger('delivery-test')
+    router.audit = NS(path='/test/audit/events.jsonl', write_errors=0)
     started, release, closed = asyncio.Event(), asyncio.Event(), asyncio.Event()
     async def handle(*args, **kwargs):
         raise m.FinalReplyDeliveryError(ConnectionError('test'))

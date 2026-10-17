@@ -507,7 +507,10 @@ class V2DshRouter(star.Star):
         except FinalReplyDeliveryError as exc:
             self.logger.exception("V2 final reply delivery failed for QQ message %s; turn consumed, no replay",
                                   raw.get("message_id"))
-            await notify_delivery_error(event, message.conversation, self.owners, exc, self.logger)
+            log_location = (str(self.audit.path) if self.audit.write_errors == 0
+                            else "journalctl --user -u chatbot-v2-agent.service")
+            await notify_delivery_error(event, message.conversation, self.owners, exc, self.logger,
+                                        log_location)
         except DshTurnCancelled:
             self.logger.info("V2 DSH cancellation confirmed for QQ message %s; outcome pending review",
                              raw.get("message_id"))

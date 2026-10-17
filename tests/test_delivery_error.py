@@ -15,7 +15,7 @@ spec.loader.exec_module(module)
 
 
 class ActionFailed(Exception):
-    result = {"retcode": 1200, "message": "secret reply https://secret.invalid"}
+    result = {"retcode": 1200, "message": 'NTEvent secret https://secret.invalid {"result": 10, "errMsg": ""}'}
 
 
 @pytest.mark.parametrize("key,members,expected", [
@@ -37,12 +37,15 @@ def test_notification_mentions_only_configured_owner_in_this_group(key, members,
         owners = [NS(platform_id=p, bot_id=b, user_id=u) for p, b, u in
                   [("qq", "bot", "42"), ("other", "bot", "43"), ("qq", "other", "43")]]
         await module.notify_delivery_error(NS(get_group=group, send=send),
-            NS(platform_id="qq", bot_id="bot", key=key), owners, error, logging.getLogger(__name__))
+            NS(platform_id="qq", bot_id="bot", key=key), owners, error, logging.getLogger(__name__),
+            '/test/audit/events.jsonl')
         assert len(sent) == 1
         segments = [x.toDict() for x in sent[0].chain]
         assert [str(x["data"]["qq"]) for x in segments if x["type"] == "at"] == expected
         text = "".join(x["data"]["text"] for x in segments if x["type"] == "text")
         assert "retcode=1200" in text and "可发送新请求" in text
+        assert "NTEvent result=10" in text and "错误记录位置：/test/audit/events.jsonl" in text
+        assert segments[0]["type"] == "text" and "发送失败，错误信息" in segments[0]["data"]["text"]
         assert "secret" not in text
     asyncio.run(run())
 
