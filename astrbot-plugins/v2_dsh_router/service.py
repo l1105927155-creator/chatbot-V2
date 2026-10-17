@@ -24,6 +24,14 @@ class RecoveryError(RuntimeError):
     """The requested reviewed pending turn cannot currently be resolved."""
 
 
+class FinalReplyDeliveryError(RuntimeError):
+    """DSH completed a turn, but AstrBot could not deliver its final reply."""
+
+    def __init__(self, cause: Exception) -> None:
+        super().__init__("DSH turn completed but final reply delivery failed")
+        self.cause = cause
+
+
 @dataclass
 class _ActiveRun:
     session_id: str
@@ -369,8 +377,8 @@ class ChatService:
         await asyncio.to_thread(self.state.begin_turn, *identity, state.session_id, upper)
         if trace:
             trace.emit("dsh/start", journal_id=upper)
-        # Any error after begin_turn leaves a durable pending marker. The
-        # SDK stdio protocol cannot prove whether a lost call was accepted.
+        # Errors before a confirmed DSH result leave a durable pending marker:
+        # the stdio protocol cannot prove whether a lost call was accepted.
         run_args = (state.session_id, prompt, *mcp_args)
         if self.trusted_sources:
             if not mcp_args:
@@ -391,6 +399,16 @@ class ChatService:
         finally:
             if self._active_runs.get(identity) is active:
                 del self._active_runs[identity]
-        await send(reply)
+        try:
+            await send(reply)
+        except Exception as exc:
+            # The model turn is known to have completed. Consume only this
+            # wake row so a failed QQ delivery does not block later requests.
+            # Do not retry: the platform may have accepted the message before
+            # its receipt was lost. Cancellation and DSH failures stay pending.
+            await asyncio.to_thread(self.state.complete_turn, *identity, state.session_id, upper)
+            if trace:
+                trace.emit("delivery/final_failed", journal_id=upper, error_type=type(exc).__name__)
+            raise FinalReplyDeliveryError(exc) from exc
         await asyncio.to_thread(self.state.complete_turn, *identity, state.session_id, upper)
         return reply

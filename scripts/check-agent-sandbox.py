@@ -322,11 +322,12 @@ class Acceptance(smoke.Smoke):
                 self.wait(lambda:bool(self.journal_for(out['message_id'],key)),'real feedback canonical output')
                 self.wait(lambda:any(r['event']=='turn/failed' for r in self.trace(event)),'actual 180 second send timeout',timeout=195)
                 state=self.mapping(key);inbound=self.journal_for(event['message_id'],key)[0]
-                assert state['pending_upper_cursor']==inbound['journal_id'] and state['last_seen_journal_id']<inbound['journal_id']
+                assert state['pending_upper_cursor'] is None and state['last_seen_journal_id']==inbound['journal_id']
                 trace=self.trace(event);assert any(r['event']=='send/failed' for r in trace)
                 assert not any(r['event']=='send/receipt' for r in trace)
+                assert any(r['event']=='delivery/final_failed' for r in trace)
                 self.timeout_event=event;self.timeout_state=state
-                return self.ids((event,out))|{'canonical_output_exists':True,'api_result_uncertain':True,'pending_journal':state['pending_upper_cursor'],'no_success_cursor':True}
+                return self.ids((event,out))|{'canonical_output_exists':True,'api_result_uncertain':True,'pending_journal':None,'input_consumed_without_resend':True}
             self.case('actual-180s-live-send-timeout',timeout)
             def restart():
                 before=self.states();events=[e['message_id'] for e in self.events()];count=len(self.rows());dispatches=sum(r['event']=='dsh/dispatched' for r in self.audit())
@@ -334,11 +335,13 @@ class Acceptance(smoke.Smoke):
                 assert self.states()==before and [e['message_id'] for e in self.events()]==events and len(self.rows())==count
                 assert sum(r['event']=='dsh/dispatched' for r in self.audit())==dispatches
                 if hasattr(self,'timeout_event'):
-                    event=self.send('这一条不得重试旧任务。请只回复 MUST_BE_PAUSED。',sender='90002',private=True)
-                    self.wait(lambda:any(r['event']=='turn/failed' for r in self.trace(event)),'pending rejection')
-                    assert not any(r['event']=='dsh/dispatched' for r in self.trace(event))
-                    assert self.mapping('private:90002')==self.timeout_state
-                    assert not self.outbound_since(event['message_id'],'private:90002')
+                    event=self.send('这一条不得重试旧任务。请只回复 NEXT_AFTER_SEND_FAILURE。',sender='90002',private=True)
+                    out=self.wait(lambda:next(iter(self.outbound_since(event['message_id'],'private:90002')),None),'next request after delivery failure',timeout=170)
+                    self.wait(lambda:any(r['event']=='turn/completed' for r in self.trace(event)),'next turn completed')
+                    assert sum(r['event']=='dsh/dispatched' for r in self.trace(event))==1
+                    current=self.mapping('private:90002')
+                    assert current['session_id']==self.timeout_state['session_id'] and current['pending_upper_cursor'] is None
+                    assert 'NEXT_AFTER_SEND_FAILURE' in json.dumps(out,ensure_ascii=False)
                 sid=self.mapping('group:91000')['session_id']
                 event,out=self.normal('请只回复 SAME_SESSION_AFTER_RESTART，不调用工具。','SAME_SESSION_AFTER_RESTART',mention=True)
                 assert self.mapping('group:91000')['session_id']==sid

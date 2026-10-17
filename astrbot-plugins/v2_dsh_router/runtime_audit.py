@@ -23,14 +23,14 @@ TOOLS = frozenset({"bash", "skill", "web_search", "web_fetch", *(
     ("history_recent", "history_before", "history_search", "current_group_info", "qq_send_origin"))})
 EVENTS = frozenset({"turn/queued", "turn/start", "turn/completed", "turn/failed", "turn/duplicate",
     "dsh/start", "dsh/dispatched", "dsh/stop", "dsh/error", "tool/start", "tool/end", "cancel/requested", "recovery/resolved",
-    "control/request", "send/start", "send/returned", "send/failed", "send/receipt"})
+    "control/request", "send/start", "send/returned", "send/failed", "send/receipt", "delivery/final_failed"})
 IDS = frozenset({"session_id", "message_id", "attempt_id", "related_turn_id", "call_id"})
 NUMBERS = frozenset({"journal_id", "previous_cursor", "pending_cursor", "queue_ms", "elapsed_ms"})
 ENUMS = {"tool": TOOLS | {"other"}, "status": {"in_progress", "completed", "failed", "other"},
     "stop_reason": {"end_turn", "cancelled", "max_tokens", "other"},
     "send_kind": {"final", "mcp", "control"},
     "control": {"persona", "scene", "status", "cancel", "recover", "metrics", "other"},
-    "error_type": {"CancelledError", "DshTurnCancelled", "PendingTurnError", "RecoveryError",
+    "error_type": {"CancelledError", "DshTurnCancelled", "PendingTurnError", "RecoveryError", "FinalReplyDeliveryError", "ActionFailed",
         "TimeoutError", "JsonRpcError", "ConnectionError", "RuntimeError", "ValueError", "KeyError", "other"},
     "action": {"send_msg", "send_group_msg", "send_private_msg", "send_group_forward_msg", "send_private_forward_msg"}}
 

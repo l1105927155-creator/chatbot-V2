@@ -14,7 +14,8 @@ from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 
 from .dsh_client import DshTurnCancelled, start_client
 from .routing import should_route
-from .service import ChatService, PendingTurnError, RecoveryError
+from .service import ChatService, PendingTurnError, RecoveryError, FinalReplyDeliveryError
+from .delivery_error import notify_delivery_error
 from .state import StateStore, migration_needed
 from .mcp_server import McpServer
 from .trust_domain import Owner, classify, parse_owners
@@ -484,6 +485,7 @@ class V2DshRouter(star.Star):
             return
         from data.plugins.v2_journal.journal import message_from_onebot
 
+        task = asyncio.current_task()
         try:
             message = message_from_onebot(event.get_platform_id(), raw)
             if not message.message_id:
@@ -497,15 +499,15 @@ class V2DshRouter(star.Star):
                 self.onebot_audit.bind(getattr(event, "bot", None))
                 await event.send(MessageChain().message(reply))
 
-            task = asyncio.current_task()
             self._active.add(task)
-            try:
-                await service.handle(
-                    message.conversation, message.message_id, send,
-                    get_group=event.get_group,
-                )
-            finally:
-                self._active.discard(task)
+            await service.handle(
+                message.conversation, message.message_id, send,
+                get_group=event.get_group,
+            )
+        except FinalReplyDeliveryError as exc:
+            self.logger.exception("V2 final reply delivery failed for QQ message %s; turn consumed, no replay",
+                                  raw.get("message_id"))
+            await notify_delivery_error(event, message.conversation, self.owners, exc, self.logger)
         except DshTurnCancelled:
             self.logger.info("V2 DSH cancellation confirmed for QQ message %s; outcome pending review",
                              raw.get("message_id"))
@@ -513,6 +515,8 @@ class V2DshRouter(star.Star):
             self.logger.error("V2 DSH conversation paused: %s", exc)
         except Exception:
             self.logger.exception("V2 DSH turn failed for QQ message %s", raw.get("message_id"))
+        finally:
+            self._active.discard(task)
 
     async def _close_runtime(self) -> None:
         errors = []

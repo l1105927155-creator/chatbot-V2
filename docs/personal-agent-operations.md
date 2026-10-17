@@ -67,6 +67,8 @@ systemctl --user enable --now chatbot-v2-agent.service
 - `ready`：核心正常且 OneBot API/event WebSocket 已连接。通道断连仍返回200、`ready=false`，避免外部通道故障引起重启循环。
 - `pending_conversations` / `quarantined_sessions`：需要核对的会话；不能通过重启宣称操作未发生。
 
+DSH 已正常完成、仅最终 QQ 回复发送失败时，Router 消费该轮输入并记录 `delivery/final_failed`，不自动重发、重跑或暂停后续请求。错误通知最多尝试一次；群聊仅 @ 同平台/同 Bot 配置且实际在本群的 Bot Owner，无法确认成员时省略提及，私聊不 @。提示包含错误类型及数字 retcode，不转发异常原文或凭据。通知也失败时只记日志；不能保证 QQ 故障期间提示一定送达。模型执行结果不确定和取消仍保留 pending，按既有 exact recover 核对，不能批量清除旧 pending。
+
 ACP 存活检查使用锁定 Python SDK 的私有 `_proc` / `_reader_thread`；SDK 无公开的非生成 ping。升级必须重测。通道连接也不等于 provider 可用，余额/模型错误由实际请求验证。服务没有额外后台健康重启守护器。
 
 Owner 命令：`/v2agent status`、`metrics`、`persona list`、`scene list`、`cancel`。`recover <Journal编号>` 只在核对工具、Session、Journal和实际平台回执后跳过旧输入，不重试，不撤销副作用。状态和指标不创建 Session、不请求模型。

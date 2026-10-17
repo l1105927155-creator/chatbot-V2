@@ -28,6 +28,7 @@ def load(name, path):
 journal = load("v2_dsh_service_journal", "astrbot-plugins/v2_journal/journal.py")
 state = load("v2_dsh_service_state", "astrbot-plugins/v2_dsh_router/state.py")
 service = load("v2_dsh_service_contract", "astrbot-plugins/v2_dsh_router/service.py")
+from runtime_audit import AuditStore
 
 
 def append(store, text, message_id, *, outbound=False, conversation="group:3"):
@@ -166,19 +167,12 @@ def test_delayed_cancel_cannot_target_later_turn_of_same_session(tmp_path):
     asyncio.run(scenario())
 
 
-def test_reviewed_recovery_skips_uncertain_send_without_replay_or_fabricated_output(tmp_path):
-    class Recoverable(FakeDsh):
-        def __init__(self):
-            super().__init__()
-            self.drained = []
-
-        def drain_session(self, sid):
-            self.drained.append(sid)
-
+def test_final_reply_delivery_failure_completes_turn_and_allows_next_request(tmp_path):
     j = journal.JournalStore(tmp_path / "journal.sqlite3")
     s = state.StateStore(tmp_path / "state.sqlite3")
-    dsh = Recoverable()
-    svc = service.ChatService(j, s, dsh)
+    audit = AuditStore(tmp_path / "audit")
+    dsh = FakeDsh()
+    svc = service.ChatService(j, s, dsh, audit=audit)
     conv = journal.Conversation("qq", "1", "group:3")
     append(j, "do an operation once", "in-1")
 
@@ -187,16 +181,21 @@ def test_reviewed_recovery_skips_uncertain_send_without_replay_or_fabricated_out
         append(j, reply, "actual-platform-feedback", outbound=True)
         raise ConnectionError("platform accepted but receipt lost")
 
-    with pytest.raises(ConnectionError):
+    with pytest.raises(service.FinalReplyDeliveryError) as raised:
         asyncio.run(svc.handle(conv, "in-1", lost_receipt))
+    assert isinstance(raised.value.cause, ConnectionError)
+    assert isinstance(raised.value.__cause__, ConnectionError)
+    failed_delivery = [row for row in audit.rows() if row["event"] == "delivery/final_failed"]
+    assert len(failed_delivery) == 1
+    assert failed_delivery[0]["error_type"] == "ConnectionError"
+    assert "platform accepted" not in json.dumps(failed_delivery)
     saved = s.get("qq", "1", "group:3")
+    assert saved.last_seen_journal_id == 1 and saved.pending_upper_cursor is None
+    assert asyncio.run(svc.handle(conv, "in-1", lost_receipt)) is None
+    assert len(dsh.calls) == 1
+    assert any(row.message.message_id == "actual-platform-feedback"
+               for row in j.recent(conv, 10))
     append(j, "arrived after failure", "in-queued")
-    before = j.before(conv, 100, 100)
-    resolved = asyncio.run(svc.resolve_pending(conv, saved.pending_upper_cursor))
-    assert resolved.session_id == saved.session_id
-    assert resolved.last_seen_journal_id == 1 and resolved.pending_upper_cursor is None
-    assert j.before(conv, 100, 100) == before
-    assert dsh.drained == [saved.session_id] and len(dsh.calls) == 1
     append(j, "new explicit request", "in-new")
 
     async def send(_reply):
@@ -204,9 +203,31 @@ def test_reviewed_recovery_skips_uncertain_send_without_replay_or_fabricated_out
 
     asyncio.run(svc.handle(conv, "in-new", send))
     assert len(dsh.calls) == 2 and dsh.calls[1][0] == saved.session_id
+    assert audit.snapshot("chat")["events"]["turn/completed"] == 1
     assert [row["content"]["text"] for row in rows(dsh.calls[1][1])] == [
         "DSH reply 1", "arrived after failure", "new explicit request"]
     assert "do an operation once" not in dsh.calls[1][1]
+
+
+@pytest.mark.parametrize("failure", ["cancel-send", "state-write"])
+def test_final_send_does_not_hide_cancellation_or_state_commit_failure(tmp_path, monkeypatch, failure):
+    j = journal.JournalStore(tmp_path / "journal.sqlite3")
+    s = state.StateStore(tmp_path / "state.sqlite3")
+    conv = journal.Conversation("qq", "1", "group:3")
+    append(j, "request", "in-1")
+    svc = service.ChatService(j, s, FakeDsh())
+    async def send(_reply):
+        if failure == "cancel-send":
+            raise asyncio.CancelledError()
+        raise ConnectionError("send failed")
+    if failure == "state-write":
+        def failed_commit(*_args):
+            raise OSError("state unavailable")
+        monkeypatch.setattr(s, "complete_turn", failed_commit)
+    with pytest.raises(asyncio.CancelledError if failure == "cancel-send" else OSError):
+        asyncio.run(svc.handle(conv, "in-1", send))
+    saved = s.get("qq", "1", "group:3")
+    assert saved.pending_upper_cursor == 1 and saved.last_seen_journal_id == 0
 
 
 @pytest.mark.parametrize("case", ["no-state", "no-pending", "stale", "running"])
