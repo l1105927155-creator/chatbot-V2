@@ -2,7 +2,7 @@
 
 当前产品契约：[执行环境归属纠偏](docs/phases/execution-domain-correction-2026-10-16.md)。Owner 真实独立私聊使用 Linux 部署账户的主机原生文件、前台 Shell 与网络；已准入群在本群独立沙箱中执行，包括群内 Owner；普通非 Owner 私聊保持 safe-chat。两个信任域与三个工具组合不混用，人格和 Scene 不授予权限。
 
-当前追加工作：[QQ 交互补充](docs/phases/qq-interaction-follow-up-2026-10-17.md)。按用户重述的测试记录实现的纯 @Bot 唤醒、耗时操作前等候说明、QQ 纯文本已随 `9cadc3f` 验证并部署，见[交互验证记录](docs/qq-interaction-validation-2026-10-17.md)；本轮按后续要求优先精简回复、必要时语义分段，并调整为低思考默认和既有1M上下文，见[回复与参数验证](docs/qq-reply-style-validation-2026-10-17.md)；没有新增发送硬配额，已完成的执行域不变。正式主群原有发送失败pending9970保持，须Owner核对后恢复再继续群内复测。
+当前追加工作：[QQ 交互补充](docs/phases/qq-interaction-follow-up-2026-10-17.md)。按用户重述的测试记录实现的纯 @Bot 唤醒、耗时操作前等候说明、QQ 纯文本已随 `9cadc3f` 验证并部署，见[交互验证记录](docs/qq-interaction-validation-2026-10-17.md)；本轮按后续要求优先精简回复、必要时语义分段，并调整为低思考默认和既有1M上下文，见[回复与参数验证](docs/qq-reply-style-validation-2026-10-17.md)；没有新增发送硬配额，已完成的执行域不变。最终发送失败的新处理已随 `823f46f` 部署：已完成的轮次结束、一次错误提示及群内Owner提及，后续请求继续；已核实的主群9970精确解除暂停，未重跑或重发，见[发送错误验证](docs/final-reply-delivery-validation-2026-10-17.md)。不确定执行仍按原恢复机制核对。
 
 - 回复简洁/必要分段指南及 `low` 默认已随 `875d129` 部署，1M上下文不变。真实模型复测仍出现821字新闻、1405字长答不分段，行为验收未通过；保留原始证据，不能把配置生效视作表达目标已完成。
 - 纠偏实现已随 `537f0b3` 部署；原生机制、独立模拟 QQ、真实模型、取消恢复、重启和备份恢复证据见 [实施记录](docs/execution-domain-validation-2026-10-16.md)。这不是最终真实 QQ 安全验收。

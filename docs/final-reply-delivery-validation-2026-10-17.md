@@ -27,3 +27,9 @@
 `GET /api/evidence` 在本次通知查询群成员后返回500：`sandbox/evidence.py` 的 `_receipts_and_differences` 对所有OneBot action的 `response.data` 连续调用 `.get`，而 `get_group_member_list` 的data为数组，触发 `AttributeError: 'list' object has no attribute 'get'`。原始动作请求/响应已留在本实例 `onebot/sandbox.sqlite3`，日志有复现堆栈；应先核验data类型或仅对发送action解析message_id。本轮记录供后续补充沙箱，不修改证据平台。
 
 脚本模型只验证程序链路，不代替模型行为或真实QQ验收；未连接真实QQ，未复现QQ客户端内部 `result=10` 的具体成因。通知在QQ故障期间仍可能发送失败，程序只保证一次尝试、不循环重试。最初隔离进程因审计事件注册修正而主动中断，数据保存在 `.runtime/final-delivery-sandbox-20261017-151632/`，未覆盖成通过。
+
+## 部署与旧暂停处理
+
+`823f46f` 于2026-10-17 15:23（Asia/Shanghai）备份后部署，证据 `.runtime/qq-delivery-deployment-20261017-152331/`，正式PID `1485712`，ready/OneBot/Owner host/群沙箱正常，active/queued/pending/quarantine均为0。
+
+只处理已核实的旧主群9970：正常停写、完整备份后，重新核对该入站的原始 `dsh/stop=end_turn` 和 `send/failed`；通过既有 `StateStore.resolve_pending` 的SID/旧cursor/pending精确比较更新，消费9970且不重放。保存 `reviewed-legacy-resolution.json`；其它会话状态和所有SID保持，canonical Journal计数/上界保持。该修复没有清空或自动处理其它不确定执行，不发送真实QQ测试消息或补发旧回复。用户可重新在主群 @Bot 发新请求。
