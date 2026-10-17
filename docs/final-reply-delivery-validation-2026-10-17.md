@@ -30,6 +30,8 @@
 
 ## 部署与旧暂停处理
 
+最新用户措辞调整：Owner提及位于整条消息开头，结尾统一为“不影响后续消息处理。”；无群内Owner时仍省略提及。5项通知检查核对实际消息段顺序及新措辞，通过日志 `.runtime/delivery-notice-wording-tests.log`。
+
 后续提示格式补充：NapCat提供API失败回执，固定版AstrBot该发送路径向上传播异常，不自动向群发送错误提示。V2提示改为“发送失败，错误信息：类型/retcode/NTEvent result”，下一行提及已核实的群内Bot Owner并显示实际audit文件路径；无Owner省略提及。audit为脱敏错误记录，完整异常仍在user service日志（`journalctl --user -u chatbot-v2-agent.service`）。audit发生写入错误时提示改给service日志查询命令，不声称文件记录成功。6项通知/生命周期测试通过，`.runtime/delivery-notice-location-tests.log`；未发送真实QQ测试消息。
 
 该格式随 `ba77ac8` 于15:31备份后部署，证据 `.runtime/qq-notice-location-deployment-20261017-153143/`。PID `1487745`，服务ready；全部Session/cursor/pending和Journal计数/上界保持，未重放消息。
