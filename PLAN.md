@@ -1,10 +1,16 @@
-# 当前实施入口（2026-10-17：执行域纠偏及代码审计收口）
+# 当前实施入口（2026-10-18：人格与指南热更新已部署）
 
 当前产品契约：[执行环境归属纠偏](docs/phases/execution-domain-correction-2026-10-16.md)。Owner 真实独立私聊使用 Linux 部署账户的主机原生文件、前台 Shell 与网络；已准入群在本群独立沙箱中执行，包括群内 Owner；普通非 Owner 私聊保持 safe-chat。两个信任域与三个工具组合不混用，人格和 Scene 不授予权限。
 
+本轮工作：[四项审查整改](docs/phases/review-remediation-2026-10-17.md)。用户授权修复 Journal 采集健康盲点、失败/暂停提示、回复简洁与必要语义分段、当前文档一致性，并通过隔离沙箱验收。源码修改及聚焦/隔离沙箱/真实模型样本验证已完成，详见[本轮验证](docs/review-remediation-validation-2026-10-17.md)；已随模型切换重启部署，见[模型生效记录](docs/model-1017-deployment-2026-10-18.md)，不以模拟 QQ 代替真实 QQ 和三天观察。
+
+本轮追加：[人格与指南热更新](docs/phases/guide-hot-reload-2026-10-18.md)。读取实际Bot人格、共享指南、Profile以及Owner固定工作目录AGENTS.md，在原生下一次模型请求组装时更新；Skill沿用原生目录刷新与按需正文加载。完整gate、同PID/SID实际请求、真实模型和沙箱验证已通过，机制已安装到正式服务；后续编辑Markdown无需重启，详见[验证与部署](docs/guide-hot-reload-validation-2026-10-18.md)。
+
+当前模型：`deepseek-official / deepseek-flash`，官方当前对应 DeepSeek-V4.1-Flash-1017；正式配置、进程与 Owner 会话原生记录已复核。旧 Session 恢复通过原生 ACP 应用部署模型，同SID/历史/cursor/pending保留。low 思考及1M上下文保持。
+
 当前追加工作：[QQ 交互补充](docs/phases/qq-interaction-follow-up-2026-10-17.md)。按用户重述的测试记录实现的纯 @Bot 唤醒、耗时操作前等候说明、QQ 纯文本已随 `9cadc3f` 验证并部署，见[交互验证记录](docs/qq-interaction-validation-2026-10-17.md)；本轮按后续要求优先精简回复、必要时语义分段，并调整为低思考默认和既有1M上下文，见[回复与参数验证](docs/qq-reply-style-validation-2026-10-17.md)；没有新增发送硬配额，已完成的执行域不变。最终发送失败的新处理已随 `823f46f` 部署：已完成的轮次结束、一次错误提示及群内Owner提及，后续请求继续；已核实的主群9970精确解除暂停，未重跑或重发，见[发送错误验证](docs/final-reply-delivery-validation-2026-10-17.md)。不确定执行仍按原恢复机制核对。
 
-- 回复简洁/必要分段指南及 `low` 默认已随 `875d129` 部署，1M上下文不变。真实模型复测仍出现821字新闻、1405字长答不分段，行为验收未通过；保留原始证据，不能把配置生效视作表达目标已完成。
+- 生产部署的历史状态：回复简洁/必要分段指南及 `low` 默认已随 `875d129` 部署，1M上下文不变。真实模型复测仍出现821字新闻、1405字长答不分段，行为验收未通过；保留原始证据，不能把配置生效视作表达目标已完成。
 - 纠偏实现已随 `537f0b3` 部署；原生机制、独立模拟 QQ、真实模型、取消恢复、重启和备份恢复证据见 [实施记录](docs/execution-domain-validation-2026-10-16.md)。这不是最终真实 QQ 安全验收。
 - 最新远端审计见 [代码复审](docs/execution-domain-code-audit-2026-10-16.md)。P2 工具入口覆盖和累计群卷容量已随 `6cab564` 验证并部署，见[审计处理记录](docs/execution-domain-audit-remediation-2026-10-16.md)；保留 P3 前台/时限边界，不扩展其它执行模式或另建权限平台。
 - 用户授权按不超过五个生产群安排容量：每群1GiB、总预留5GiB、宿主至少保留1GiB余量；取消准入后数据保留并继续计入预算。预算或磁盘不足只拒绝新增，不自动删旧数据。

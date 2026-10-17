@@ -113,10 +113,12 @@ async def test_plugin_binds_once_captures_both_paths_and_unsubscribes(tmp_path):
     plugin._bindings = {}
     plugin.capture_errors = 0
     plugin._closing = False
+    plugin._initialized = True
     plugin.logger = MagicMock()
 
     plugin._bind_platforms()
     plugin._bind_platforms()
+    assert plugin.collector_health()["bindings_match"] is True
     assert client.bind_calls == 2
     assert set(client.hooks) == {"message", "message_sent"}
 
@@ -139,7 +141,9 @@ async def test_plugin_binds_once_captures_both_paths_and_unsubscribes(tmp_path):
 
     replacement = Client()
     platform.client = replacement
+    assert plugin.collector_health()["bindings_match"] is False
     plugin._bind_platforms()
+    assert plugin.collector_health()["bindings_match"] is True
     assert client.unbind_calls == 2
     assert replacement.bind_calls == 2
     queued_callback = replacement.hooks["message"]
@@ -277,6 +281,7 @@ async def test_storage_failure_is_reported_without_blocking_event_bus(tmp_path):
     )
     plugin.store = MagicMock()
     plugin.store.append.side_effect = OSError("disk unavailable")
+    plugin.store.record_capture_failure.side_effect = OSError("disk unavailable")
     plugin._write_lock = asyncio.Lock()
     plugin._pending_writes = set()
     plugin._bindings = {}
@@ -287,8 +292,48 @@ async def test_storage_failure_is_reported_without_blocking_event_bus(tmp_path):
 
     await client.emit(raw(20))
     assert plugin.capture_errors == 1
-    plugin.logger.exception.assert_called_once()
+    assert plugin.capture_degraded is True
+    assert plugin.capture_status["available"] is False
+    assert plugin.logger.exception.call_count == 2
+    assert "could not persist capture failure state" in plugin.logger.exception.call_args_list[0].args[0]
     assert "history is incomplete" in plugin.logger.exception.call_args.args[0]
+    await plugin.terminate()
+
+
+@pytest.mark.asyncio
+async def test_capture_failure_is_sticky_and_persists_without_journal_row(tmp_path):
+    path = tmp_path / "journal.sqlite3"
+    store = JournalStore(path)
+    client = Client()
+    plugin = object.__new__(V2Journal)
+    plugin.context = SimpleNamespace(
+        platform_manager=SimpleNamespace(get_insts=lambda: [Platform(client)])
+    )
+    plugin.store = store
+    plugin._write_lock = asyncio.Lock()
+    plugin._pending_writes = set()
+    plugin._bindings = {}
+    plugin.capture_errors = 0
+    plugin.capture_degraded = False
+    plugin._closing = False
+    plugin.logger = MagicMock()
+    plugin._bind_platforms()
+
+    malformed = raw(21)
+    malformed["message"] = "invalid"
+    await client.emit(malformed)
+
+    assert plugin.capture_degraded is True
+    assert store.capture_status() == plugin.capture_status
+    assert plugin.capture_status["failure_count"] == 1
+    assert plugin.capture_status["last_failure_kind"] == "malformed_event"
+    assert store.recent(Conversation("v2-test", "900001", "private:900002")) == []
+
+    reopened = JournalStore(path)
+    assert reopened.capture_status()["degraded"] is True
+    assert reopened.capture_status()["failure_count"] == 1
+    reopened.clear_capture_failures()
+    assert reopened.capture_status()["degraded"] is False
     await plugin.terminate()
 
 

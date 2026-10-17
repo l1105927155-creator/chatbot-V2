@@ -169,7 +169,9 @@ class Expansion(base.Smoke):
                                   and e.get("inbound_message_id") == str(later["message_id"])
                                   for e in self.evidence(owner)["audit"]), "pending input rejected by actual Router")
             assert sum(e.get("event") == "model/start" for e in self.evidence(owner)["lifecycle"]) == prior_calls
-            assert not any(e["direction"] == "outbound" and e["message_id"] > later["message_id"] for e in self.events())
+            self.answer(later, "当前会话因上一轮结果待核对而暂停")
+            assert sum(e["direction"] == "outbound" and e["conversation"] == later["conversation"]
+                       and e["message_id"] > later["message_id"] for e in self.events()) == 1
             self.answer(self.wake(owner, f"/v2agent recover {pending}", sender=self.owner), "已解除暂停")
             resolved = next(s for s in self.evidence(owner)["states"] if s["domain"] == "owner")
             assert resolved["pending_upper_cursor"] is None and resolved["last_seen_journal_id"] == pending

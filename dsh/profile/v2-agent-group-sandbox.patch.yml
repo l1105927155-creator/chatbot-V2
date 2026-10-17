@@ -101,6 +101,7 @@
     - id: v2-agent-decision-guide
       name: ../plugins/agent-profile/decision-guide.mjs
       config:
+        instructionsFile: !!js process.env.V2_AGENT_INSTRUCTIONS_FILE
         executionProfile: group-sandbox
     - id: v2-acp-startup
       name: '@deepseek-ai/dsh-acp-app'

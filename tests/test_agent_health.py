@@ -79,6 +79,9 @@ class FakeJournal:
     def check_health(self):
         return self.ready
 
+    def capture_status(self):
+        return {"available": True, "degraded": False, "failure_count": 0}
+
 
 def make_router(*, connected=True, api=True, events=True, closing=False,
                 owner_host_ready=True, groups_ready=True, acp_ready=True, journal_ready=True,
@@ -101,8 +104,43 @@ def make_router(*, connected=True, api=True, events=True, closing=False,
         "volume_module": SimpleNamespace(verified_group_workspace=verify),
         "platform_id": "qq", "bot_id": "42", "group_id": "123"}}
     platforms = [FakePlatform(api=api, events=events)] if connected else []
-    router.context = SimpleNamespace(platform_manager=SimpleNamespace(get_insts=lambda: platforms))
+    collector = SimpleNamespace(collector_health=lambda: {"initialized": True, "closing": False, "bindings_match": True, "capture_degraded": False, "capture_errors": 0})
+    router.context = SimpleNamespace(platform_manager=SimpleNamespace(get_insts=lambda: platforms),
+        get_registered_star=lambda name: SimpleNamespace(activated=True, star_cls=collector))
     return router
+
+
+def test_capture_failure_is_unhealthy_even_with_readable_database(tmp_path):
+    from data.plugins.v2_journal.journal import JournalStore
+    journal = JournalStore(tmp_path / "journal.sqlite3")
+    journal.record_capture_failure("append_failure")
+    router = make_router()
+    router.mcp.journal = journal
+    for store in (journal, JournalStore(journal.path)):
+        router.mcp.journal = store
+        status = asyncio.run(router.health())
+        assert status["journal_readable"]
+        assert status["journal_capture_failures"] == 1
+        assert not status["ready"] and not status["journal_capture_intact"]
+        assert status["degraded"]
+
+
+def test_collector_memory_latch_covers_failed_persistence():
+    router = make_router()
+    collector = SimpleNamespace(collector_health=lambda: {"initialized": True, "closing": False, "bindings_match": True, "capture_degraded": True, "capture_errors": 1})
+    router.context.get_registered_star = lambda name: SimpleNamespace(activated=True, star_cls=collector)
+    status = asyncio.run(router.health())
+    assert status["journal_readable"] and status["journal_capture_failures"] == 1
+    assert not status["journal_ready"] and status["degraded"]
+
+
+def test_missing_collector_is_not_mistaken_for_healthy_history():
+    router = make_router()
+    router.context.get_registered_star = lambda name: None
+    status = asyncio.run(router.health())
+    assert status["journal_readable"]
+    assert not status["journal_collector_ready"] and not status["ready"]
+    assert status["degraded"]
 
 
 def test_core_ready_while_onebot_is_disconnected_without_prompt_or_session() -> None:

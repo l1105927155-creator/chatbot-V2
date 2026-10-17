@@ -6,11 +6,14 @@ import signal
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 PYTHON = ROOT / ".runtime" / "astrbot" / ".venv" / "bin" / "python"
 
 
-def test_owner_model_defaults_reach_messages_and_resume_existing_session():
+@pytest.mark.parametrize("resumed_model", ["deepseek-v4-flash", "deepseek-flash"])
+def test_owner_model_defaults_reach_messages_and_resume_existing_session(resumed_model):
     worker = r'''
 import json, os, sys, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -90,7 +93,7 @@ with TemporaryDirectory(prefix="agent-model-defaults-", dir=root / ".runtime") a
 
     new = DshClient(dsh_bin=dsh_bin, dsh_home=home, workspace=workspace,
         patch=new_patch, instructions=instructions, provider="deepseek-official",
-        model="deepseek-v4-flash", enable_authorization=True,
+        model=os.environ["V2_TEST_RESUMED_MODEL"], enable_authorization=True,
         execution_profile="owner-host", owner_shell_env={"PATH": os.environ["PATH"]})
     try:
         new.runtime.resume(session_id)
@@ -101,6 +104,7 @@ with TemporaryDirectory(prefix="agent-model-defaults-", dir=root / ".runtime") a
         new.runtime.close()
         server.shutdown(); server.server_close(); thread.join(timeout=2)
 
+    assert [r["body"]["model"] for r in requests] == ["deepseek-v4-flash", os.environ["V2_TEST_RESUMED_MODEL"]]
     assert len(requests) == 2, "resume must issue exactly one new model request, with no replay: " + repr(requests)
     assert [request["body"].get("output_config") for request in requests] == [
         {"effort": "high"}, {"effort": "low"}
@@ -121,7 +125,7 @@ with TemporaryDirectory(prefix="agent-model-defaults-", dir=root / ".runtime") a
         "event_keys": [(list(event), list(event.get("data", {}))) for event in events]}
     assert [header.get("config", {}).get("reasoningEffort") for header in resumed] == ["high", "low"], headers
     contexts = [event["data"]["contextWindow"] for event in events if event.get("type") == "request/context"]
-    assert contexts == [1000000], contexts
+    assert contexts == ([1000000] if os.environ["V2_TEST_RESUMED_MODEL"] == "deepseek-v4-flash" else [1000000, 1000000]), contexts
     resumed_messages = requests[1]["body"]["messages"]
     wire_text = json.dumps(resumed_messages, ensure_ascii=False)
     assert "Remember the blue key 417." in wire_text
@@ -135,7 +139,7 @@ with TemporaryDirectory(prefix="agent-model-defaults-", dir=root / ".runtime") a
         "adapter_default_headers": len(resumed), "context_windows": contexts, "resumed_sid": True,
         "prior_context_present_once": True, "credential": "local-fake-only"}))
 '''
-    env = {**os.environ, "V2_REPO_ROOT": str(ROOT)}
+    env = {**os.environ, "V2_REPO_ROOT": str(ROOT), "V2_TEST_RESUMED_MODEL": resumed_model}
     process = subprocess.Popen(
         [str(PYTHON), "-c", worker], cwd=ROOT, env=env, text=True,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,

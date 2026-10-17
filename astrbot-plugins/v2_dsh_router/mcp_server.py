@@ -86,8 +86,9 @@ class _BearerAuth:
                     # expose identities, credentials, configuration or errors.
                     flags = {"core_ready", "ready", "closing", "onebot_connected", "owner_host_ready",
                              "group_sandboxes_ready",
-                             "acp_ready", "journal_ready", "state_ready", "degraded"}
-                    numbers = {"pid", "active_turns", "queued", "pending_conversations", "quarantined_sessions"}
+                             "acp_ready", "journal_ready", "journal_readable", "journal_capture_intact",
+                             "journal_collector_ready", "state_ready", "degraded"}
+                    numbers = {"pid", "active_turns", "queued", "pending_conversations", "quarantined_sessions", "journal_capture_failures"}
                     data = {key: value for key, value in result.items() if
                             (key in flags and type(value) is bool) or
                             (key in numbers and type(value) is int and value >= 0)}
@@ -255,12 +256,11 @@ class McpServer:
         async def qq_send_origin(text: str, ctx: Context | None = None) -> SendSubmission:
             """通过 AstrBot 向当前来源会话另发一条独立消息。
 
-            普通回答由 Agent 最终回复自动发送。先精简回答；确需保留的正文预计超过约600字时，按自然语义分段，
-            用本工具发送前面的完整段落，最终回复只发送最后一段，不重复已发送内容。短答不拆分，
-            不逐句、逐工具或按生成碎片发送。详见共享回复指南。
+            普通及长篇最终回答均由 Agent 最终回复自动发送；长篇最终回复由 AstrBot 按自然段落或编号主题分组。
+            本工具只发送最终回复以外的独立消息，例如必要的等候说明。详见共享回复指南。
             当请求明确要求等待，或预计操作会让用户等待数秒以上时（包括单条命令自身需要等待），
             可先用本工具提交一次简短、具体的等候说明，再启动该操作。普通快速命令、快速查询和简单交流不例行发送；
-            等候说明通常不超过一条；不逐个工具播报，最终回复不重复。
+            等候说明通常不超过一条；不逐个工具播报，也不通过本工具重复最终回复正文。
             text 是发往 QQ 的纯文本，避免 Markdown 标题、粗体、表格、行内代码标记、代码围栏和 Markdown 链接；
             text 长度须为1..4000字符，目的会话由宿主固定。
             submitted=true 仅表示 AstrBot 接受提交，不表示 QQ 已确认送达

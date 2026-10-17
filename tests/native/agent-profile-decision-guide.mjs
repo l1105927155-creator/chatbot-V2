@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict'
+import { mkdtempSync, readFileSync, writeFileSync, renameSync, rmSync, unlinkSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { Context } from '../../dsh/node_modules/@deepseek-ai/cordis/lib/index.js'
 import SystemPrompt, { renderPrompt } from '../../dsh/node_modules/@deepseek-ai/dsh-system-prompt/lib/index.js'
 import AgentRegistry from '../../dsh/node_modules/@deepseek-ai/dsh-agent/lib/index.js'
@@ -6,6 +9,14 @@ import { Session, SessionId } from '../../dsh/node_modules/@deepseek-ai/dsh-sess
 import { createScope } from '../../dsh/node_modules/@deepseek-ai/dsh-scope/lib/index.js'
 import * as DecisionGuide from '../../dsh/plugins/agent-profile/decision-guide.mjs'
 
+const guides = mkdtempSync(join(tmpdir(), 'v2-hot-guides-'))
+const guideFile = join(guides, 'guide.md')
+const instructionsFile = join(guides, 'profile.md')
+const projectGuideFile = join(guides, 'AGENTS.md')
+writeFileSync(projectGuideFile, '仅 Owner 项目指南 ONE')
+const guideText = readFileSync(new URL('../../dsh/plugins/agent-profile/decision-guide.md', import.meta.url), 'utf8')
+writeFileSync(guideFile, guideText)
+writeFileSync(instructionsFile, 'Deployment baseline')
 const ctx = new Context()
 const fibers = []
 const scopes = []
@@ -61,7 +72,7 @@ try {
   await pinnedWebPrompt
   fibers.push(pinnedWebPrompt)
   registration = await ctx.agents.register(owner)
-  const guide = ctx.plugin(DecisionGuide, { executionProfile: 'owner-host' })
+  const guide = ctx.plugin(DecisionGuide, { executionProfile: 'owner-host', guideFile, instructionsFile, projectGuideFile })
   // Register while apply() is still installing guidance on the already-live
   // owner. Lifecycle listeners must be active before that awaited setup so
   // this concurrently created Agent cannot miss its scoped installation.
@@ -92,21 +103,12 @@ try {
 
   const text = renderPrompt(one)
   assert.match(text, /当前可见信息足够时/)
-  assert.match(text, /只是纯 @Bot 呼唤、没有提出具体任务时，自然简短回应呼唤/)
-  assert.match(text, /不要臆造或执行任务，也无需例行查工具/)
-  assert.match(text, /预计操作会让用户等待数秒以上时（包括单条命令自身需要等待）/)
-  assert.match(text, /普通快速命令、快速查询和简单交流不例行发送/)
-  assert.match(text, /不逐个工具播报/)
-  assert.match(text, /QQ 回复使用自然、简洁的纯文本/)
-  assert.match(text, /默认用1到3句回答/)
-  assert.match(text, /不要为了显得周到而把简答扩写成说明书/)
-  assert.match(text, /先精简，再判断是否需要分段/)
-  assert.match(text, /每段通常约300到500字/)
-  assert.match(text, /最终回复不得重发已发送正文/)
-  assert.match(text, /通常控制在三条以内/)
-  assert.match(text, /网页工具结果若附带 Markdown 引用建议，QQ 回复仍按本条使用裸 URL/)
-  assert.match(text, /避免 Markdown 标题、粗体、表格、行内代码标记、代码围栏和 Markdown 链接/)
-  assert.match(text, /代码正文与技术标识保持原义，保留代码本身必需的字符/)
+  const principles = sectionText(one, 'v2:decision-guide')
+  assert.match(principles, /需要专门方法时才加载相关 Skill/)
+  assert.match(principles, /身份与权限由宿主核验/)
+  assert.match(principles, /核验结果后再声称完成/)
+  assert.ok(principles.length < 500, 'standing principles must stay small; procedures belong to tools/Skills')
+  assert.doesNotMatch(principles, /qq_send_origin|Markdown|50到200|300到500|阴阳怪气|before_id|nonce/)
   assert.equal(one.sections.filter(section => section.name === 'v2:decision-guide').length, 1)
   assert.equal(two.sections.filter(section => section.name === 'v2:decision-guide').length, 1)
   assert.equal(untouched.sections.some(section => section.name === 'v2:decision-guide'), false)
@@ -121,8 +123,7 @@ try {
   assert.equal(changed.web_search.description.includes('可能变化'), true)
   assert.equal(changed.web_fetch.description.includes('具体相关 URL'), true)
   assert.equal(changed.bash.description.includes('Owner 独立私聊'), true)
-  assert.match(renderPrompt(newlyCreated), /QQ 回复使用自然、简洁的纯文本/,
-    'the shared QQ output guidance must apply to group Agents too')
+  assert.match(renderPrompt(newlyCreated), /需要专门方法时才加载相关 Skill/)
   for (const original of base) {
     const actual = changed[original.name]
     assert.ok(actual)
@@ -140,6 +141,24 @@ try {
   assert.equal(sectionText(one, 'tool:web_search'), sectionText(two, 'tool:web_search'),
     'repeated assembly must not accumulate section replacements')
 
+  assert.match(sectionText(one, 'v2:owner-project-guide'), /仅 Owner 项目指南 ONE/)
+  writeFileSync(projectGuideFile, '仅 Owner 项目指南 TWO')
+  writeFileSync(guideFile + '.new', guideText.replace('当前可见信息足够时', '热更新指南版本二'))
+  renameSync(guideFile + '.new', guideFile)
+  writeFileSync(instructionsFile, '热更新 Profile 版本二')
+  const refreshed = await ctx.systemPrompt.assemble({ scope: owner })
+  assert.match(sectionText(refreshed, 'v2:owner-project-guide'), /仅 Owner 项目指南 TWO/)
+  unlinkSync(projectGuideFile)
+  const removed = await ctx.systemPrompt.assemble({ scope: owner })
+  assert.equal(sectionText(removed, 'v2:owner-project-guide'), '')
+  assert.match(sectionText(refreshed, 'v2:decision-guide'), /热更新指南版本二/)
+  assert.doesNotMatch(sectionText(refreshed, 'v2:decision-guide'), /当前可见信息足够时/)
+  assert.match(sectionText(refreshed, 'deployment:persona-prefix'), /热更新 Profile 版本二/)
+  assert.doesNotMatch(sectionText(refreshed, 'deployment:persona-prefix'), /Deployment baseline/)
+  assert.equal(byName(refreshed.tools).keep.description, base[3].description)
+  assert.match(renderPrompt(await ctx.systemPrompt.assemble({ scope: unrelated })), /Deployment baseline/)
+  writeFileSync(guideFile, guideText)
+
   await guide.dispose()
   fibers.pop()
   const unloaded = await ctx.systemPrompt.assemble({ scope: owner })
@@ -147,7 +166,7 @@ try {
   assert.match(sectionText(unloaded, 'tool:web_search'), /cite the relevant URLs as markdown links/)
   assert.match(sectionText(unloaded, 'tool:web_fetch'), /Cite the URL as a markdown link/)
   assert.equal(byName(unloaded.tools).web_search.description, base[0].description)
-  const reloaded = ctx.plugin(DecisionGuide, { executionProfile: 'owner-host' })
+  const reloaded = ctx.plugin(DecisionGuide, { executionProfile: 'owner-host', guideFile, instructionsFile, projectGuideFile })
   await reloaded
   fibers.push(reloaded)
   const restored = await ctx.systemPrompt.assemble({ scope: owner })
@@ -164,6 +183,18 @@ try {
   assert.doesNotMatch(text, /仅用于任务另需的一条独立消息/)
   assert.doesNotMatch(text, /不要在最终回复中重复其正文/)
   assert.equal(DecisionGuide.bashGuidance('safe-chat'), undefined)
+  await reloaded.dispose()
+  fibers.pop()
+  writeFileSync(projectGuideFile, 'OWNER_PROJECT_MUST_NOT_LEAK')
+  for (const executionProfile of ['group-sandbox', 'safe-chat']) {
+    const ordinary = ctx.plugin(DecisionGuide, { executionProfile, guideFile, instructionsFile, projectGuideFile })
+    await ordinary
+    try {
+      const assembled = await ctx.systemPrompt.assemble({ scope: group })
+      assert.doesNotMatch(renderPrompt(assembled), /OWNER_PROJECT_MUST_NOT_LEAK/)
+      assert.equal(assembled.sections.some(section => section.name === 'v2:owner-project-guide'), false)
+    } finally { await ordinary.dispose() }
+  }
   console.log(JSON.stringify({ scopedGuide: true, repeatedAssemblyStable: true,
     schemaIdentityAndParametersPreserved: true, agentScopeIsolation: true,
     concurrentStartupInstall: true, unloadAndReload: true }))
@@ -172,4 +203,5 @@ try {
   await registration?.()
   for (const scope of scopes.reverse()) await scope.dispose()
   for (const fiber of fibers.reverse()) await fiber.dispose()
+  rmSync(guides, { recursive: true, force: true })
 }

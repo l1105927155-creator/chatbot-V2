@@ -195,7 +195,8 @@ class LiveOwner(expansion.Expansion):
                 self.wait(lambda:any(r['event']=='turn/failed' for r in self.trace(event)),'injected native model failure',timeout=60)
                 state=self.state();wake=next(r['journal_id'] for r in self.rows() if r['message_id']==str(event['message_id']))
                 assert state['pending_upper_cursor']==wake and state['last_seen_journal_id']==before['last_seen_journal_id']
-                assert not any(e['direction']=='outbound' and e['conversation']==event['conversation'] and e['message_id']>event['message_id'] for e in self.events())
+                self.answer(event, '这次处理没有完成')
+                assert sum(e['direction']=='outbound' and e['conversation']==event['conversation'] and e['message_id']>event['message_id'] for e in self.events())==1
                 hit=next(r for r in self.http('/api/faults')['faults'] if r['id']==rule['id']);assert hit['status']=='hit'
                 trace=self.trace(event);assert any(r['event']=='dsh/error' for r in trace)
                 self.control('/v2agent recover '+str(wake),'已解除暂停')

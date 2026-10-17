@@ -171,6 +171,8 @@ def test_group_acp_launch_uses_private_home_but_session_cwd_is_workspace(tmp_pat
                 return response_model(agentCapabilities={"sessionCapabilities": {"resume": {}}})
             if method == "session/new":
                 return response_model(sessionId="new-group-session")
+            if method == "session/resume":
+                return response_model(configOptions=[{"id": "model", "currentValue": '["test-provider","test-model"]'}])
             return response_model()
         def close(self): pass
 
@@ -681,3 +683,18 @@ def test_authorized_native_cancel_drains_and_cleans_owner_source(tmp_path):
     assert ("close", "owner-sid") in client.runtime.calls
     assert list(directory.iterdir()) == []
     client.close()
+
+
+@pytest.mark.parametrize("options", [[], [{"id": "model", "currentValue": '["old","old"]', "options": []}]])
+def test_resume_fails_closed_when_deployment_model_cannot_be_selected(options):
+    runtime = module.AcpRuntime.__new__(module.AcpRuntime)
+    runtime.workspace = "/test"
+    runtime.model_route = ("deepseek-official", "deepseek-flash")
+    calls = []
+    def request(method, params):
+        calls.append(method)
+        return {"configOptions": options}
+    runtime.request = request
+    with pytest.raises(RuntimeError, match="configuration|catalog"):
+        runtime.resume("existing-session")
+    assert calls == ["session/resume"]

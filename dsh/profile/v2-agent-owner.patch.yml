@@ -104,6 +104,8 @@
     - id: v2-agent-decision-guide
       name: ../plugins/agent-profile/decision-guide.mjs
       config:
+        instructionsFile: !!js process.env.V2_AGENT_INSTRUCTIONS_FILE
+        projectGuideFile: !!js process.env.V2_OWNER_PROJECT_GUIDE_FILE
         executionProfile: owner-host
     - id: shell-env
       name: '@deepseek-ai/dsh-shell-env'

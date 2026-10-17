@@ -11,7 +11,7 @@
   "version": 2,
   "execution_contract": 2,
   "provider": "deepseek-official",
-  "model": "deepseek-v4-flash",
+  "model": "deepseek-flash",
   "allowed_conversations": ["private:1105927155"],
   "owners": [{"platform_id": "v2-phase1-napcat", "bot_id": "2869323076", "user_id": "1105927155"}],
   "mcp_port": 6210,
@@ -43,7 +43,9 @@ Owner 私聊以 `owner_workdir` 为默认 cwd，按部署 Linux 用户权限访�
 
 Owner 的“主机能力”仍限于前台执行：Bash 默认120秒、最长600秒，未开放后台 Jobs、持久终端或自动提权。遇到真实任务因此无法完成时按具体故事评审，不为了“完整 DSH”自动放开其它模式。
 
-三个生产 Profile 的 DeepSeek 默认 `reasoningEffort` 为 `low`（仍启用思考），`defaultContextWindow` 为1,000,000 tokens；80%自动压缩阈值保持。窗口是输入与输出合计的本地计量，不是回复长度目标。默认回复简短，必要长答才按语义分段；分段字数、通常三条以内均为指南，没有发送硬配额。更改默认参数不清理会话；原来跟随 provider 默认的会话恢复后采用新默认，显式选择过不同 effort 的会话须按实际 ACP 配置另行核对。
+模型使用官方推荐 API 标识 `deepseek-flash`，2026-10-17 对应 DeepSeek-V4.1-Flash-1017，见[官方说明](https://api-docs.deepseek.com/zh-cn/)。已有 Session 恢复时通过原生 ACP `session/set_config_option` 应用部署配置中的模型；保留 SID、历史及游标，不运行启动模型探测。模型在原生目录不可用或设置未确认时拒绝该次请求，不能静默退回旧模型。
+
+三个生产 Profile 的 DeepSeek 默认 `reasoningEffort` 为 `low`（仍启用思考），`defaultContextWindow` 为1,000,000 tokens；80%自动压缩阈值保持。窗口是输入与输出合计的本地计量，不是回复长度目标。默认回复简短，必要长答才按语义分段；当前源码中最终长答按已有自然段/编号主题无损分组，目标300–500字符但保留完整语义单元；无安全边界或代码围栏时原样交付，没有发送硬配额。模型不再用 qq_send_origin 搬运最终长答。四项整改已随 Flash-1017 切换部署，见[模型生效记录](model-1017-deployment-2026-10-18.md)。更改默认参数不清理会话；原来跟随 provider 默认的会话恢复后采用新默认，显式选择过不同 effort 的会话须按实际 ACP 配置另行核对。
 
 首次执行契约迁移必须先停服务，创建新格式备份，再用同一备份显式授权迁移。服务必须在启动时收到 `V2_EXECUTION_MIGRATE=1`；Router 还要求 `.runtime/execution-migration-approved.json` 中有 `scripts/agent-backup.py authorize-migration` 写入的备份摘要。pending/quarantine 会阻止会话迁移，不能手动删除后重试。迁移成功会消费授权标记；后续普通重启无需该环境变量。
 
@@ -65,7 +67,10 @@ systemctl --user enable --now chatbot-v2-agent.service
 
 - `core_ready`：初始化完成、未关闭、Journal/状态库可读、各 ACP 进程和读线程正常、Owner 主机运行时与已准入群的独立卷就绪。核心未就绪返回503。
 - `ready`：核心正常且 OneBot API/event WebSocket 已连接。通道断连仍返回200、`ready=false`，避免外部通道故障引起重启循环。
+- `journal_readable` / `journal_collector_ready` / `journal_capture_intact`：分别表示数据库可读、采集器初始化及hook绑定正常、没有已知采集缺口。`journal_capture_failures` 为故障计数；漏记或采集器异常使 `journal_ready=false`、`degraded=true`，核心未就绪返回503。不得靠重启将历史缺口当作已修复。
 - `pending_conversations` / `quarantined_sessions`：需要核对的会话；不能通过重启宣称操作未发生。
+
+模型/执行失败及取消确认会提交一次简短提示，pending 暂停在同一运行周期对同一会话同一待核对编号只提示一次；提示失败不重试。Owner 可通过 status 核对后 exact recover；不会自动重放。提示不带异常正文或秘密，群 Owner 提及先核对本群成员。
 
 DSH 已正常完成、仅最终 QQ 回复发送失败时，Router 消费该轮输入并记录 `delivery/final_failed`，不自动重发、重跑或暂停后续请求。错误通知最多尝试一次；群聊仅 @ 同平台/同 Bot 配置且实际在本群的 Bot Owner，无法确认成员时省略提及，私聊不 @。提示包含错误类型及数字 retcode，不转发异常原文或凭据。通知也失败时只记日志；不能保证 QQ 故障期间提示一定送达。模型执行结果不确定和取消仍保留 pending，按既有 exact recover 核对，不能批量清除旧 pending。
 
@@ -105,3 +110,28 @@ systemctl --user start chatbot-v2-agent.service
 恢复要求相同仓库绝对路径及相同 `upstream.lock.json`，先验证完整包、路径/类型/哈希，再写入；拒绝已有目标、祖先符号链接、特殊文件和路径穿越，不覆盖现存数据。工具可读取旧格式 version 1 备份以恢复旧运行时代码；新执行域迁移只接受 version 2 备份。Owner 旧镜像和各群镜像均按完整字节恢复并保持未挂载；服务需按当前代码重新验证身份、容量及映射。切换后核对 SID/cursor/pending、Journal和工作区哨兵；失败先停服务，把新恢复组件隔离，再放回原组件。不要以清空 pending 或新建 Session 代替恢复。
 
 2026-10-15 的正式还原演练已保留原组件及备份于忽略目录 `.runtime/agent-ops-validation/`；这是含凭据材料的本机证据，不应提交。2026-10-16已部署`a0bfe2f`并接入主群1055300305，保留Owner私聊，994363760不准入；最新备份与接入证据位于`.runtime/group-onboarding-20261016/`。真实群固定故事与3天观察尚未完成，详见验收清单。
+
+
+## Journal 已知缺口的处理
+
+采集故障状态与 Journal 同库备份。先停止写入、保存 Journal/日志/平台证据，核对缺口和影响；不能补造确认消息或重跑旧操作。检查 `JournalStore.capture_status()`；完成核对后才显式调用 `clear_capture_failures()` 并重启采集器清除运行期锁存。清除状态只是人工确认处理，不会恢复缺失历史。具体调用入口及限制见 `astrbot-plugins/v2_journal/README.md`。若数据库连故障记录也无法写入，运行期仍会报 degraded，但重启可能失去这部分故障记录，必须同时核对运行日志。
+
+
+## 人格与指南热更新
+
+机制安装后，编辑以下文件即在下一次模型请求生效，无需重启或重建Session：
+
+| 文件 | 作用域 |
+| --- | --- |
+| `dsh/plugins/agent-profile/personas/*.md` | 已选择该人格的会话 |
+| `dsh/plugins/agent-profile/decision-guide.md` | 三种Bot Profile的共享行为指南 |
+| `dsh/profile/agent-owner.md` | Owner私聊 |
+| `dsh/profile/agent-group-sandbox.md` | 已准入群 |
+| `dsh/profile/agent-group.md` | 普通非Owner私聊safe-chat |
+| `owner_workdir/AGENTS.md` | 仅Owner主机域固定部署工作目录，可选 |
+
+用正常编辑器保存或原子替换文件。必需指南为空、缺失、无效UTF-8、超出128KiB、非部署账户所有、非普通文件或最终路径为符号链接时，首次启动拒绝；运行中的实例保留上次有效正文并记录一次警告，后续有效保存会自动恢复，无需清除pending或重启。若从无有效版本则仍拒绝组装。删除可选Owner AGENTS只移除当前工程指南，不会删除历史内容。普通文件的组写位可保留，兼容仓库现有umask。
+
+文本变化不主动产生模型调用，也不改变已在运行的单次API请求；下一次请求获得最新完整系统提示。技术JS代码、YAML工具组合、模型/执行权限配置仍需正常部署加载。`Skill`的目录/描述使用原生watcher，正文在下次显式加载时读取最新文件，旧tool result不会被后台替换。
+
+验证入口：`node tests/native/agent-profile-persona-lifecycle.mjs`、`node tests/native/agent-profile-decision-guide.mjs`、`pytest tests/native/test_agent_guide_hot_reload.py`。真实模型按需运行 `scripts/check-agent-guides-live.py`，使用继承凭据且不连接真实QQ。限制与实施依据见[热更新阶段](phases/guide-hot-reload-2026-10-18.md)。

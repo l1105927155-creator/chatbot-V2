@@ -292,3 +292,32 @@ def test_native_script_claim_resolves_new_group_and_owner_stores(tmp_path):
     assert app._session_conversation('owner-new') == 'private:90009'
     assert app._session_conversation('group-new') == 'group:91000'
     assert app._session_conversation('missing') is None
+
+
+def test_transient_wal_snapshot_retry_is_read_only_and_bounded(tmp_path, monkeypatch):
+    from sandbox.evidence import SnapshotUnavailable
+    root = _root(tmp_path)
+    path = root / 'astrbot/data/plugin_data/v2_journal/journal.sqlite3'
+    _journal(path)
+    snapshotter = EvidenceSnapshotter(root)
+    original = snapshotter._db_rows_once
+    calls = []
+    before = path.read_bytes()
+    def temporarily_unavailable(*args):
+        calls.append(1)
+        if len(calls) < 3:
+            raise SnapshotUnavailable('WAL sidecar transition')
+        return original(*args)
+    monkeypatch.setattr(snapshotter, '_db_rows_once', temporarily_unavailable)
+    assert len(snapshotter._db_rows(path, 'SELECT * FROM journal')) == 1
+    assert len(calls) == 3 and path.read_bytes() == before
+    assert not Path(str(path) + '-shm').exists()
+    calls.clear()
+    def persistently_unavailable(*args):
+        calls.append(1)
+        raise SnapshotUnavailable('still unavailable')
+    monkeypatch.setattr(snapshotter, '_db_rows_once', persistently_unavailable)
+    with pytest.raises(SnapshotUnavailable):
+        snapshotter._db_rows(path, 'SELECT * FROM journal')
+    assert len(calls) == 3
+    assert path.read_bytes() == before

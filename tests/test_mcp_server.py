@@ -76,8 +76,14 @@ async def test_loopback_health_is_metadata_only_and_does_not_grant_mcp_access(tm
             assert "MUST_NOT_LEAK" not in response.text
             assert (await client.get(service.url)).status_code == 401
             assert (await client.post(url)).status_code == 405 and len(calls) == 1
-            state.update(core_ready=False, closing=True)
-            assert (await client.get(url)).status_code == 503
+            state.update(core_ready=False, closing=True, journal_readable=True,
+                         journal_capture_intact=False, journal_collector_ready=True,
+                         journal_capture_failures=1, degraded=True)
+            failed = await client.get(url)
+            assert failed.status_code == 503
+            assert failed.json()["journal_capture_failures"] == 1
+            assert failed.json()["journal_readable"] and failed.json()["degraded"]
+            assert not failed.json()["journal_capture_intact"]
     finally:
         await service.close()
 
@@ -115,10 +121,8 @@ async def test_history_search_tools_and_send_are_scoped_to_active_origin(tmp_pat
                 assert "预计操作会让用户等待数秒以上时" in send_tool.description
                 assert "逐个工具播报" in send_tool.description
                 assert "不自动重发" in send_tool.description
-                assert "先精简回答" in send_tool.description
-                assert "按自然语义分段" in send_tool.description
-                assert "最终回复只发送最后一段" in send_tool.description
-                assert "短答不拆分" in send_tool.description
+                assert "按自然段落或编号主题分组" in send_tool.description
+                assert "本工具只发送最终回复以外的独立消息" in send_tool.description
                 assert "不要用本工具回答当前问题" not in send_tool.description
                 assert "text 是发往 QQ 的纯文本" in send_tool.description
                 assert "行内代码标记" in send_tool.description

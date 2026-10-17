@@ -41,6 +41,7 @@ class AcpRuntime:
 
         self.response_model = ObjectResponse
         self.workspace = str(workspace)
+        self.model_route = (provider, model)
         self._control_lock = threading.RLock()
         self._active_prompts = {}
 
@@ -71,11 +72,14 @@ class AcpRuntime:
                "V2_DSH_PROVIDER": provider, "V2_DSH_MODEL": model}
         if execution_profile:
             env["V2_EXECUTION_PROFILE"] = execution_profile
+        if execution_profile == "owner-host":
+            env["V2_OWNER_PROJECT_GUIDE_FILE"] = str(Path(workspace).resolve() / "AGENTS.md")
         if Path(patch).name in {"v2-agent-group.patch.yml", "v2-agent-owner.patch.yml",
                                 "v2-agent-group-sandbox.patch.yml"}:
             env.update(DIRECT_NETWORK_ENV)
             env.update({
                 "V2_AGENT_SKILLS_DIR": str(Path(patch).resolve().parent.parent / "skills"),
+                "V2_AGENT_INSTRUCTIONS_FILE": str(instructions.resolve()),
                 "V2_PERSONA_STATE_ROOT": str(Path(dsh_home).resolve() / "agent-bot-personas"),
                 "V2_SCENE_STATE_ROOT": str(Path(dsh_home).resolve() / "agent-bot-scenes"),
             })
@@ -128,9 +132,38 @@ class AcpRuntime:
         return self.request("session/new", {"cwd": self.workspace, "mcpServers": mcp_servers or []})["sessionId"]
 
     def resume(self, session_id, mcp_servers=None):
-        self.request("session/resume", {
+        resumed = self.request("session/resume", {
             "sessionId": session_id, "cwd": self.workspace, "mcpServers": mcp_servers or [],
         })
+        # Native resume prefers the saved model over the startup fallback.
+        # Apply the deployment's explicit route through ACP, retaining the SID
+        # and all history. This performs no inference and never replays a turn.
+        route = getattr(self, "model_route", None)
+        if not route:
+            return
+        option = next((item for item in resumed.get("configOptions", [])
+                       if item.get("id") == "model"), None)
+        if option is None:
+            raise RuntimeError("DSH did not expose the deployment model configuration")
+        def matches(value):
+            try:
+                return json.loads(value) == list(route)
+            except (TypeError, ValueError):
+                return False
+        if matches(option.get("currentValue")):
+            return
+        choices = []
+        for entry in option.get("options", []):
+            choices.extend(entry.get("options", []) if "group" in entry else [entry])
+        selected = next((item.get("value") for item in choices if matches(item.get("value"))), None)
+        if selected is None:
+            raise RuntimeError("configured DSH model is not available in the native ACP catalog")
+        updated = self.request("session/set_config_option", {
+            "sessionId": session_id, "configId": "model", "value": selected,
+        })
+        if not any(item.get("id") == "model" and matches(item.get("currentValue"))
+                   for item in updated.get("configOptions", [])):
+            raise RuntimeError("DSH model switch was not confirmed")
 
     def run(self, session_id, delta):
         chunks = []

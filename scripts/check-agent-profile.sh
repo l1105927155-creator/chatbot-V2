@@ -17,7 +17,7 @@ node tests/native/group-execution-boundaries.mjs
 node tests/native/agent-profile-owner-host.mjs
 "$repo_root/.runtime/astrbot/.venv/bin/python" -m pytest -q \
   tests/native/test_agent_profile_startup.py tests/native/test_agent_profile_owner_startup.py tests/native/test_agent_profile_owner_host_acp.py tests/native/test_agent_profile_acp.py \
-  tests/native/test_agent_model_defaults.py \
+  tests/native/test_agent_model_defaults.py tests/native/test_agent_guide_hot_reload.py \
   tests/native/test_agent_profile_compaction_acp.py \
   tests/native/test_agent_profile_research.py \
   tests/native/test_agent_research_limits.py \
@@ -30,5 +30,7 @@ node tests/native/agent-profile-owner-host.mjs
   tests/contracts/test_agent_profile_runtime.py
 "$repo_root/.runtime/astrbot/.venv/bin/python" -m pytest -q \
   tests/test_runtime_audit.py tests/contracts/test_runtime_audit_send.py \
-  tests/test_agent_service.py tests/test_agent_backup.py tests/test_agent_health.py
+  tests/test_agent_service.py tests/test_agent_backup.py tests/test_agent_health.py \
+  tests/test_delivery_error.py tests/test_turn_error.py tests/test_reply_delivery.py \
+  tests/contracts/test_turn_error_lifecycle.py
 "$script_dir/check-phase4.sh"

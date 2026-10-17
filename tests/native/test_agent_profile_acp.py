@@ -89,6 +89,11 @@ with TemporaryDirectory(prefix="agent-profile-acp-", dir=root / ".runtime") as t
         assert initial["source"] == "startup"
         assert "skill" in initial["tools"]
         assert "chat-history" in initial["skills"]
+        # Discovery exposes the trigger, not the retrieval procedure or every persona.
+        assert "before_id 设为" not in initial["prompt"]
+        assert "Journal ID 是全局编号" not in initial["prompt"]
+        assert "陪伴型 Agent-Bot" not in initial["prompt"]
+        assert "QQ 回复使用用户的语言和纯文本" in initial["prompt"]
         assert "你是这段 QQ 对话中的 Agent-Bot" in initial["prompt"]
         forbidden = {"bash", "terminal", "persistent_bash", "filesystem", "read_file",
                      "write_file", "edit_file", "jobs", "exec"}
@@ -113,6 +118,10 @@ with TemporaryDirectory(prefix="agent-profile-acp-", dir=root / ".runtime") as t
         assert "可能变化" in request_schemas["web_search"]["description"]
         assert "具体相关 URL" in request_schemas["web_fetch"]["description"]
         assert "bash" not in request_schemas
+        first_request = json.dumps(calls[0]["messages"], ensure_ascii=False)
+        assert "较早 QQ 事实" in first_request
+        assert "before_id 设为" not in first_request
+        assert "Journal ID 是全局编号" not in first_request
         assert calls[0]["skills"] == initial["skills"]
         assert json.dumps(calls[0]["messages"], ensure_ascii=False).count("当前可见信息足够时") == 1
 

@@ -33,6 +33,10 @@ LIFECYCLE_EVENTS = {
 }
 
 
+class SnapshotUnavailable(RuntimeError):
+    """A read-only WAL snapshot cannot safely be opened at this instant."""
+
+
 def _safe(value: Any) -> Any:
     """Drop credential-shaped fields while keeping bounded JSON evidence."""
     if isinstance(value, Mapping):
@@ -95,6 +99,18 @@ class EvidenceSnapshotter:
         return True
 
     def _db_rows(self, path: Path, sql: str, params: tuple = ()) -> list[dict[str, Any]]:
+        # Writers can remove/recreate WAL sidecars between our metadata checks.
+        # Retry only this read, never a message or operation. Persistent gaps
+        # still fail; do not create SHM or ignore a non-empty WAL to make it pass.
+        for attempt in range(3):
+            try:
+                return self._db_rows_once(path, sql, params)
+            except (SnapshotUnavailable, FileNotFoundError):
+                if attempt == 2:
+                    raise
+                time.sleep(0.02)
+
+    def _db_rows_once(self, path: Path, sql: str, params: tuple = ()) -> list[dict[str, Any]]:
         if not self._checked(path):
             return []
         # SQLite read-only WAL connections can create a missing -shm file when
@@ -111,7 +127,7 @@ class EvidenceSnapshotter:
                 raise ValueError("invalid SQLite WAL sidecar")
             wal_size = wal_path.stat().st_size
         if wal_mode and wal_size and (not shm_path.is_file() or shm_path.is_symlink()):
-            raise RuntimeError("read-only snapshot unavailable: active SQLite WAL has no safe shared-memory sidecar")
+            raise SnapshotUnavailable("read-only snapshot unavailable: active SQLite WAL has no safe shared-memory sidecar")
         immutable = wal_mode and not wal_size
         suffix = "mode=ro&immutable=1" if immutable else "mode=ro"
         uri = path.resolve().as_uri() + "?" + suffix

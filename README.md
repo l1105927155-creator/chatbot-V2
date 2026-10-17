@@ -1,27 +1,20 @@
 # chatbot-V2
 
-A clean integration project for **AstrBot + DeepSeek Harness (DSH)**.
+AstrBot + DeepSeek Harness (DSH) 的干净集成项目。上游版本固定于 [`upstream.lock.json`](upstream.lock.json)，当前架构与阶段边界以 [`PLAN.md`](PLAN.md) 顶部及[执行域纠偏契约](docs/phases/execution-domain-correction-2026-10-16.md)为准。
 
-The repository intentionally does **not** copy the old `chatbot` codebase or vendor full upstream AstrBot/DSH sources. Upstream versions are pinned in [`upstream.lock.json`](upstream.lock.json); this repository will contain only the integration code, plugins, MCP boundary, DSH profile/policies, tests, and bootstrap/deployment assets owned by this project.
+维护入口：
 
-Before development, read:
+- [`PLAN.md`](PLAN.md)：当前架构、契约和工作顺序。
+- [`docs/architecture/agent-bot-runtime.md`](docs/architecture/agent-bot-runtime.md)：当前运行时说明。
+- [`docs/phases/personal-agent-bot.md`](docs/phases/personal-agent-bot.md)：产品化阶段状态与历史实施记录。
+- [`docs/personal-agent-acceptance.md`](docs/personal-agent-acceptance.md)：真实 QQ 固定故事验收清单。
+- [`docs/personal-agent-operations.md`](docs/personal-agent-operations.md)：部署与运维。
+- [`AGENTS.md`](AGENTS.md)：开发约束。
+- [人格与指南热更新](docs/guide-hot-reload-validation-2026-10-18.md)：可编辑文件、生效时机与验证。
 
-- [`PLAN.md`](PLAN.md) — architecture baseline and phased roadmap.
-- [`docs/architecture/orchestration-capability-boundary.md`](docs/architecture/orchestration-capability-boundary.md) — frozen integration responsibility boundary.
-- [`AGENTS.md`](AGENTS.md) — repository development constraints.
-- [`docs/phases/phase-1.md`](docs/phases/phase-1.md) — completed AstrBot baseline.
-- [`docs/phases/phase-2.md`](docs/phases/phase-2.md) — completed journal scope.
-- [`docs/phases/phase-2.1.md`](docs/phases/phase-2.1.md) — completed ordering contract.
-- [`docs/phases/phase-3.md`](docs/phases/phase-3.md) — completed DSH chat-loop scope.
-- [`docs/phases/phase-3-remediation.md`](docs/phases/phase-3-remediation.md) — completed implementation-alignment work.
-- [`docs/phases/phase-3-startup-validation.md`](docs/phases/phase-3-startup-validation.md) — completed Phase 3 follow-up.
-- [`docs/phases/phase-4.md`](docs/phases/phase-4.md) — completed MCP capability phase.
-- [`docs/architecture/agent-bot-runtime.md`](docs/architecture/agent-bot-runtime.md) — current Agent-Bot architecture.
-- [`docs/architecture/dsh-version-decision.md`](docs/architecture/dsh-version-decision.md) — pinned-version decision.
-- [`docs/phases/agent-profile-validation.md`](docs/phases/agent-profile-validation.md) — retained implementation and evidence.
-- [`docs/phases/personal-agent-bot.md`](docs/phases/personal-agent-bot.md) — current product contract, implementation gates and real-group acceptance.
+当前版本保留两个信任域和三种工具组合：`owner-host`、`group-sandbox`、`safe-chat`。Owner 精确身份的独立私聊使用部署账户可用的主机环境；每个已准入群（包括群内 Owner）有独立的沙箱运行时、工作区、会话和状态；普通非 Owner 私聊使用 `safe-chat`。人格、Scene 和 Skill 不授予权限。正常 QQ 收发经过 AstrBot，Journal 是唯一聊天事实记录。具体资源边界见[执行域实施记录](docs/execution-domain-validation-2026-10-16.md)。
 
-Current work productizes the verified Agent Profiles as a Personal Agent-Bot: group chat, persona/skills, bounded context, restricted owner execution without per-operation approval, research, and recovery. Group conversation requires an actual Bot mention or a platform-resolved reply to the Bot. Final acceptance includes two-group admission checks and three days of real use. DSH remains pinned to the lock file.
+**当前状态：执行域实现已部署，隔离自动验证已通过；新的真实 QQ 固定故事尚未验收，连续三天观察尚未开始。** 不把模拟 QQ、真实模型隔离测试或旧合同（Owner 受限、群无 Bash）的结果记作新执行域的真实 QQ 验收。
 
 ## V2 plugin documentation
 
@@ -32,52 +25,25 @@ Current work productizes the verified Agent Profiles as a Personal Agent-Bot: gr
 | [V2 DSH Router](astrbot-plugins/v2_dsh_router/README.md) | DSH sessions, trust domains, scoped MCP and profile controls |
 | [V2 Phase 1 Probe](astrbot-plugins/v2_phase1_probe/README.md) | Deterministic message-chain diagnostics |
 
-## Current Agent Profiles
+## Current runtime and checks
 
-The router uses two independent ACP runtimes:
+运行时由 AstrBot 插件启动 DSH ACP 和本地 MCP。配置准入会话与 Owner 精确身份后，Owner 私聊进入 `owner-host`；每个准入群分别进入自己的 `group-sandbox` runtime；普通非 Owner 私聊进入 `safe-chat`。群内 Owner 仍属于该群沙箱。各群隔离 home、工作区、Session 与状态；群 Shell 使用独立工作区和资源边界。
 
-- Safe chat: all admitted groups and non-owner private chats; `v2-agent-group.patch.yml`, `.runtime/dsh-home-chat`, `.runtime/dsh-workspace-chat`, and `state-chat.sqlite3`. No generic host file or terminal tools.
-- Owner operations: only exact configured owners in their own private chat; `v2-agent-owner.patch.yml`, `.runtime/dsh-home-owner`, `.runtime/dsh-workspace-owner`, and `state-owner.sqlite3`. Each tool call checks the current host-issued request, not remembered identity.
+当前执行域的实现细节、已部署证据和边界见[实施记录](docs/execution-domain-validation-2026-10-16.md)，运行命令与环境变量见[运维手册](docs/personal-agent-operations.md)。不要从下方历史 Phase 配置推导当前 Profile 或权限。
 
-Keep `V2_DSH_PROVIDER`, `V2_DSH_MODEL`, credentials, and `V2_QQ_ALLOWED_CONVERSATIONS` in the process environment. Owner identities use `V2_QQ_OWNERS`, a JSON array of exact `platform_id`, `bot_id`, and `user_id` strings. An empty array disables the owner runtime. An owner speaking in a group still uses safe chat capabilities.
-
-Owner Bash constrains the existing native dsh-subprocess scope and verifies cgroup limits before executing, so native timeout/cancellation retains control of descendants. It requires Linux, working user systemd scopes/cgroup limits, and `/usr/bin/bwrap`. It sees only essential read-only runtime files and `/workspace`; it has no network or inherited credential environment. Limits are 512 MiB memory, 64 tasks, one CPU, and a maximum 60-second foreground call. Background execution and escalation are unavailable. Missing infrastructure fails the tool rather than falling back to host execution. Owner home/workspace must be private 0700 directories owned by the runtime user; socket, device, FIFO, and multiply linked files are rejected in the workspace. Every Bash call also verifies a fixed-capacity ext4 workspace and the actual sandbox mount identity; an unavailable or replaced volume fails execution.
-
-Configured owners can select the current admitted conversation's runtime state:
-
-```text
-/v2agent persona default|analyst|companion|developer
-/v2agent scene casual-chat|research|development
-/v2agent persona list
-/v2agent scene list
-/v2agent status
-/v2agent metrics
-/v2agent cancel
-/v2agent recover <pending Journal ID>
-```
-
-Persona/scene selection waits for the current turn to finish, updates private host state, and acknowledges through AstrBot. Status/list reads and cancellation do not wait for the chat lock. Cancellation targets only the current model turn through native ACP; its acknowledgement means requested, and confirmed cancellation preserves pending results for review without replaying side effects. They do not invoke the model, replace the session, or grant tools. A command before the first ordinary message creates only the native session and its MCP binding. A pending uncertain turn blocks selection until recovery. Each normal input projects at most 100 recent entries and 32 KiB. Oversized entries are clearly marked, and scoped history tools can retrieve their complete originals. The stored cursor is the accepted projection boundary; omitted facts remain externally queryable in the canonical Journal. This bounds bootstrap/backlog context rather than deleting history.
-
-The scene exposes only installed skill definitions. The repository provides chat-history, filesystem, development, and web-research. Both profiles expose native controlled web_search/web_fetch; scenes control skill loading without granting tools. Agent Profile ACP processes clear inherited HTTP proxy settings to retain native public-DNS checks. Skill discovery shares one native provider and falls back to shared polling when filesystem watcher capacity is exhausted. Loading development skills does not grant Bash to safe-chat sessions.
-
-Run `scripts/check-agent-profile.sh` for pinned-source checks, native mechanisms, actual controlled ACP turns, owner isolation, and message-chain regressions. These checks use disposable data and scripted model adapters. Real-provider synthetic safe-chat and owner acceptance has passed. Authorized real QQ acceptance passed only for Bot 2869323076 / private:1105927155: persona and scene commands, model replies, deterministic probe visibility through Journal history, persistent session restart, native skill loading, and isolated workspace write/read. Temporary personal-account HTTP access was closed after verification; existing QQ services were preserved. The active V2 private-chat runtime now uses a fixed 1 GiB ext4 workspace, preserving its Session and files. Isolated real-provider automatic compaction, same-session restart, and scoped historical retrieval passed with synthetic large ACP inputs. The user service is now deployed and enabled; stopped-writer backup/restore, cold remount, crash restart, and OneBot reconnect passed. Real group acceptance and three days of use remain open. After the account recharge, the strengthened isolated live Research gate passed: final citations matched persisted native source and fetch metadata. Research, recovery, metadata audit, metrics, and health are deployed. This deployment has not yet repeated real Owner private-message acceptance because the personal test sender is offline; no temporary HTTP sender was left enabled. Old `state.sqlite3` / Phase 5 sessions are not automatically migrated. See the [operations guide](docs/personal-agent-operations.md) and [pre-group acceptance checkpoint](docs/personal-agent-acceptance.md).
-
-Owner Bash requires a host-prepared bounded volume: `python3 scripts/owner-workspace.py prepare` on an empty target, then `check`. Preparation needs noninteractive sudo for mount/chown; normal execution checks the actual backing and sandbox mount without sudo. The volume persists data but must be remounted after host reboot. Existing workspace migration requires stopping V2 and preserving its files first; see the [router guide](astrbot-plugins/v2_dsh_router/README.md). Status/list queries create no Session or inference and do not wait for an active turn.
-
-When V2 provider credentials are available in the environment, run the isolated real-model check explicitly:
+运行隔离回归：
 
 ```bash
-.runtime/astrbot/.venv/bin/python scripts/check-agent-profile-live.py
-.runtime/astrbot/.venv/bin/python scripts/check-agent-profile-live.py --domain owner
+bash scripts/check-agent-profile.sh
+# 四项审查整改的独立模拟 QQ 回归（不使用付费模型）
+.runtime/astrbot/.venv/bin/python scripts/check-review-remediation.py
 ```
 
-It creates disposable safe-chat sessions, checks three synthetic turns, observes successful native skill loading, changes persona, and resumes after a process restart. It never connects QQ. Its ignored `.runtime/agent-profile-live-result.json` records only verification metadata; an advertised model window is not evidence of a large-context stress test.
+隔离真实模型检查需显式执行 `scripts/check-agent-profile-live.py` 并提供运行环境凭据；它不连接 QQ。自动测试和隔离模型测试不能替代真实 QQ 验收。
 
-The following Phase 1–4 setup sections and Phase 5 documents describe the retained historical baseline. For current development, use the Personal Agent-Bot product phase above.
+## Historical phase setup (reference only)
 
-The journal records OneBot inbound messages and platform-confirmed Bot
-`message_sent` feedback. Phase 3 adds the V2-owned DSH router; Phase 4 attaches scoped AstrBot MCP
-capabilities to its native DSH sessions.
+下列 Phase 1–5 配置和启动段落是阶段实施记录，仅用于理解历史决策与复现对应旧阶段；**它们不是当前启动说明，也不描述当前执行权限**。当前启动请使用上面的运维手册。旧文档中的 Profile 名称、Owner 沙箱限制、群聊无 Bash、端口与迁移状态均不得覆盖当前契约。
 
 ## Phase 1: bootstrap AstrBot
 
@@ -355,8 +321,8 @@ cursors. Known model context is not erased by revocation.
 
 This runs preceding integration contracts, pinned native authorization tests and
 source lifecycle tests without sending QQ messages. Real QQ results and known
-upstream limits are recorded in [Phase 5 findings](docs/phases/phase-5-findings.md).
+upstream limits are recorded in [Phase 5 findings](docs/phases/phase-5-native-findings.md).
 
-## Start the current Agent-Bot
+## Current startup
 
-With DEEPSEEK_API_KEY, V2_DSH_PROVIDER, V2_DSH_MODEL and V2_QQ_ALLOWED_CONVERSATIONS set explicitly in the environment, run scripts/run-agent-bot.sh. V2_QQ_OWNERS is an exact identity JSON array and defaults to no owner runtime. The launcher runs AstrBot in the foreground; its router starts and cleans up the two native DSH ACP runtimes. Credentials are inherited only, never saved by this launcher. The existing runtime dashboard is localhost:6186, OneBot reverse WS localhost:6200, and MCP localhost:6210. ACP runtimes have no independent Web page; localhost:3081 belongs to the separate old DSH service.
+Use the deployment-specific commands in the [operations guide](docs/personal-agent-operations.md). It is the startup and service-management source of truth; historical Phase 1–5 commands above are retained only as records.

@@ -213,6 +213,12 @@ class JournalStore:
                     WHERE message_id IS NOT NULL;
                 CREATE INDEX IF NOT EXISTS journal_conversation_cursor
                     ON journal(platform_id, bot_id, conversation_key, journal_id);
+                CREATE TABLE IF NOT EXISTS journal_capture_health (
+                    singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+                    failure_count INTEGER NOT NULL,
+                    last_failure_at_ns INTEGER NOT NULL,
+                    last_failure_kind TEXT NOT NULL
+                );
                 PRAGMA user_version=1;
                 """
             )
@@ -235,6 +241,50 @@ class JournalStore:
         with self._db() as conn:
             conn.execute("SELECT journal_id FROM journal LIMIT 1").fetchone()
         return True
+
+    def record_capture_failure(self, kind: str) -> dict[str, Any]:
+        """Persist a sticky capture failure without fabricating a journal row."""
+        allowed = {"malformed_event", "append_failure", "shutdown_rejection"}
+        if kind not in allowed:
+            kind = "other"
+        now = time.time_ns()
+        with self._db() as conn:
+            conn.execute(
+                """INSERT INTO journal_capture_health
+                   (singleton, failure_count, last_failure_at_ns, last_failure_kind)
+                   VALUES (1, 1, ?, ?)
+                   ON CONFLICT(singleton) DO UPDATE SET
+                     failure_count=failure_count + 1,
+                     last_failure_at_ns=excluded.last_failure_at_ns,
+                     last_failure_kind=excluded.last_failure_kind""",
+                (now, kind),
+            )
+        return self.capture_status()
+
+    def capture_status(self) -> dict[str, Any]:
+        """Return durable capture health; failures remain until explicitly repaired."""
+        try:
+            with self._db() as conn:
+                row = conn.execute(
+                    """SELECT failure_count, last_failure_at_ns, last_failure_kind
+                       FROM journal_capture_health WHERE singleton=1"""
+                ).fetchone()
+        except sqlite3.OperationalError:
+            # Read-only consumers may briefly observe a pre-migration database.
+            return {"available": False, "degraded": True, "failure_count": 0,
+                    "last_failure_at_ns": None, "last_failure_kind": None}
+        if row is None:
+            return {"available": True, "degraded": False, "failure_count": 0,
+                    "last_failure_at_ns": None, "last_failure_kind": None}
+        return {"available": True, "degraded": True,
+                "failure_count": int(row["failure_count"]),
+                "last_failure_at_ns": int(row["last_failure_at_ns"]),
+                "last_failure_kind": str(row["last_failure_kind"])}
+
+    def clear_capture_failures(self) -> None:
+        """Explicit operator action after reconciliation; never called by runtime."""
+        with self._db() as conn:
+            conn.execute("DELETE FROM journal_capture_health WHERE singleton=1")
 
     @contextmanager
     def _db(self):

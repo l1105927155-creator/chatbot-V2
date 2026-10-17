@@ -1,45 +1,29 @@
-# Agent-Bot 运行时重构
+# Agent-Bot 运行时
 
-> **2026-10-16 执行域纠偏**：下文 2026-10-13 的安全聊天/Owner 独立工作区说明是当时的历史实现选择，**不是当前最终权限目标**。Owner 私聊使用主机完整可用环境（不越过主机用户权限）；群聊使用隔离、有资源限制的执行沙箱，具备沙箱内受控文件/Shell。其他普通私聊仍待决策。参见 [纠偏与验收说明](../phases/execution-domain-correction-2026-10-16.md)。代码/部署尚未迁移，保留两个信任域、原生工具和可信来源逐次校验。
+> 当前契约以 [`PLAN.md`](../../PLAN.md) 顶部和[执行域纠偏阶段](../phases/execution-domain-correction-2026-10-16.md)为准。运行时采用两个信任域、三种工具组合；执行域实现已部署，隔离验证已通过。新的真实 QQ 固定故事尚未验收，三天观察尚未开始。
 
-日期：2026-10-13。根据用户从最终产品重新设计的决定，当前主线由 Phase 5 转向 Agent Profile 验证。
+## 职责与数据流
 
-## 产品中心
-稳定的 Agent 组合，动态的人格与技能，独立的信任和执行边界，外置的完整历史。
-AstrBot 保留平台收发、确定性插件和 canonical Journal；DSH 负责认知与行动。所有正常 QQ 输出经 AstrBot 并写入 Journal。
-保留会话映射、增量 cursor、串行与恢复成果；它们不代替 DSH 上下文预算管理。
+AstrBot 负责 QQ/OneBot 收发、确定性插件和唯一 canonical Journal。DSH 是自由聊天和任务执行的认知主体。Router 根据真实来源和当前会话负责准入、唤醒、会话映射、串行、增量 Journal、pending 与恢复；Router 不自行授予工具权限。正常 QQ 输出经过 AstrBot，事实历史进入 Journal。
 
-## 分离四个维度
-人格是每轮装配的有效提示词状态，切换不得把新旧人格不断追加到普通聊天历史。
-场景控制工作方法和技能目录；技能复用原生 registry、filesystem provider 和 skill tool，不自行建设技能框架。
-工具组合按信任域稳定配置；人格、场景或技能加载不得隐式授予文件/终端权限。
-工作区和执行隔离由原生执行器、沙箱与操作系统保障，不由提示词保障。
+人格、Scene 和 Skill 影响表达与工作方法，不改变权限。执行能力由当前信任域的 Profile、原生工具、程序校验和操作系统边界决定。
 
-普通群聊采用聊天/安全业务能力组合，不持有通用主机操作能力；所有者操作采用独立私聊会话与工作区。
-群内所有者操作与逐操作授权名单暂不作为本轮默认实现；是否保留该能力须单独明确产品需求。
+## 信任域与工具组合
 
-## 锁定版本与已观察接口
-继续使用 upstream.lock.json 中的 DSH commit 4878cdabd87d4041bdaff61d04c966883b9fd07a / 0.2.0-rc.1。
-systemPrompt.section 的 text 可为每次 assemble 调用的 provider；scope 层可覆盖 deployment:persona-prefix。
-原生 persona 插件为 scope-only 的静态模板配置，不能把全局挂载或 preset 重建当成人格切换。
-原生 skill、skill-filesystem、tool-skill 已存在。filesystem provider 可关闭默认根，只装载显式可信技能根。
-原生 compaction-basic 依赖 llm、tokenMeter、sessions；压缩仍需组合与验证，不能凭源码存在宣称已工作。
-sdk-minimal 默认 danger-full-access，省略技能与压缩；必须显式设计新组合并关闭不需要的执行入口。
+信任域只有 `owner` 和 `chat`；三个工具组合分别是 `owner-host`、`group-sandbox` 和 `safe-chat`：
 
-## 上下文职责
-Journal 是完整平台事实档案。Session 是有预算的模型工作上下文。
-基础行为/有效人格每轮装配；技能正文按需加载；较早历史按 scoped MCP 查询；大型工具输出外置。
-原生压缩应按实际 provider/model 的窗口与输出预留触发，保留任务、关键事实、当前有效状态与历史查询路径。
-失败/取消/重启、压缩后的 session 恢复与 cursor 必须一起验收。
+| 场景 | 工具组合 | 运行时边界 |
+| --- | --- | --- |
+| 配置 Owner 的真实独立私聊 | `owner-host` | DSH 使用部署账户实际可用的主机文件、前台 Shell、工作目录和网络；不默认 root，权限受 Linux 账户约束。每次操作校验可信来源。 |
+| 已准入群聊，包括 Owner 在群内 | `group-sandbox` | 每个 platform/Bot/group 有自己的运行时、home、Session、状态和持久工作区；Shell 受资源与文件边界限制，不访问宿主工作区和凭据。群内 Owner 不切换到 Owner 主机域。 |
+| 普通非 Owner 私聊 | `safe-chat` | 使用安全聊天能力，不提供通用文件或终端工具。 |
 
-## 未提交旧实现
-远程 main 的基线为 68171bf；Phase 5 中断开发留下 11 个 tracked 修改及 11 个 untracked 路径。
-不删除、覆盖或宣称这些修改已验收；新实验不导入 qq-permission、不改当前 QQ Profile、不启动或停止现有服务。
-历史 Phase 5 文档作为历史设计与证据保留，当前入口见 ../phases/agent-profile-validation.md。
+两域状态隔离；群与群之间也隔离工作区和会话。旧 Phase 5 状态不自动迁入新运行时，不确定操作不自动重放。执行器的实际约束、限制和已验证证据见[执行域记录](../execution-domain-validation-2026-10-16.md)。
 
+## 上下文、历史与恢复
 
-## 切换已有 Phase 5 会话的约束
+Journal 保存平台实际发生的入站和出站，是完整事实档案；DSH Session 是有限预算的工作上下文。Router 按 Journal cursor 注入增量，历史按当前会话 scoped MCP 查询，原生压缩管理 Session。模型执行结果不确定或取消时保留 pending，不假定副作用已撤销、不自动重试。DSH 已确认完成、仅最终发送失败时结束该轮并提示错误，允许后续新请求；不重发原回复。显式恢复必须核对具体 Session、工具和 Journal/平台回执证据。
 
-历史 Phase 5 QQ router 使用单个 DSH 进程、工作区与会话状态库；该组合包含通用文件和终端工具，并在共享会话内按消息来源判断权限。当前实现已分为独立安全聊天与 owner 私聊运行时。新的普通群聊 Profile 不能沿用这个进程或直接恢复这些旧会话。接入时应使用独立 DSH home、工作区和新会话映射，防止旧会话中的工具组合、待处理 turn 与授权状态混入群聊信任域。旧状态留存用于人工核对，不自动重放不确定的 turn。
+## 版本与验收状态
 
-所有者私聊操作应使用另一独立 Profile 和工作区；入口必须基于 AstrBot/OneBot 的真实发送者、Bot ID 与私聊会话身份作程序化验证。人格或技能场景切换只改变有效提示词与方法目录，不能决定进入哪个操作信任域。上线前分别检查两个 Profile 的实际工具 schema 和文件/终端执行边界，再启用路由。
+AstrBot 和 DSH 只使用 [`upstream.lock.json`](../../upstream.lock.json) 固定的版本；不以本地安装或浮动分支作为依据。实现和正式部署记录见[执行域验证与部署记录](../execution-domain-validation-2026-10-16.md)。隔离自动链路和真实模型测试证明了各自覆盖的机制，不能证明 QQ 客户端、NapCat/OneBot 平台链路或真实用户体验已验收。当前仍需完成 Owner 私聊、主群和未准入对照群的真实固定故事，再进行连续三天观察；具体步骤见[验收清单](../personal-agent-acceptance.md)。

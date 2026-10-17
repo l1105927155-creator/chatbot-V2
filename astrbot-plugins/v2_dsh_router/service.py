@@ -12,8 +12,10 @@ from typing import Any
 
 try:
     from .runtime_audit import CURRENT_TRACE, trace_scope
+    from .reply_delivery import split_final_reply
 except ImportError:
     from runtime_audit import CURRENT_TRACE, trace_scope
+    from reply_delivery import split_final_reply
 
 
 class PendingTurnError(RuntimeError):
@@ -400,7 +402,11 @@ class ChatService:
             if self._active_runs.get(identity) is active:
                 del self._active_runs[identity]
         try:
-            await send(reply)
+            # Each part uses the same event-bound AstrBot callback as an
+            # ordinary final reply, so all parts retain normal platform and
+            # canonical Journal observation. A failed part stops delivery.
+            for part in split_final_reply(reply):
+                await send(part)
         except Exception as exc:
             # The model turn is known to have completed. Consume only this
             # wake row so a failed QQ delivery does not block later requests.

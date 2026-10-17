@@ -600,8 +600,8 @@ def main():
     args = parser.parse_args()
     if not all(os.environ.get(key) for key in ("DEEPSEEK_API_KEY", "V2_DSH_PROVIDER", "V2_DSH_MODEL")):
         parser.error("live mode requires provider/model/key in process environment")
-    if os.environ.get("V2_DSH_PROVIDER") != "deepseek-official" or os.environ.get("V2_DSH_MODEL") != "deepseek-v4-flash":
-        parser.error("this acceptance is pinned to deepseek-official/deepseek-v4-flash")
+    if os.environ.get("V2_DSH_PROVIDER") != "deepseek-official" or os.environ.get("V2_DSH_MODEL") not in {"deepseek-flash", "deepseek-v4-flash"}:
+        parser.error("this acceptance requires deepseek-official with deepseek-flash (or the legacy deepseek-v4-flash alias)")
     os.umask(0o077)
     directory = (args.data_dir or ROOT / ".runtime" / ("qq-interactions-" + uuid.uuid4().hex[:12])).resolve()
     if directory.exists():

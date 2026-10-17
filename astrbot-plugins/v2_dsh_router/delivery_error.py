@@ -22,6 +22,20 @@ def error_summary(error):
 async def notify_delivery_error(event, conversation, owners, error, logger, log_location=None):
     from astrbot.api.event import MessageChain
 
+    chain = await owner_mentions(event, conversation, owners, logger)
+    chain.message(f"发送失败，错误信息：{error_summary(error)}。\n"
+                  f"错误记录位置：{log_location or 'Bot 服务运行日志'}\n不影响后续消息处理。")
+    try:
+        # Notification failure must not reopen the completed turn or trigger a retry loop.
+        await asyncio.wait_for(event.send(chain), timeout=10)
+    except Exception:
+        logger.exception("V2 delivery error notification failed; no retry")
+
+
+async def owner_mentions(event, conversation, owners, logger):
+    """Return verified in-group Owner mentions, omitting them when membership is unknown."""
+    from astrbot.api.event import MessageChain
+
     chain = MessageChain()
     candidates = sorted({owner.user_id for owner in owners
                          if owner.platform_id == conversation.platform_id
@@ -36,10 +50,4 @@ async def notify_delivery_error(event, conversation, owners, error, logger, log_
                         chain.at("", user_id)
         except Exception:
             logger.exception("V2 delivery error: cannot verify group Owner membership; omit mentions")
-    chain.message(f"发送失败，错误信息：{error_summary(error)}。\n"
-                  f"错误记录位置：{log_location or 'Bot 服务运行日志'}\n不影响后续消息处理。")
-    try:
-        # Notification failure must not reopen the completed turn or trigger a retry loop.
-        await asyncio.wait_for(event.send(chain), timeout=10)
-    except Exception:
-        logger.exception("V2 delivery error notification failed; no retry")
+    return chain

@@ -16,6 +16,7 @@ from .dsh_client import DshTurnCancelled, start_client
 from .routing import should_route
 from .service import ChatService, PendingTurnError, RecoveryError, FinalReplyDeliveryError
 from .delivery_error import notify_delivery_error
+from .turn_error import notify_turn_error
 from .state import StateStore, migration_needed
 from .mcp_server import McpServer
 from .trust_domain import Owner, classify, parse_owners
@@ -54,6 +55,7 @@ class V2DshRouter(star.Star):
         self._closing = False
         self._initialized = False
         self._active = set()
+        self._pending_notice_keys = set()
         # The plugin is symlinked into AstrBot's data/plugins directory by V2.
         repo = Path(__file__).resolve().parents[2]
         runtime = repo / ".runtime"
@@ -312,9 +314,24 @@ class V2DshRouter(star.Star):
     async def health(self):
         """Operational readiness only; no Session creation or model request."""
         journal_ready, state_ready, owner_ready, groups_ready = False, True, not self.owners, True
+        journal_readable, capture_intact, collector_ready = False, False, False
+        capture_failures = 0
         pending, quarantined = 0, 0
         try:
-            journal_ready = await asyncio.to_thread(self.mcp.journal.check_health)
+            journal_readable = await asyncio.to_thread(self.mcp.journal.check_health)
+            capture = await asyncio.to_thread(self.mcp.journal.capture_status)
+            capture_failures = capture["failure_count"]
+            capture_intact = capture["available"] and not capture["degraded"]
+            # The collector has an in-process latch even if SQLite cannot
+            # persist its failure. A separate readable store is insufficient.
+            metadata = self.context.get_registered_star("v2_journal")
+            collector = metadata.star_cls if metadata and metadata.activated else None
+            if collector is not None:
+                status = collector.collector_health()
+                collector_ready = bool(status["initialized"] and not status["closing"] and status["bindings_match"])
+                capture_failures = max(capture_failures, status["capture_errors"])
+                capture_intact = capture_intact and not status["capture_degraded"]
+            journal_ready = bool(journal_readable and capture_intact and collector_ready)
         except Exception:
             pass
         for service in self.services.values():
@@ -365,11 +382,13 @@ class V2DshRouter(star.Star):
                     and acp_ready and owner_ready and groups_ready)
         return {"pid": os.getpid(), "core_ready": core, "ready": core and connected,
                 "closing": self._closing, "onebot_connected": connected, "journal_ready": journal_ready,
+                "journal_readable": bool(journal_readable), "journal_capture_intact": bool(capture_intact),
+                "journal_collector_ready": collector_ready, "journal_capture_failures": capture_failures,
                 "state_ready": state_ready, "acp_ready": bool(acp_ready),
                 "owner_host_ready": owner_ready, "group_sandboxes_ready": groups_ready,
                 "active_turns": len(self._active), "queued": sum(s._queued for s in self.services.values()),
                 "pending_conversations": pending, "quarantined_sessions": quarantined,
-                "degraded": bool(quarantined or self.audit.write_errors)}
+                "degraded": bool(quarantined or self.audit.write_errors or not journal_ready)}
 
     @filter.command("v2agent")
     async def configure_agent(self, event: AstrMessageEvent, kind: str = "", value: str = ""):
@@ -486,6 +505,9 @@ class V2DshRouter(star.Star):
         from data.plugins.v2_journal.journal import message_from_onebot
 
         task = asyncio.current_task()
+        turn_started = False
+        message = None
+        service = None
         try:
             message = message_from_onebot(event.get_platform_id(), raw)
             if not message.message_id:
@@ -500,6 +522,7 @@ class V2DshRouter(star.Star):
                 await event.send(MessageChain().message(reply))
 
             self._active.add(task)
+            turn_started = True
             await service.handle(
                 message.conversation, message.message_id, send,
                 get_group=event.get_group,
@@ -514,10 +537,31 @@ class V2DshRouter(star.Star):
         except DshTurnCancelled:
             self.logger.info("V2 DSH cancellation confirmed for QQ message %s; outcome pending review",
                              raw.get("message_id"))
+            if turn_started and message is not None:
+                await notify_turn_error(event, message.conversation, self.owners, "cancelled", self.logger)
         except PendingTurnError as exc:
             self.logger.error("V2 DSH conversation paused: %s", exc)
+            if turn_started and message is not None:
+                try:
+                    state = await asyncio.to_thread(service.state.get, message.conversation.platform_id,
+                                                    message.conversation.bot_id, message.conversation.key)
+                except Exception:
+                    state = None
+                    self.logger.exception("V2 cannot read pending cursor for turn notice")
+                pending_cursor = getattr(state, "pending_upper_cursor", None)
+                notice_key = (message.conversation.platform_id, message.conversation.bot_id,
+                              message.conversation.key, pending_cursor)
+                notices = getattr(self, "_pending_notice_keys", None)
+                if notices is None:
+                    notices = self._pending_notice_keys = set()
+                if notice_key not in notices:
+                    notices.difference_update({key for key in notices if key[:3] == notice_key[:3]})
+                    notices.add(notice_key)
+                    await notify_turn_error(event, message.conversation, self.owners, "pending", self.logger)
         except Exception:
             self.logger.exception("V2 DSH turn failed for QQ message %s", raw.get("message_id"))
+            if turn_started and message is not None:
+                await notify_turn_error(event, message.conversation, self.owners, "failed", self.logger)
         finally:
             self._active.discard(task)
 
