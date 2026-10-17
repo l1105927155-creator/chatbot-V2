@@ -32,6 +32,8 @@
 
 后续提示格式补充：NapCat提供API失败回执，固定版AstrBot该发送路径向上传播异常，不自动向群发送错误提示。V2提示改为“发送失败，错误信息：类型/retcode/NTEvent result”，下一行提及已核实的群内Bot Owner并显示实际audit文件路径；无Owner省略提及。audit为脱敏错误记录，完整异常仍在user service日志（`journalctl --user -u chatbot-v2-agent.service`）。audit发生写入错误时提示改给service日志查询命令，不声称文件记录成功。6项通知/生命周期测试通过，`.runtime/delivery-notice-location-tests.log`；未发送真实QQ测试消息。
 
+该格式随 `ba77ac8` 于15:31备份后部署，证据 `.runtime/qq-notice-location-deployment-20261017-153143/`。PID `1487745`，服务ready；全部Session/cursor/pending和Journal计数/上界保持，未重放消息。
+
 `823f46f` 于2026-10-17 15:23（Asia/Shanghai）备份后部署，证据 `.runtime/qq-delivery-deployment-20261017-152331/`，正式PID `1485712`，ready/OneBot/Owner host/群沙箱正常，active/queued/pending/quarantine均为0。
 
 只处理已核实的旧主群9970：正常停写、完整备份后，重新核对该入站的原始 `dsh/stop=end_turn` 和 `send/failed`；通过既有 `StateStore.resolve_pending` 的SID/旧cursor/pending精确比较更新，消费9970且不重放。保存 `reviewed-legacy-resolution.json`；其它会话状态和所有SID保持，canonical Journal计数/上界保持。该修复没有清空或自动处理其它不确定执行，不发送真实QQ测试消息或补发旧回复。用户可重新在主群 @Bot 发新请求。
