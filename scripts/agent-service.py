@@ -166,6 +166,8 @@ def _runtime_env(config: dict[str, Any]) -> dict[str, str]:
         "V2_GROUP_NETWORK": "1" if config["group_sandbox"]["network"] else "0",
         "LC_MESSAGES": "C",
         "ASTRBOT_ROOT": str(ASTRBOT),
+        "V2_CONSOLE_STATE_FILE": str(ASTRBOT / "data/plugin_data/v2_console/state.json"),
+        "V2_CONSOLE_REPO_ROOT": str(ROOT),
     })
     for name in ("DEEPSEEK_API_KEY", "V2_DSH_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
                  "GEMINI_API_KEY", "DASHSCOPE_API_KEY", "SILICONFLOW_API_KEY"):

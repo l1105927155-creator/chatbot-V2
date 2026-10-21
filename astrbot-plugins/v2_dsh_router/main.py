@@ -17,7 +17,7 @@ from astrbot.core.star.filter.command import GreedyStr
 
 from .dsh_client import DshTurnCancelled, start_client
 from .routing import should_route
-from .service import ChatService, PendingTurnError, RecoveryError, ResetError, FinalReplyDeliveryError, ModelTurnError
+from .service import ChatService, PendingTurnError, RecoveryError, ResetError, FinalReplyDeliveryError, ModelTurnError, AgentDisabledError
 from .delivery_error import notify_delivery_error
 from .turn_error import notify_turn_error
 from .reply_safety import ReplyContentError
@@ -75,6 +75,8 @@ class V2DshRouter(star.Star):
             raise RuntimeError("V2_EXECUTION_CONTRACT=2 is required; refusing legacy execution configuration")
         self.repo = repo
         self.runtime_root = runtime
+        from .console_settings import configured_store
+        self.console_store = configured_store()
         self.migrate_enabled = os.environ.get("V2_EXECUTION_MIGRATE") == "1"
         self.allowed_conversations = frozenset(
             part.strip() for part in os.environ.get("V2_QQ_ALLOWED_CONVERSATIONS", "").split(",")
@@ -165,6 +167,7 @@ class V2DshRouter(star.Star):
             elif any(key.startswith("group:") for key in self.allowed_conversations):
                 raise RuntimeError("admitted group execution requires a configured platform/Bot identity")
             await self._migrate_legacy_mappings()
+            await self._initialize_console_settings()
         except BaseException as startup_error:
             try:
                 await self._close_runtime()
@@ -175,6 +178,46 @@ class V2DshRouter(star.Star):
                 ) from startup_error
             raise
         self._initialized = True
+
+    async def _initialize_console_settings(self):
+        """Adopt existing model choices and homes without inferring editor roles."""
+        store = self.console_store
+        if store is None:
+            return
+        from data.plugins.v2_journal.journal import Conversation
+        identities = {(owner.platform_id, owner.bot_id, "private:" + owner.user_id)
+                      for owner in self.owners
+                      if "private:" + owner.user_id in self.allowed_conversations}
+        identities.update((runtime["platform_id"], runtime["bot_id"], "group:" + runtime["group_id"])
+                          for runtime in self._group_runtimes.values())
+        for platform, bot, key in sorted(identities):
+            conversation = Conversation(platform, bot, key)
+            service = (self.services["owner"] if key.startswith("private:") else
+                       await self._ensure_group_service(platform, bot, key.removeprefix("group:")))
+            previous = service.state.get_model_route(platform, bot, key)
+            route = previous or (service.dsh.settings["provider"], service.dsh.settings["model"])
+            store.import_session(platform, bot, key,
+                                 {"model": {"provider": route[0], "model": route[1]},
+                                  "enabled": True, "editors": []},
+                                 expected_revision=store.read()["revision"])
+            from .console_settings import session_settings
+            settings = session_settings(store, conversation)
+            await service.set_enabled(conversation, settings["enabled"])
+
+    def _console_accepts(self, message):
+        if getattr(self, "_closing", False):
+            return False
+        store = getattr(self, "console_store", None)
+        if store is None:
+            return True
+        if message.conversation_key.startswith("private:") and Owner(
+                message.platform_id, message.bot_id, message.actor_id) not in self.owners:
+            return False
+        from .console_settings import session_settings
+        try:
+            return session_settings(store, message.conversation)["enabled"] is True
+        except PermissionError:
+            return False
 
     @filter.on_astrbot_loaded()
     async def install_agent_commands(self):
@@ -253,6 +296,8 @@ class V2DshRouter(star.Star):
             from data.plugins.v2_journal.journal import message_from_onebot
             raw = getattr(event.message_obj, "raw_message", None)
             message = message_from_onebot(event.get_platform_id(), raw)
+            if not self._console_accepts(message):
+                return
             if not message.message_id or message.direction != "inbound":
                 raise ValueError("Agent command requires an inbound canonical message")
             domain = classify(message, self.owners)
@@ -440,7 +485,12 @@ class V2DshRouter(star.Star):
             target = state.get(platform_id, bot_id, "group:" + group_id)
             dynamic_migration = self._initialized and migration_needed(
                 legacy, target, authorized=self._migration_is_authorized())
-            await asyncio.to_thread(module.prepare_group, group_storage_root, platform_id, bot_id, group_id)
+            from .console_settings import group_template, initialize_group_template
+            selected_template = group_template(getattr(self, "console_store", None), platform_id, bot_id, group_id)
+            options = {"seed_guides": False} if selected_template else {}
+            await asyncio.to_thread(module.prepare_group, group_storage_root, platform_id, bot_id, group_id, **options)
+            if selected_template:
+                await asyncio.to_thread(initialize_group_template, self.console_store, selected_template, paths)
             workspace = Path(paths["workspace"]).resolve(strict=True)
             self._group_runtimes[name] = {"platform_id": platform_id, "bot_id": bot_id,
                                           "group_id": group_id, "workspace": workspace,
@@ -618,6 +668,8 @@ class V2DshRouter(star.Star):
         try:
             raw = getattr(event.message_obj, "raw_message", None)
             message = message_from_onebot(event.get_platform_id(), raw)
+            if not self._console_accepts(message):
+                return
             domain = classify(message, self.owners)
             if not message.message_id:
                 raise ValueError("control message requires canonical platform message ID")
@@ -757,7 +809,10 @@ class V2DshRouter(star.Star):
         transfer = FileTransfer(self.mcp.journal, message.conversation, workspace,
                                 profile=profile, verify_root=verify, resolve=resolve, send=send_file,
                                 spool_dir=Path(star.StarTools.get_data_dir('v2_dsh_router')) / 'file-spool',
-                                storage_root=storage_root)
+                                storage_root=storage_root,
+                                workspace_lock_path=(workspace.parent / '.workspace-file.lock'
+                                                     if profile == 'group-sandbox' and
+                                                     getattr(self, 'console_store', None) is not None else None))
         return transfer
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=-maxsize)
@@ -773,6 +828,8 @@ class V2DshRouter(star.Star):
         service = None
         try:
             message = message_from_onebot(event.get_platform_id(), raw)
+            if not self._console_accepts(message):
+                return
             if not message.message_id:
                 raise ValueError("QQ inbound message has no platform message ID")
             if message.conversation_key not in self.allowed_conversations:
@@ -808,21 +865,24 @@ class V2DshRouter(star.Star):
                 memes=MemeLibrary(self.runtime_root.parent / 'meme', send_meme),
                 plugins=PluginCapabilities(self.context, event),
             )
+        except AgentDisabledError:
+            self.logger.info("V2 Agent input stopped by console disable barrier")
         except ReplyContentError as exc:
             self.logger.warning("V2 withheld invalid model reply (code=%s)", exc.code)
-            if turn_started and message is not None:
+            if turn_started and message is not None and self._console_accepts(message):
                 await notify_turn_error(event, message.conversation, self.owners, "invalid_reply", self.logger)
         except FinalReplyDeliveryError as exc:
             self.logger.exception("V2 final reply delivery failed for QQ message %s; turn consumed, no replay",
                                   raw.get("message_id"))
             log_location = (str(self.audit.path) if self.audit.write_errors == 0
                             else "journalctl --user -u chatbot-v2-agent.service")
-            await notify_delivery_error(event, message.conversation, self.owners, exc, self.logger,
-                                        log_location)
+            if self._console_accepts(message):
+                await notify_delivery_error(event, message.conversation, self.owners, exc, self.logger,
+                                            log_location)
         except ModelTurnError as exc:
             self.logger.warning("V2 model turn terminated before any tool call for QQ message %s (code=%s)",
                                 raw.get("message_id"), exc.code)
-            if turn_started and message is not None:
+            if turn_started and message is not None and self._console_accepts(message):
                 await notify_turn_error(event, message.conversation, self.owners, "model", self.logger,
                                         code=exc.code, tools_completed=exc.tools_completed)
         except DshTurnCancelled:
@@ -831,11 +891,11 @@ class V2DshRouter(star.Star):
             reset_cancel = (turn_started and message is not None and
                             callable(getattr(service, "is_reset_cancellation", None)) and
                             service.is_reset_cancellation(message.conversation, message.message_id))
-            if turn_started and message is not None and not reset_cancel:
+            if turn_started and message is not None and not reset_cancel and self._console_accepts(message):
                 await notify_turn_error(event, message.conversation, self.owners, "cancelled", self.logger)
         except PendingTurnError as exc:
             self.logger.error("V2 DSH conversation paused: %s", exc)
-            if turn_started and message is not None:
+            if turn_started and message is not None and self._console_accepts(message):
                 try:
                     status = await service.status(message.conversation)
                 except Exception:
@@ -855,7 +915,8 @@ class V2DshRouter(star.Star):
                     await notify_turn_error(event, message.conversation, self.owners, notice_kind, self.logger)
         except Exception:
             self.logger.exception("V2 DSH turn failed for QQ message %s", raw.get("message_id"))
-            if message is not None and message.conversation_key in self.allowed_conversations:
+            if (message is not None and message.conversation_key in self.allowed_conversations
+                    and self._console_accepts(message)):
                 kind = "infrastructure" if service is None else "failed"
                 await notify_turn_error(event, message.conversation, self.owners, kind, self.logger,
                                         code="INITIALIZATION_FAILED" if service is None else None)

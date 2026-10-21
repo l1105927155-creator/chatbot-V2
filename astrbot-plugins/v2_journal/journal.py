@@ -331,6 +331,16 @@ class JournalStore:
             conn.execute("SELECT journal_id FROM journal LIMIT 1").fetchone()
         return True
 
+    def high_watermark(self, conversation: Conversation) -> int:
+        """Return the latest canonical cursor for one conversation, or zero."""
+        with self._db() as conn:
+            row = conn.execute(
+                """SELECT COALESCE(MAX(journal_id), 0) AS high_watermark FROM journal
+                   WHERE platform_id=? AND bot_id=? AND conversation_key=?""",
+                (conversation.platform_id, conversation.bot_id, conversation.key),
+            ).fetchone()
+        return int(row["high_watermark"])
+
     def record_capture_failure(self, kind: str) -> dict[str, Any]:
         """Persist a sticky capture failure without fabricating a journal row."""
         allowed = {"malformed_event", "append_failure", "shutdown_rejection"}

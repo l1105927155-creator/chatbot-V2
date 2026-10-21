@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_shutdown_waits_for_final_delivery_notification():
     worker = r'''
 import asyncio, logging
+from pathlib import Path
 from types import SimpleNamespace as NS
 import data.plugins.v2_dsh_router.main as m
 
@@ -21,6 +22,10 @@ async def main():
     router.owners = frozenset()
     router.logger = logging.getLogger('delivery-test')
     router.audit = NS(path='/test/audit/events.jsonl', write_errors=0)
+    router.onebot_audit = NS(bind=lambda _bot: None)
+    router.runtime_root = Path('/test/runtime')
+    router.context = NS()
+    router.mcp = NS(journal=NS())
     # This contract covers notification drain during shutdown, not file transfer.
     router._file_transfer = lambda *_args: None
     started, release, closed = asyncio.Event(), asyncio.Event(), asyncio.Event()
@@ -38,6 +43,7 @@ async def main():
            'group_id':42,'message_id':99,'message':[{'type':'at','data':{'qq':'1'}},
            {'type':'text','data':{'text':'hello'}}]}
     event = NS(message_obj=NS(raw_message=raw),get_platform_id=lambda:'qq',
+               unified_msg_origin='qq:GroupMessage:42',
                get_platform_name=lambda:'aiocqhttp',is_stopped=lambda:False,
                get_extra=lambda *args:False,get_group=lambda:None)
     route = asyncio.create_task(router.route_chat(event))

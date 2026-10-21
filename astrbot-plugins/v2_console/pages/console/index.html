@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>V2 Bot 控制台</title>
+    <script type="module" crossorigin src="./assets/index-OuzZHLao.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-DT6E2db2.css">
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div><strong>V2 Bot 控制台</strong><span id="connection" class="connection">正在连接…</span></div>
+        <div class="top-actions">
+          <button id="refresh" class="button secondary">刷新</button>
+          <button id="restart" class="button danger">重启 Bot</button>
+        </div>
+      </header>
+      <main class="shell">
+        <aside class="sidebar">
+          <div class="side-title">会话</div>
+          <div id="sessions" class="session-list"></div>
+          <button id="show-add-group" class="button outline full">＋ 添加群</button>
+          <div class="side-title side-title-spaced">管理</div>
+          <button class="nav-button active" data-view="session">会话与工作区</button>
+          <button class="nav-button" data-view="defaults">默认设置</button>
+          <button class="nav-button" data-view="templates">工作区模板</button>
+        </aside>
+
+        <section class="content">
+          <div id="notice" class="notice hidden" role="status"></div>
+          <section id="view-session" class="view">
+            <div class="view-heading">
+              <div><div class="eyebrow">会话管理</div><h1 id="session-title">选择一个会话</h1><div id="session-subtitle" class="muted"></div></div>
+              <div class="heading-actions">
+                <button id="session-enabled" class="button secondary hidden"></button>
+                <button id="compress" class="button secondary">立即压缩</button>
+                <button id="new-context" class="button secondary">新建对话上下文</button>
+              </div>
+            </div>
+
+            <div id="empty-session" class="card empty-state">请从左侧选择会话，或添加一个群。</div>
+            <div id="session-workspace" class="hidden">
+              <section class="card settings-card">
+                <div class="card-heading"><div><h2>会话设置</h2><p>独立保存；恢复默认会取当前最新默认值。</p></div><button id="save-session" class="button primary">保存设置</button></div>
+                <div class="settings-grid">
+                  <label class="field"><span>Provider</span><select id="session-provider"></select><button class="link-button restore" data-field="model">恢复默认</button></label>
+                  <label class="field"><span>模型</span><select id="session-model"></select></label>
+                  <label class="field"><span>Agent 启用状态</span><select id="session-enabled-input"><option value="">请选择启用状态</option><option value="true">启用</option><option value="false">停用</option></select><button class="link-button restore" data-field="enabled">恢复默认</button></label>
+                  <label class="field"><span>工作区修改白名单（QQ 号，每行一个）</span><textarea id="session-editors" rows="2" placeholder="1105927155"></textarea><button class="link-button restore" data-field="editors">恢复默认</button></label>
+                </div>
+              </section>
+
+              <section class="card workspace-card">
+                <div class="card-heading"><div><h2>工作区</h2><p id="workspace-label">仅操作当前会话工作区。保存冲突会提示重新读取。</p></div><div class="file-actions"><button id="new-file" class="button secondary">新建文件</button><button id="new-directory" class="button secondary">新建目录</button><button id="upload-file" class="button secondary">上传</button><button id="rename-file" class="button secondary">重命名</button><button id="delete-file" class="button secondary">删除</button><button id="download-file" class="button secondary">下载</button><button id="export-workspace" class="button secondary" title="导出整个会话工作区；不跟随链接或读取特殊文件">导出会话目录</button><button id="save-file" class="button primary">保存文件</button><input id="upload-input" type="file" hidden /></div></div>
+                <div class="editor-layout">
+                  <div class="file-tree-pane"><div class="tree-toolbar"><button id="up-directory" class="link-button">↑ 上级</button><span id="current-path">/</span></div><div id="file-tree" class="file-tree"></div></div>
+                  <div class="editor-pane"><div class="editor-toolbar"><span id="editor-file-name">未选择文件</span><span id="file-version" class="muted"></span></div><div id="editor"></div></div>
+                </div>
+              </section>
+            </div>
+          </section>
+
+          <section id="view-defaults" class="view hidden">
+            <div class="view-heading"><div><div class="eyebrow">新会话复制此设置</div><h1>默认设置</h1><div class="muted">只有一套默认设置；修改后仅影响新会话及主动恢复字段的会话。</div></div><button id="save-defaults" class="button primary">保存默认设置</button></div>
+            <section class="card settings-card"><div class="settings-grid">
+              <label class="field"><span>默认 Provider</span><select id="default-provider"></select></label>
+              <label class="field"><span>默认模型</span><select id="default-model"></select></label>
+              <label class="field"><span>新会话 Agent 默认状态</span><select id="default-enabled"><option value="">请选择启用状态</option><option value="true">启用</option><option value="false">停用</option></select></label>
+              <label class="field"><span>新会话工作区修改白名单（QQ 号，每行一个）</span><textarea id="default-editors" rows="3" placeholder="1105927155"></textarea></label>
+            </div></section>
+          </section>
+
+          <section id="view-templates" class="view hidden">
+            <div class="view-heading"><div><div class="eyebrow">初始化工作区的文件模板</div><h1>工作区模板</h1><div class="muted">创建会话时复制模板；编辑模板不会改动已有工作区。</div></div><button id="add-template" class="button primary">新建模板</button></div>
+            <div class="template-layout"><div id="template-list" class="card template-list"></div><section class="card workspace-card"><div class="card-heading"><div><h2 id="template-title">选择模板</h2><p>模板只包含初始文件，不携带成员数据或权限。</p></div><div class="file-actions"><button id="rename-template" class="button secondary">重命名</button><button id="delete-template" class="button secondary">删除模板</button></div></div><div class="editor-layout"><div class="file-tree-pane"><div class="tree-toolbar"><button id="template-up-directory" class="link-button">↑ 上级</button><span id="template-current-path">/</span></div><div id="template-file-tree" class="file-tree"></div><div class="compact-actions"><button id="template-new-file" class="button secondary">新建文件</button><button id="template-new-directory" class="button secondary">新建目录</button><button id="template-upload-file" class="button secondary">上传</button></div></div><div class="editor-pane"><div class="editor-toolbar"><span id="template-editor-file-name">未选择文件</span><span id="template-file-version" class="muted"></span></div><div id="template-editor"></div><div class="template-save"><button id="template-rename-file" class="button secondary">重命名</button><button id="template-delete-file" class="button secondary">删除</button><button id="template-download-file" class="button secondary">下载</button><button id="template-save-file" class="button primary">保存文件</button></div></div></div></section></div>
+          </section>
+        </section>
+      </main>
+      <dialog id="add-group-dialog"><form method="dialog" id="add-group-form"><div class="dialog-heading"><h2>添加群</h2><button class="icon-button" value="cancel" aria-label="关闭">×</button></div><p class="muted">只提交群号、平台标识和机器人标识；服务端负责同步准入及初始化工作区。</p><label class="field"><span>Platform ID</span><input name="platform_id" required value="napcat" /></label><label class="field"><span>Bot ID</span><input name="bot_id" required autocomplete="off" /></label><label class="field"><span>Group ID</span><input name="group_id" required inputmode="numeric" autocomplete="off" /></label><label class="field"><span>Workspace 模板</span><select name="template_id" required></select></label><div class="dialog-actions"><button class="button secondary" value="cancel">取消</button><button id="create-group" class="button primary" value="default">创建并同步</button></div></form></dialog>
+      <input id="template-upload-input" type="file" hidden />
+      <div id="busy" class="busy hidden"><span class="spinner"></span><span id="busy-text">正在处理…</span></div>
+    </div>
+  </body>
+</html>

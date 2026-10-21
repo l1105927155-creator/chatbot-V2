@@ -18,6 +18,15 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 import aiohttp
+try:
+    from .console_settings import async_workspace_lock
+except ImportError:
+    import importlib.util
+    _console_spec = importlib.util.spec_from_file_location(
+        "v2_file_transfer_console_settings", Path(__file__).with_name("console_settings.py"))
+    _console_module = importlib.util.module_from_spec(_console_spec)
+    _console_spec.loader.exec_module(_console_module)
+    async_workspace_lock = _console_module.async_workspace_lock
 
 MEDIA = frozenset({'file', 'image', 'record', 'video'})
 CHUNK = 256 * 1024
@@ -57,12 +66,14 @@ class FileTransfer:
         return locks.setdefault(str(self.storage_root), asyncio.Lock())
 
     def __init__(self, journal, conversation, workspace, *, profile, resolve,
-                 send, verify_root=None, max_bytes=None, spool_dir=None, storage_root=None):
+                 send, verify_root=None, max_bytes=None, spool_dir=None, storage_root=None,
+                 workspace_lock_path=None):
         self.journal = journal
         self.conversation = conversation
         self.workspace = Path(workspace)
         self.storage_root = Path(storage_root) if storage_root else self.workspace
         self.profile = profile
+        self.workspace_lock_path = workspace_lock_path
         self.trace = None
         self.history_after = 0
         self.conversation_quota = DEFAULT_MAX_BYTES
@@ -219,7 +230,8 @@ class FileTransfer:
 
     async def receive(self, journal_id: int, segment_index: int):
         async with self.storage_lock():
-            return await self._receive(journal_id, segment_index)
+            async with async_workspace_lock(self.workspace_lock_path):
+                return await self._receive(journal_id, segment_index)
 
     async def _receive(self, journal_id: int, segment_index: int):
         if type(journal_id) is not int or journal_id <= 0 or type(segment_index) is not int or segment_index < 0:

@@ -122,7 +122,8 @@ def _remove_new_group(directory: Path, workspace: Path, image: Path) -> None:
 
 def prepare_group(root: Path, platform_id: str, bot_id: str, group_id: str, *,
                   total_bytes: int | None = None,
-                  min_free_bytes: int | None = None) -> dict[str, str | int]:
+                  min_free_bytes: int | None = None,
+                  seed_guides: bool = True) -> dict[str, str | int]:
     """Provision/reuse a group volume under a cumulative retained-data budget.
 
     Existing valid groups remain usable if the configured aggregate budget or
@@ -169,7 +170,8 @@ def prepare_group(root: Path, platform_id: str, bot_id: str, group_id: str, *,
             data = owner_volume.prepare(workspace, image, GROUP_BYTES)
             _write_group_info(directory, platform_id, bot_id, group_id)
             if os.path.ismount(workspace):
-                _seed_group_guides(workspace, directory)
+                if seed_guides:
+                    _seed_group_guides(workspace, directory)
             return {"key": selected["key"], "directory": str(directory),
                     "workspace": str(data["workspace"]), "image": str(data["image"]),
                     "bytes": data["bytes"]}
@@ -202,7 +204,8 @@ def prepare_group(root: Path, platform_id: str, bot_id: str, group_id: str, *,
             data = owner_volume.prepare(workspace, image, GROUP_BYTES)
             _write_group_info(directory, platform_id, bot_id, group_id)
             if os.path.ismount(workspace):
-                _seed_group_guides(workspace, directory)
+                if seed_guides:
+                    _seed_group_guides(workspace, directory)
         except BaseException:
             if created_directory:
                 _remove_new_group(directory, workspace, image)

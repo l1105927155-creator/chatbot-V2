@@ -604,7 +604,8 @@ def test_drain_refuses_quarantined_session_until_runtime_shutdown(tmp_path):
     client.close()
 
 
-def test_acp_cancel_latches_before_prompt_write_and_flushes_after_prompt(tmp_path, monkeypatch):
+@pytest.mark.parametrize("before_write", [True, False])
+def test_acp_cancel_stops_before_write_or_flushes_after_prompt(tmp_path, monkeypatch, before_write):
     import deepseek_harness.client as sdk
     prompt_ready, allow_write, response_wait, finish = (threading.Event() for _ in range(4))
     writes = []
@@ -638,13 +639,22 @@ def test_acp_cancel_latches_before_prompt_write_and_flushes_after_prompt(tmp_pat
     with ThreadPoolExecutor(1) as pool:
         turn = pool.submit(runtime.run, "sid-a", "delta")
         assert prompt_ready.wait(2)
+        if not before_write:
+            allow_write.set()
+            assert response_wait.wait(2)
         assert runtime.cancel_session("sid-a") is True
         assert runtime.cancel_session("sid-idle") is False
         allow_write.set()
-        assert response_wait.wait(2)
-        assert [message["method"] for message in writes] == ["session/prompt", "session/cancel"]
-        finish.set()
-        with pytest.raises(module.DshTurnCancelled): turn.result(2)
+        if before_write:
+            with pytest.raises(module.DshTurnCancelled):
+                turn.result(2)
+            assert writes == []
+            assert not response_wait.is_set()
+        else:
+            assert [message["method"] for message in writes] == ["session/prompt", "session/cancel"]
+            finish.set()
+            with pytest.raises(module.DshTurnCancelled):
+                turn.result(2)
     assert runtime.cancel_session("sid-a") is False
     runtime.close()
 

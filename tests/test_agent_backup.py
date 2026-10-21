@@ -90,6 +90,12 @@ def test_backup_quarantine_restore_preserves_native_state(tmp_path):
     assert (group_home / "sessions/native.json").read_text() == "group native session"
 
 
+def test_pre_console_v2_component_manifest_remains_accepted(tmp_path):
+    previous = [component for component in agent_backup.COMPONENTS
+                if component != ".runtime/astrbot/data/plugin_data/v2_console"]
+    assert agent_backup._valid_components(previous, tmp_path, 2) == tuple(previous)
+
+
 def test_legacy_v1_backup_remains_restorable(tmp_path):
     root = fixture_root(tmp_path)
     current = make_archive(root, tmp_path / "private" / "current.tar.gz")

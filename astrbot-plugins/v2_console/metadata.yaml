@@ -1,0 +1,6 @@
+name: v2_console
+display_name: V2 Bot 控制台
+author: chatbot-V2
+desc: 会话设置、模板、工作区与服务控制。
+version: 0.1.0
+astrbot_version: "==4.28.2"

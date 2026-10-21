@@ -8,6 +8,7 @@ import { SandboxProvider } from '../../node_modules/@deepseek-ai/dsh-sandbox/lib
 import { privateSourceRoot, readTurnSource,
   validateClaimedPrompt, sameTurnSource, verifyTurnImageProofs, validateTurnImages } from './trusted-turn-guard.mjs'
 import { researchDelegation } from './background-authority.mjs'
+import { canWriteGroupWorkspace } from './group-write-policy.mjs'
 
 export const name = 'v2-group-sandbox'
 
@@ -108,7 +109,8 @@ export class GroupSandbox extends SandboxProvider {
             }
           }
         }
-        this.captured.set(exec.token, {agent: exec.agent, turn: binding.turn, nonce: binding.source.nonce})
+        this.captured.set(exec.token, {agent: exec.agent, turn: binding.turn,
+          nonce: binding.source.nonce, source: binding.source})
       } catch (error) { return 'V2 group authorization denied: ' + error.message }
     })
     ctx.on('tools/execute', async (exec, next) => {
@@ -180,8 +182,11 @@ export class GroupSandbox extends SandboxProvider {
     if (!within(this.workspace, physical)) throw new Error('workdir outside group workspace')
     const workdir = relative(this.workspace, physical)
     if (signal?.aborted) signal.throwIfAborted()
+    // Re-read the trusted console file at the final host-side execution seam.
+    // The result controls the actual mount; command text is never inspected.
+    const mode = canWriteGroupWorkspace(binding.source) ? 'workspace-write' : 'read-only'
     return {argv: ['/usr/bin/python3', '-I', '-S', this.scopeRunner, '--workspace', this.workspace,
-        '--workdir', workdir || '.', '--', argv[2]],
+        '--workdir', workdir || '.', '--workspace-mode', mode, '--', argv[2]],
       enforcement: 'full',
       denialSignatures: ['permission denied', 'read-only file system', 'no such file or directory'],
       runnerFailureRules: [{fatalSignatures: ['bwrap: ', 'V2 group containment unavailable']}]}

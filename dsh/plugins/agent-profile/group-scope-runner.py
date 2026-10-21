@@ -5,12 +5,15 @@ from __future__ import annotations
 import os
 import posixpath
 import re
+import signal
+import ctypes
 import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from group_volume import verified_group_workspace
+from workspace_lock import workspace_lock
 
 WORKSPACE_CHECK = """
 import os, sys
@@ -28,14 +31,18 @@ os.execv('/usr/bin/bash', ['bash', '-c', sys.argv[3]])
 """
 
 
-def confined_argv(workspace: Path, workdir: str, command: str) -> tuple[list[str], int]:
+def confined_argv(workspace: Path, workdir: str, command: str,
+                  workspace_mode: str = "workspace-write") -> tuple[list[str], int]:
     if (not workdir or workdir.startswith("/") or "\x00" in workdir
             or posixpath.normpath(workdir) != workdir
             or workdir == ".." or workdir.startswith("../")):
         raise RuntimeError("group workdir must stay beneath /workspace")
+    if workspace_mode not in {"workspace-write", "read-only"}:
+        raise RuntimeError("invalid group workspace mode")
     fd = verified_group_workspace(workspace)
     root = os.fstat(fd)
     cwd = "/workspace" if workdir == "." else "/workspace/" + workdir
+    workspace_bind = "--ro-bind-fd" if workspace_mode == "read-only" else "--bind-fd"
     # Construct the complete namespace here. No caller-controlled mount,
     # environment, namespace, capability, or executable option is accepted.
     argv = [
@@ -46,7 +53,7 @@ def confined_argv(workspace: Path, workdir: str, command: str) -> tuple[list[str
         "--symlink", "usr/bin", "/bin", "--symlink", "usr/lib", "/lib",
         "--symlink", "usr/lib64", "/lib64", "--dir", "/dev",
         "--dev-bind", "/dev/null", "/dev/null", "--dev-bind", "/dev/urandom", "/dev/urandom",
-        "--proc", "/proc", "--tmpfs", "/tmp", "--bind-fd", str(fd), "/workspace",
+        "--proc", "/proc", "--tmpfs", "/tmp", workspace_bind, str(fd), "/workspace",
         "--chmod", "0555", "/", "--cap-drop", "ALL", "--chdir", cwd,
         "--setenv", "PATH", "/usr/bin:/bin", "--setenv", "HOME", "/workspace",
         "--setenv", "TMPDIR", "/tmp", "--", "/usr/bin/python3", "-I", "-S", "-c",
@@ -83,25 +90,87 @@ def apply_limits() -> None:
         raise RuntimeError("group CPU limit was not enforced")
 
 
-def main() -> None:
-    if len(sys.argv) < 7 or sys.argv[1] != "--workspace" or sys.argv[3] != "--workdir" or sys.argv[5] != "--":
+class _ScopeSignal(Exception):
+    def __init__(self, number: int):
+        self.number = number
+
+
+def arm_parent_death() -> None:
+    """The lock holder must die with DSH, as direct bwrap did before wrapping."""
+    parent = os.getppid()
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(1, signal.SIGTERM, 0, 0, 0) != 0:  # PR_SET_PDEATHSIG
+        raise OSError(ctypes.get_errno(), "cannot bind group command to runtime lifetime")
+    if os.getppid() != parent or parent == 1:
+        os.kill(os.getpid(), signal.SIGTERM)
+
+
+def run_locked(argv: list[str], fd: int, workspace: Path, workspace_mode: str) -> int:
+    """Hold the workspace lock through bwrap and reap it on scope cancellation."""
+    shared = workspace_mode == "read-only"
+    with workspace_lock(Path(workspace).parent / ".workspace-file.lock", shared=shared):
+        previous = {}
+        process = None
+
+        def stop(number, _frame):
+            raise _ScopeSignal(number)
+
+        for number in (signal.SIGTERM, signal.SIGINT):
+            previous[number] = signal.signal(number, stop)
+        try:
+            process = subprocess.Popen(argv, pass_fds=(fd,))
+            return process.wait()
+        except _ScopeSignal as stopped:
+            if process is not None and process.poll() is None:
+                try:
+                    process.terminate()
+                except ProcessLookupError:
+                    pass
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+            return 128 + stopped.number
+        except BaseException:
+            if process is not None and process.poll() is None:
+                try:
+                    process.terminate()
+                except ProcessLookupError:
+                    pass
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+            raise
+        finally:
+            for number, handler in previous.items():
+                signal.signal(number, handler)
+
+
+def main() -> int:
+    arm_parent_death()
+    if (len(sys.argv) != 9 or sys.argv[1] != "--workspace" or sys.argv[3] != "--workdir"
+            or sys.argv[5] != "--workspace-mode" or sys.argv[7] != "--"):
         raise RuntimeError("unexpected group confinement runner")
     workspace = Path(sys.argv[2])
-    command = sys.argv[6]
-    if len(sys.argv) != 7 or not command:
+    workspace_mode = sys.argv[6]
+    command = sys.argv[8]
+    if not command:
         raise RuntimeError("unexpected group command arguments")
-    argv, fd = confined_argv(workspace, sys.argv[4], command)
+    argv, fd = confined_argv(workspace, sys.argv[4], command, workspace_mode)
     try:
         apply_limits()
         os.set_inheritable(fd, True)
-        os.execv(argv[0], argv)
+        return run_locked(argv, fd, workspace, workspace_mode)
     finally:
         os.close(fd)
 
 
 if __name__ == "__main__":
     try:
-        main()
+        raise SystemExit(main())
     except Exception:
         print("V2 group containment unavailable", file=sys.stderr)
         raise SystemExit(125)

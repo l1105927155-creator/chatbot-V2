@@ -15,7 +15,7 @@ PYTHON = ROOT / ".runtime/astrbot/.venv/bin/python"
 
 def test_group_profile_executes_real_native_bash_inside_verified_group_scope(tmp_path):
     worker = r'''
-import asyncio, json, os, signal, sys, threading, time
+import asyncio, json, os, signal, subprocess, sys, threading, time
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -54,6 +54,19 @@ http_thread = threading.Thread(target=sentinel_http.serve_forever, daemon=True)
 http_thread.start()
 home = base / ("home-" + volume["key"])
 home.mkdir(mode=0o700)
+console_state = home / "console-state.json"
+def write_console_editors(editors):
+  identity_row = {"platform_id":"group-test-platform", "bot_id":"group-test-bot",
+    "conversation_key":"group:" + identity}
+  key = json.dumps([identity_row["platform_id"], identity_row["bot_id"],
+    identity_row["conversation_key"]], ensure_ascii=False, separators=(",", ":"))
+  console_state.write_text(json.dumps({"revision":1,
+    "defaults":{"model":None,"enabled":True,"editors":[]},
+    "sessions":{key:{"identity":identity_row,
+      "settings":{"model":None,"enabled":True,"editors":editors}}},"templates":[]}),
+    encoding="utf-8")
+  console_state.chmod(0o600)
+write_console_editors(["10001"])
 # Project-controlled launch configuration must not enter the host Agent.
 (workspace / ".env").write_text("V2_AUDIT_PROJECT_ENV_SENTINEL=group-workspace\n")
 (home / ".env").write_text("V2_AUDIT_HOME_ENV_SENTINEL=private-home\n")
@@ -82,6 +95,9 @@ env = {
   "V2_GROUP_WORKSPACE_ROOT":str(workspace), "V2_GROUP_PLATFORM_ID":"group-test-platform",
   "V2_GROUP_BOT_ID":"group-test-bot", "V2_GROUP_ID":identity,
   "V2_GROUP_PROBE_LOG":str(log), "V2_GROUP_COMMAND":str(command_file),
+  "V2_CONSOLE_STATE_FILE":str(console_state),
+  "V2_QQ_OWNERS":json.dumps([{"platform_id":"group-test-platform",
+    "bot_id":"group-test-bot","user_id":"90000"}]),
   "V2_GROUP_HOST_SENTINEL":str(host_sentinel),
   "V2_GROUP_HOST_PROBE_EXECUTED":str(host_probe_executed),
   "TMPDIR":str(spill_root),
@@ -97,7 +113,7 @@ settings = HarnessConfig(
 client = HarnessClient(settings)
 def append_message(kind, peer, mid, text):
   raw = {"post_type":"message", "message_type":kind, "self_id":"group-test-bot",
-    "user_id":"member-1", "message_id":mid,
+    "user_id":"10001", "message_id":mid,
     "message":[{"type":"text", "data":{"text":text}}]}
   raw["group_id" if kind == "group" else "user_id"] = peer
   journal.append(message_from_onebot("group-test-platform", raw))
@@ -123,7 +139,8 @@ try:
   request(client, "initialize", {"protocolVersion":1,"clientCapabilities":{},
     "clientInfo":{"name":"group-bash-acceptance","version":"0.1.0"}})
   sid = request(client, "session/new", {"cwd":str(workspace),"mcpServers":mcp_servers})["sessionId"]
-  def run(prompt, command="", timeout=None, workdir=None, tool_name="bash", arguments=None):
+  def run(prompt, command="", timeout=None, workdir=None, tool_name="bash", arguments=None,
+          requester_id="10001"):
     previous_calls = len(log.read_text().splitlines()) if log.exists() else 0
     tool_call_id = "group-audit-" + str(previous_calls + 1)
     command_file.write_text(json.dumps({"command":command, "toolName":tool_name,
@@ -132,7 +149,7 @@ try:
       **({} if workdir is None else {"workdir":workdir})}))
     nonce = publisher.publish(sid, {
       "platform_id":"group-test-platform", "bot_id":"group-test-bot",
-      "conversation_key":"group:" + identity, "requester_id":"member-1",
+      "conversation_key":"group:" + identity, "requester_id":requester_id,
       "inbound_message_id":"msg-" + prompt,
     }, prompt)
     try:
@@ -152,6 +169,18 @@ try:
   assert (workspace / "home.txt").read_text().strip() == "/workspace"
   assert (workspace / "cwd.txt").read_text().strip() == "/workspace"
   assert (workspace / "marker.txt").read_text() == "ok"
+  # The current console editors list controls the actual mount mode. A removed
+  # editor retains shell reads while shell redirection cannot alter the volume.
+  write_console_editors([])
+  denied_write = run("member write denied", "cat marker.txt >/dev/null && printf altered > revoked-write.txt")
+  assert "read-only file system" in denied_write.lower(), denied_write
+  assert not (workspace / "revoked-write.txt").exists()
+  # A trusted deployed Bot Owner can write even when absent from group editors.
+  owner_write = run("trusted owner write", "printf owner > owner-write.txt; printf OWNER_WRITE_OK",
+                    requester_id="90000")
+  assert "OWNER_WRITE_OK" in owner_write
+  assert (workspace / "owner-write.txt").read_text() == "owner"
+  write_console_editors(["10001"])
   assert not host_sitecustomize_marker.exists(), "untrusted Python sitecustomize ran before sandbox setup"
   # Lock the exact complete model-facing inventory for this pinned Profile,
   # including SDK resource tools (visible but denied) and deployed scoped MCP capabilities.
@@ -230,7 +259,7 @@ try:
   cgroup_prompt = "group cgroup limits"
   cgroup_nonce = publisher.publish(sid, {
     "platform_id":"group-test-platform", "bot_id":"group-test-bot",
-    "conversation_key":"group:" + identity, "requester_id":"member-1",
+    "conversation_key":"group:" + identity, "requester_id":"10001",
     "inbound_message_id":"msg-cgroup",
   }, cgroup_prompt)
   with ThreadPoolExecutor(1) as pool:
@@ -301,7 +330,7 @@ try:
   cancel_prompt = "group cancel descendants"
   cancel_nonce = publisher.publish(sid, {
     "platform_id":"group-test-platform", "bot_id":"group-test-bot",
-    "conversation_key":"group:" + identity, "requester_id":"member-2",
+    "conversation_key":"group:" + identity, "requester_id":"10001",
     "inbound_message_id":"msg-cancel",
   }, cancel_prompt)
   with ThreadPoolExecutor(1) as pool:
@@ -322,7 +351,7 @@ try:
   # Actual token binding: a stale/missing source must be rejected by native tools.
   stale = publisher.publish(sid, {
     "platform_id":"group-test-platform", "bot_id":"group-test-bot",
-    "conversation_key":"group:" + identity, "requester_id":"member-1",
+    "conversation_key":"group:" + identity, "requester_id":"10001",
     "inbound_message_id":"source-missing",
   }, "group stale source")
   publisher.cleanup(sid, stale)
@@ -339,7 +368,7 @@ try:
   kill_prompt = "group runtime sigkill descendants"
   kill_nonce = publisher.publish(sid, {
     "platform_id":"group-test-platform", "bot_id":"group-test-bot",
-    "conversation_key":"group:" + identity, "requester_id":"member-2",
+    "conversation_key":"group:" + identity, "requester_id":"10001",
     "inbound_message_id":"msg-runtime-sigkill",
   }, kill_prompt)
   kill_unit = None

@@ -29,13 +29,13 @@ def group_volume_runtime(tmp_path):
 
 
 def _run(workspace: Path, command: str, *, env: dict[str, str] | None = None,
-         timeout: float = 20) -> subprocess.CompletedProcess[str]:
+         timeout: float = 20, workspace_mode: str = "workspace-write") -> subprocess.CompletedProcess[str]:
     unit = "dsh-subprocess-group-test-" + uuid.uuid4().hex
     return subprocess.run(
         ["/usr/bin/systemd-run", "--user", "--scope", "--collect", "--quiet",
          "--unit=" + unit, "--", "/usr/bin/python3",
          str(PLUGIN / "group-scope-runner.py"), "--workspace", str(workspace),
-         "--workdir", ".", "--", command],
+         "--workdir", ".", "--workspace-mode", workspace_mode, "--", command],
         text=True, capture_output=True, timeout=timeout,
         env={**os.environ, **(env or {})},
     )
@@ -97,6 +97,24 @@ def test_group_workspace_enforces_disk_cap_and_recovers_after_enospc(group_volum
     assert cleanup.returncode == 0, cleanup.stdout + cleanup.stderr
     assert (workspace / "recovered.txt").read_text() == "recovered"
     assert not (workspace / "fill.bin").exists()
+
+
+def test_read_only_workspace_mount_blocks_shell_and_child_process_writes(group_volume_runtime):
+    _, _, workspace = group_volume_runtime
+    protected = workspace / "persistent.txt"
+    protected.write_text("preserve")
+    (workspace / "protected-link").symlink_to("persistent.txt")
+    command = (
+        "cat /workspace/persistent.txt >/dev/null; "
+        "printf altered > /workspace/protected-link; "
+        "if [ $? -eq 0 ]; then exit 41; fi; "
+        "/usr/bin/python3 -c \"open('/workspace/child-write.txt','w').write('altered')\""
+    )
+    result = _run(workspace, command, workspace_mode="read-only")
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert protected.read_text() == "preserve"
+    assert not (workspace / "child-write.txt").exists()
+    assert (workspace / "protected-link").read_text() == "preserve"
 
 
 def test_missing_mount_fails_closed_before_command(tmp_path):

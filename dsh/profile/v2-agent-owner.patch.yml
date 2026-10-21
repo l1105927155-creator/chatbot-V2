@@ -137,6 +137,8 @@
         headroomTokens: 4096
         retainRatio: 0.16
         maxTokens: 1024
+    - id: v2-console-control
+      name: ../plugins/agent-profile/console-control.mjs
     - id: v2-agent-persona
       name: ../plugins/agent-profile/persona.mjs
       config:

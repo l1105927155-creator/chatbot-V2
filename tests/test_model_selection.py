@@ -43,6 +43,7 @@ class Native(AcpRuntime):
  def run(self,sid,delta,images=None):
   self.inferences.append((sid,self.sessions[sid]));return 'model reply'
  def close(self):pass
+ def transport_alive(self):return True
 
 def client(tmp_path):
  for name in ['dsh','patch.yml','instructions.md']:(tmp_path/name).touch()

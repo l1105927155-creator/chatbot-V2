@@ -20,7 +20,8 @@ def select_route(arguments, choices):
 def describe_model(view, *, listing=False):
     current = view['current']
     lines = [f"当前模型：{current['provider']} / {current['model']}",
-             '本会话已单独选择模型。' if view.get('overridden') else '本会话跟随部署默认模型。']
+             '本会话独立保存模型设置。' if view.get('snapshot') else
+             ('本会话已单独选择模型。' if view.get('overridden') else '本会话跟随部署默认模型。')]
     if view.get('current_available') is False:
         lines.append('当前模型已不在共享目录中；会话选择保留，请按需重新选择模型。')
     if listing:

@@ -16,11 +16,13 @@ try:
     from .runtime_audit import CURRENT_TRACE, trace_scope
     from .dsh_client import DshTurnCancelled, DshModelTurnFailure, DshTurnFailure
     from .background import BackgroundTask, validate_event, task_key
+    from .console_settings import configured_store, session_settings
 except ImportError:
     from reply_safety import validate_reply, ReplyContentError
     from runtime_audit import CURRENT_TRACE, trace_scope
     from dsh_client import DshTurnCancelled, DshModelTurnFailure, DshTurnFailure
     from background import BackgroundTask, validate_event, task_key
+    from console_settings import configured_store, session_settings
 
 
 class PendingTurnError(RuntimeError):
@@ -60,6 +62,10 @@ class FinalReplyDeliveryError(RuntimeError):
         self.cause = cause
 
 
+class AgentDisabledError(RuntimeError):
+    """The conversation Agent is disabled and cannot accept this turn."""
+
+
 @dataclass
 class _ActiveRun:
     session_id: str
@@ -72,6 +78,7 @@ class _ActiveRun:
     pending_cursor: int | None = None
     reset_command_id: str | None = None
     succeeded: bool = False
+    cancel_token: Any = None
     done: threading.Event = field(default_factory=threading.Event)
     lock: Any = field(default_factory=threading.Lock)
 
@@ -122,10 +129,12 @@ class ChatService:
         self._reset_barriers: dict[tuple[str, str, str], _ResetBarrier] = {}
         self._delivery_counts: dict[tuple[str, str, str], int] = {}
         self._reset_cancelled_wakes: set[tuple[tuple[str, str, str], str]] = set()
+        self._disabled_identities: set[tuple[str, str, str]] = set()
         self._background_tasks: dict[tuple[str, str], BackgroundTask] = {}
         self._background_terminal_lru: OrderedDict[tuple[str, str], None] = OrderedDict()
         self._background_delivery_tasks: set[asyncio.Task] = set()
         self._background_closing = False
+        self.console_store = configured_store()
 
     async def handle_background_event(self, raw_event: dict) -> bool:
         """Accept a native DSH lifecycle callback without waiting for chat delivery."""
@@ -218,7 +227,8 @@ class ChatService:
         try:
             async with lock:
                 current = await asyncio.to_thread(self.state.get, *identity)
-                if (self._background_closing or identity in self._reset_barriers or current is None or
+                if (self._background_closing or identity in getattr(self, "_disabled_identities", set()) or
+                        identity in self._reset_barriers or current is None or
                         current.session_id != task.parent_session_id):
                     if trace:
                         trace.emit("background/delivery_suppressed", task_id=task.task_id,
@@ -281,6 +291,8 @@ class ChatService:
 
     def _delivery_enter(self, identity, lifetime=None):
         # Synchronous check and increment close the race with begin_reset.
+        if identity in getattr(self, "_disabled_identities", set()):
+            raise AgentDisabledError("此会话的 Agent 已禁用。")
         if lifetime is not None and not lifetime.active:
             raise ResetError("旧轮次已结束，不能再发送消息。")
         if identity in self._reset_barriers:
@@ -364,6 +376,16 @@ class ChatService:
         key = (conversation.platform_id, conversation.bot_id, conversation.key)
         return self._locks.setdefault(key, asyncio.Lock())
 
+    def _ensure_enabled(self, identity) -> None:
+        store = getattr(self, "console_store", None)
+        if store is not None:
+            row = store.read()["sessions"].get(store.session_key(dict(
+                zip(("platform_id", "bot_id", "conversation_key"), identity))))
+            if row is None or row["settings"]["enabled"] is not True:
+                raise AgentDisabledError("当前会话 Agent 已禁用或未接入。")
+        if identity in getattr(self, "_disabled_identities", set()):
+            raise AgentDisabledError("此会话的 Agent 已禁用。")
+
     def metrics(self):
         return {"queued": self._queued, "active_chats": sum(lock.locked() for lock in self._locks.values()),
                 "model_runs": len(self._active_runs),
@@ -427,7 +449,9 @@ class ChatService:
                 with active.lock:
                     if active.finished:
                         return False
-                    return self.dsh.cancel_session(active.session_id)
+                    options = ({"cancel_token": active.cancel_token}
+                               if active.cancel_token is not None else {})
+                    return self.dsh.cancel_session(active.session_id, **options)
 
             accepted = await self._dsh_call(request)
             if accepted:
@@ -460,6 +484,27 @@ class ChatService:
             self._discard_background_session(identity, state.session_id)
             return True
 
+    async def set_enabled(self, conversation, enabled: bool) -> bool:
+        """Enable or disable this conversation's Agent without rotating state."""
+        if type(enabled) is not bool:
+            raise ValueError("enabled must be a boolean")
+        identity = (conversation.platform_id, conversation.bot_id, conversation.key)
+        disabled = getattr(self, "_disabled_identities", None)
+        if disabled is None:  # Legacy test doubles and restored service objects.
+            disabled = self._disabled_identities = set()
+        if enabled:
+            disabled.discard(identity)
+            # Enabling itself intentionally performs no DSH call and does not move the cursor.
+            return True
+        disabled.add(identity)
+        # Publish the barrier before cancellation; queued turns and late send
+        # callbacks observe it synchronously while cancel drains the active run.
+        active = self._active_runs.get(identity)
+        cancelled = await self.cancel(conversation)
+        if active is not None and not cancelled and not active.done.is_set():
+            raise RuntimeError("Agent 准入已停止，但当前任务尚未确认取消，请检查运行状态。")
+        return False
+
     async def reset_conversation(self, conversation, inbound_message_id, get_group=None, *, barrier=None):
         """Rotate to a fresh native Session at the canonical /new command row.
 
@@ -473,7 +518,6 @@ class ChatService:
         elif self._reset_barriers.get(identity) is not barrier:
             raise ResetError("会话重置屏障已失效，请重新发送 /new。")
         trace = barrier.trace
-        created_session = None
         try:
             matches = await asyncio.to_thread(
                 self.journal.by_message_id,
@@ -486,153 +530,9 @@ class ChatService:
             if command is None or command.message.platform_id != conversation.platform_id \
                     or command.message.bot_id != conversation.bot_id:
                 raise ResetError("找不到这条 /new 命令的规范会话记录，未重置上下文。")
-            barrier.command_journal_id = command.journal_id
-
-            # Only a run active at reset admission may have its exact pending
-            # row skipped. Unknown persisted pending state is never inferred
-            # to be safe merely because this command arrived later.
-            active = self._active_runs.get(identity)
-            expected_pending = None
-            if active is not None:
-                active.reset_command_id = str(inbound_message_id)
-                if not active.done.is_set():
-                    self._remember_reset_cancel(identity, active.inbound_message_id)
-                    try:
-                        cancellation_requested = await self.cancel(conversation)
-                    except BaseException:
-                        if active.inbound_message_id:
-                            self._reset_cancelled_wakes.discard((identity, str(active.inbound_message_id)))
-                        raise
-                    if (not cancellation_requested and not active.done.is_set()
-                            and not active.succeeded):
-                        if active.inbound_message_id:
-                            self._reset_cancelled_wakes.discard((identity, str(active.inbound_message_id)))
-                        raise ResetError("当前模型轮次未能确认取消，旧会话保持不变。")
-                try:
-                    await asyncio.to_thread(active.done.wait)
-                except BaseException:
-                    if active.inbound_message_id:
-                        self._reset_cancelled_wakes.discard((identity, str(active.inbound_message_id)))
-                    raise
-                if isinstance(active.error, DshTurnCancelled):
-                    expected_pending = active.pending_cursor
-                elif active.error is not None:
-                    if active.inbound_message_id:
-                        self._reset_cancelled_wakes.discard((identity, str(active.inbound_message_id)))
-                    raise ResetError("当前轮次没有收到原生取消确认，旧会话保持不变。") from active.error
-                # error=None means the native run returned normally. The
-                # handle suppresses delivery under this barrier and consumes
-                # that known-complete wake before releasing the chat lock.
-
-            lock = self._lock(conversation)
-            async with lock:
-                current = await asyncio.to_thread(self.state.get, *identity)
-                if await self._has_unjournaled_receipt(conversation):
-                    raise ResetError("有一条此前已获平台回执的消息尚未进入会话记录，请稍后重新发送 /new；本次尚未重置。")
-                if await self._outbound_after(conversation, command.journal_id):
-                    raise ResetError("命令之后已有旧轮次回复送达，请在该回复完成后重新发送 /new；本次尚未重置。")
-                if current is not None and current.pending_upper_cursor is not None:
-                    if expected_pending is None or current.pending_upper_cursor != expected_pending:
-                        raise PendingTurnError("存在未核对的 DSH 轮次，不能安全重置会话。")
-
-                old_persona = None
-                old_scene = None
-                if current is not None:
-                    if getattr(self.dsh, "personas", None) is not None:
-                        old_persona = await asyncio.to_thread(self.dsh.personas.current, current.session_id)
-                    if getattr(self.dsh, "scenes", None) is not None:
-                        old_scene = await asyncio.to_thread(self.dsh.scenes.current, current.session_id)
-
-                async def rotate(servers=None):
-                    args = () if servers is None else (servers,)
-                    created = {"session_id": None}
-                    try:
-                        def create_and_record():
-                            session_id = self.dsh.create_session(*args)
-                            created["session_id"] = session_id
-                            return session_id
-
-                        created_session = await self._dsh_call(create_and_record)
-                        saved_model = (await asyncio.to_thread(self.state.get_model_route, *identity)
-                                       if hasattr(self.state, 'get_model_route') else None)
-                        if saved_model is not None:
-                            await self._dsh_call(lambda: self.dsh.model_status(
-                                created_session, *args, model_route=saved_model))
-                        if old_persona is not None and getattr(self.dsh, "personas", None) is not None:
-                            value = old_persona.get("persona")
-                            if value is not None:
-                                await self._dsh_call(self.dsh.select_persona, created_session, value)
-                        if old_scene is not None and getattr(self.dsh, "scenes", None) is not None:
-                            value = old_scene.get("scene")
-                            if value is not None:
-                                await self._dsh_call(self.dsh.select_scene, created_session, value)
-                        if current is not None:
-                            drain_args = () if servers is None else (servers,)
-                            await self._dsh_call(self.dsh.drain_session, current.session_id, *drain_args)
-                        new_state = await self._dsh_call(
-                            self.state.rotate_session,
-                            *identity,
-                            current.session_id if current is not None else None,
-                            current.last_seen_journal_id if current is not None else None,
-                            created_session,
-                            command.journal_id,
-                            expected_pending=expected_pending,
-                        )
-                        if created_session == new_state.session_id:
-                            created["session_id"] = None  # The state store now owns this mapping.
-                        if trace:
-                            trace.session_id = new_state.session_id
-                            fields = {
-                                "previous_cursor": current.last_seen_journal_id if current else 0,
-                                "journal_id": command.journal_id,
-                                "history_after": new_state.history_after_journal_id,
-                            }
-                            if current is not None:
-                                fields["previous_session_id"] = current.session_id
-                            if expected_pending is not None:
-                                fields["discarded_pending"] = expected_pending
-                            trace.emit("session/reset_completed", **fields)
-                        if current is not None:
-                            self._discard_background_session(identity, current.session_id)
-                        return new_state
-                    finally:
-                        sid = created["session_id"]
-                        if sid is not None:
-                            try:
-                                committed = await asyncio.to_thread(self.state.get, *identity)
-                            except BaseException:
-                                # An unreadable CAS result is ambiguous. Keep
-                                # the native session alive rather than risk
-                                # closing a SID that may now be authoritative.
-                                committed = None
-                                ambiguous = True
-                            else:
-                                ambiguous = committed is not None and committed.session_id == sid
-                            if not ambiguous:
-                                try:
-                                    await self._dsh_call(self.dsh.close_session, sid)
-                                except BaseException:
-                                    # DshClient quarantines an undrained native
-                                    # session; the durable old mapping stays intact.
-                                    pass
-
-                if self.mcp is None:
-                    new_state = await rotate()
-                    barrier.succeeded = True
-                    return new_state
-
-                async def no_tool_send(_reply):
-                    raise RuntimeError("conversation reset cannot send through an Agent tool")
-
-                options = {}
-                if current is not None:
-                    floor = getattr(current, "history_after_journal_id", 0)
-                    if floor:
-                        options["history_after"] = floor
-                async with self.mcp.turn(conversation, no_tool_send, get_group, **options) as servers:
-                    new_state = await rotate(servers)
-                    barrier.succeeded = True
-                    return new_state
+            return await self._reset_at_floor(
+                conversation, inbound_message_id, get_group, barrier, command.journal_id,
+            )
         except PendingTurnError:
             if trace:
                 trace.emit("session/reset_failed")
@@ -653,6 +553,196 @@ class ChatService:
             barrier.done.set()
             if self._reset_barriers.get(identity) is barrier:
                 del self._reset_barriers[identity]
+
+    async def reset_from_console(self, conversation, get_group=None):
+        """Start a fresh DSH session at the canonical history high-watermark.
+
+        The console operation is identified only in the runtime audit trace;
+        it never creates a platform message or journal row.
+        """
+        operation_id = f"console:{time.time_ns()}"
+        barrier = self.begin_reset(conversation, operation_id)
+        identity = (conversation.platform_id, conversation.bot_id, conversation.key)
+        try:
+            # The synchronous high-watermark query runs after the barrier is
+            # published and before this coroutine yields, fixing the reset cut.
+            floor_cursor = self.journal.high_watermark(conversation)
+            barrier.command_journal_id = floor_cursor
+            return await self._reset_at_floor(
+                conversation, operation_id, get_group, barrier, floor_cursor,
+            )
+        except PendingTurnError:
+            if barrier.trace:
+                barrier.trace.emit("session/reset_failed")
+            raise
+        except ResetError:
+            if barrier.trace:
+                barrier.trace.emit("session/reset_failed")
+            raise
+        except asyncio.CancelledError:
+            if barrier.trace:
+                barrier.trace.emit("session/reset_failed")
+            raise
+        except BaseException as error:
+            if barrier.trace:
+                barrier.trace.emit("session/reset_failed")
+            raise ResetError("会话重置未完成，原会话映射保持不变。") from error
+        finally:
+            barrier.done.set()
+            if self._reset_barriers.get(identity) is barrier:
+                del self._reset_barriers[identity]
+
+    async def _reset_at_floor(self, conversation, reset_id, get_group, barrier, floor_cursor):
+        """Shared reset transaction after its command row or console cut is fixed."""
+        identity = (conversation.platform_id, conversation.bot_id, conversation.key)
+        trace = barrier.trace
+        barrier.command_journal_id = floor_cursor
+
+        # Only a run active at reset admission may have its exact pending
+        # row skipped. Unknown persisted pending state is never inferred
+        # to be safe merely because this command arrived later.
+        active = self._active_runs.get(identity)
+        expected_pending = None
+        if active is not None:
+            active.reset_command_id = str(reset_id)
+            if not active.done.is_set():
+                self._remember_reset_cancel(identity, active.inbound_message_id)
+                try:
+                    cancellation_requested = await self.cancel(conversation)
+                except BaseException:
+                    if active.inbound_message_id:
+                        self._reset_cancelled_wakes.discard((identity, str(active.inbound_message_id)))
+                    raise
+                if (not cancellation_requested and not active.done.is_set()
+                        and not active.succeeded):
+                    if active.inbound_message_id:
+                        self._reset_cancelled_wakes.discard((identity, str(active.inbound_message_id)))
+                    raise ResetError("当前模型轮次未能确认取消，旧会话保持不变。")
+            try:
+                await asyncio.to_thread(active.done.wait)
+            except BaseException:
+                if active.inbound_message_id:
+                    self._reset_cancelled_wakes.discard((identity, str(active.inbound_message_id)))
+                raise
+            if isinstance(active.error, DshTurnCancelled):
+                expected_pending = active.pending_cursor
+            elif active.error is not None:
+                if active.inbound_message_id:
+                    self._reset_cancelled_wakes.discard((identity, str(active.inbound_message_id)))
+                raise ResetError("当前轮次没有收到原生取消确认，旧会话保持不变。") from active.error
+            # error=None means the native run returned normally. The
+            # handle suppresses delivery under this barrier and consumes
+            # that known-complete wake before releasing the chat lock.
+
+        lock = self._lock(conversation)
+        async with lock:
+            current = await asyncio.to_thread(self.state.get, *identity)
+            if await self._has_unjournaled_receipt(conversation):
+                raise ResetError("有一条此前已获平台回执的消息尚未进入会话记录，请稍后重新发送 /new；本次尚未重置。")
+            if await self._outbound_after(conversation, floor_cursor):
+                raise ResetError("命令之后已有旧轮次回复送达，请在该回复完成后重新发送 /new；本次尚未重置。")
+            if current is not None and current.pending_upper_cursor is not None:
+                if expected_pending is None or current.pending_upper_cursor != expected_pending:
+                    raise PendingTurnError("存在未核对的 DSH 轮次，不能安全重置会话。")
+
+            old_persona = None
+            old_scene = None
+            if current is not None:
+                if getattr(self.dsh, "personas", None) is not None:
+                    old_persona = await asyncio.to_thread(self.dsh.personas.current, current.session_id)
+                if getattr(self.dsh, "scenes", None) is not None:
+                    old_scene = await asyncio.to_thread(self.dsh.scenes.current, current.session_id)
+
+            async def rotate(servers=None):
+                args = () if servers is None else (servers,)
+                created = {"session_id": None}
+                try:
+                    def create_and_record():
+                        session_id = self.dsh.create_session(*args)
+                        created["session_id"] = session_id
+                        return session_id
+
+                    created_session = await self._dsh_call(create_and_record)
+                    saved_model = (await asyncio.to_thread(self.state.get_model_route, *identity)
+                                   if hasattr(self.state, 'get_model_route') else None)
+                    if saved_model is not None:
+                        await self._dsh_call(lambda: self.dsh.model_status(
+                            created_session, *args, model_route=saved_model))
+                    if old_persona is not None and getattr(self.dsh, "personas", None) is not None:
+                        value = old_persona.get("persona")
+                        if value is not None:
+                            await self._dsh_call(self.dsh.select_persona, created_session, value)
+                    if old_scene is not None and getattr(self.dsh, "scenes", None) is not None:
+                        value = old_scene.get("scene")
+                        if value is not None:
+                            await self._dsh_call(self.dsh.select_scene, created_session, value)
+                    if current is not None:
+                        drain_args = () if servers is None else (servers,)
+                        await self._dsh_call(self.dsh.drain_session, current.session_id, *drain_args)
+                    new_state = await self._dsh_call(
+                        self.state.rotate_session,
+                        *identity,
+                        current.session_id if current is not None else None,
+                        current.last_seen_journal_id if current is not None else None,
+                        created_session,
+                        floor_cursor,
+                        expected_pending=expected_pending,
+                    )
+                    if created_session == new_state.session_id:
+                        created["session_id"] = None  # The state store now owns this mapping.
+                    if trace:
+                        trace.session_id = new_state.session_id
+                        fields = {
+                            "previous_cursor": current.last_seen_journal_id if current else 0,
+                            "journal_id": floor_cursor,
+                            "history_after": new_state.history_after_journal_id,
+                        }
+                        if current is not None:
+                            fields["previous_session_id"] = current.session_id
+                        if expected_pending is not None:
+                            fields["discarded_pending"] = expected_pending
+                        trace.emit("session/reset_completed", **fields)
+                    if current is not None:
+                        self._discard_background_session(identity, current.session_id)
+                    return new_state
+                finally:
+                    sid = created["session_id"]
+                    if sid is not None:
+                        try:
+                            committed = await asyncio.to_thread(self.state.get, *identity)
+                        except BaseException:
+                            # An unreadable CAS result is ambiguous. Keep
+                            # the native session alive rather than risk
+                            # closing a SID that may now be authoritative.
+                            committed = None
+                            ambiguous = True
+                        else:
+                            ambiguous = committed is not None and committed.session_id == sid
+                        if not ambiguous:
+                            try:
+                                await self._dsh_call(self.dsh.close_session, sid)
+                            except BaseException:
+                                # DshClient quarantines an undrained native
+                                # session; the durable old mapping stays intact.
+                                pass
+
+            if self.mcp is None:
+                new_state = await rotate()
+                barrier.succeeded = True
+                return new_state
+
+            async def no_tool_send(_reply):
+                raise RuntimeError("conversation reset cannot send through an Agent tool")
+
+            options = {}
+            if current is not None:
+                floor = getattr(current, "history_after_journal_id", 0)
+                if floor:
+                    options["history_after"] = floor
+            async with self.mcp.turn(conversation, no_tool_send, get_group, **options) as servers:
+                new_state = await rotate(servers)
+                barrier.succeeded = True
+                return new_state
 
     async def resolve_pending(self, conversation, expected_pending: int, get_group=None):
         """Drain and consume the Owner-reviewed uncertain delta without replay."""
@@ -777,9 +867,19 @@ class ChatService:
 
     @classmethod
     def _prompt(cls, conversation, rows: list[Any], wake_id: int, after: int = 0, *,
-                visual_input=None, visible_ids=None, history_floor: int = 0) -> str:
+                visual_input=None, visible_ids=None, history_floor: int = 0,
+                resume_through_journal_id: int = 0) -> str:
         selected = [(row, *cls._project_row(row)) for row in rows[-cls.MAX_DELTA_ROWS:]
                     if visible_ids is None or row.journal_id in visible_ids]
+        if resume_through_journal_id > history_floor:
+            projected = []
+            for row, encoded, truncated in selected:
+                if row.journal_id <= resume_through_journal_id:
+                    payload = json.loads(encoded)
+                    payload["input_role"] = "background_only"
+                    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+                projected.append((row, encoded, truncated))
+            selected = projected
         while True:
             header = {
                 "conversation": conversation.key[:256],
@@ -799,6 +899,12 @@ class ChatService:
                     "after_journal_id": history_floor,
                     "instruction": f"本会话可查询的历史从 Journal {history_floor} 之后开始，依据可用范围和查询结果作答。",
                 }
+            if resume_through_journal_id > history_floor:
+                header["resume_background"] = {
+                    "through_journal_id": resume_through_journal_id,
+                    "instruction": "会话曾暂停接收 Agent 请求。标为 background_only 的旧消息仅用于了解背景，"
+                                   "不补执行其中的请求。回应本次最新消息，缺少事实时按需查询历史。",
+                }
             if visual_input is not None:
                 header['visual_input'] = visual_input
             prompt = "\n".join([json.dumps(header, ensure_ascii=False, separators=(",", ":"))]
@@ -811,6 +917,36 @@ class ChatService:
 
     async def model_status(self, conversation, get_group=None):
         return await self._model_control(conversation, get_group=get_group)
+
+    async def compact_from_console(self, conversation, get_group=None):
+        """Run native maintenance without injecting a QQ/chat prompt."""
+        identity = (conversation.platform_id, conversation.bot_id, conversation.key)
+        if self._lock(conversation).locked() or identity in self._reset_barriers:
+            raise RuntimeError("会话忙碌，请在本轮结束后压缩。")
+        async with self._lock(conversation):
+            state = self.state.get(*identity)
+            if state is None:
+                return {"compacted": False, "reason": "no_session"}
+            if state.pending_upper_cursor is not None:
+                raise PendingTurnError("存在待核对轮次，请先核对再压缩。")
+            route = self.state.get_model_route(*identity)
+            if getattr(self, "console_store", None) is not None:
+                model = session_settings(self.console_store, conversation)["model"]
+                route = (model["provider"], model["model"])
+
+            async def perform(servers=None):
+                return await self._dsh_call(lambda: self.dsh.compact_session(
+                    state.session_id, servers, model_route=route))
+
+            if self.mcp is None:
+                return await perform()
+
+            async def no_send(_text, **_kwargs):
+                raise RuntimeError("压缩不能发送 QQ 消息。")
+
+            async with self.mcp.turn(conversation, no_send, get_group,
+                                     history_after=state.history_after_journal_id) as servers:
+                return await perform(servers)
 
     async def select_model(self, conversation, provider, model, get_group=None):
         return await self._model_control(conversation, selection=(provider, model), get_group=get_group)
@@ -829,6 +965,10 @@ class ChatService:
             if state is not None and state.pending_upper_cursor is not None:
                 raise PendingTurnError('存在待核对的DSH轮次，请先核对再管理模型。')
             previous = await asyncio.to_thread(self.state.get_model_route, *identity)
+            console = getattr(self, "console_store", None)
+            if console is not None:
+                settings = session_settings(console, conversation)
+                previous = (settings["model"]["provider"], settings["model"]["model"])
             async def perform(servers=None):
                 nonlocal state
                 if state is None:
@@ -844,16 +984,34 @@ class ChatService:
                 else:
                     target = ((self.dsh.settings['provider'], self.dsh.settings['model'])
                               if default else selection)
+                    if default and console is not None:
+                        model = console.read()["defaults"]["model"]
+                        if model is None:
+                            raise ValueError("请先配置默认模型。")
+                        target = (model["provider"], model["model"])
                     try:
                         view = await self._dsh_call(lambda: self.dsh.select_model(state.session_id, *target,
                                                     *(() if servers is None else (servers,)), previous_route=previous))
-                        await asyncio.to_thread(self.state.set_model_route, *identity, None if default else target)
+                        if console is not None:
+                            snapshot = console.read()
+                            key = console.session_key(dict(zip(
+                                ("platform_id", "bot_id", "conversation_key"), identity)))
+                            configured = dict(snapshot["sessions"][key]["settings"])
+                            configured["model"] = {"provider": target[0], "model": target[1]}
+                            console.update_session(*identity, configured, expected_revision=snapshot["revision"])
+                        # Console mode has one durable authority. A second write
+                        # to the legacy route table could fail after commit and
+                        # leave the native route rolled back against new settings.
+                        if console is None:
+                            await asyncio.to_thread(self.state.set_model_route, *identity,
+                                                    None if default else target)
                     except BaseException:
                         # A lost confirmation or failed durable publication must
                         # not silently change the model used for the next turn.
                         await self._dsh_call(lambda: self.dsh.model_status(*args, model_route=previous))
                         raise
-                return {**view, 'overridden': (previous is not None if selection is None and not default else not default)}
+                return {**view, 'snapshot': console is not None,
+                        'overridden': (previous is not None if selection is None and not default else not default)}
             if self.mcp is None:
                 return await perform()
             async def no_tool_send(_reply, **_metadata):
@@ -881,6 +1039,7 @@ class ChatService:
         trace = self.audit.trace(conversation, inbound_message_id, self.domain) if self.audit else None
         started = time.monotonic()
         identity = (conversation.platform_id, conversation.bot_id, conversation.key)
+        self._ensure_enabled(identity)
         if trace:
             trace.emit("turn/queued")
         self._queued += 1
@@ -957,6 +1116,7 @@ class ChatService:
                             if notice_task is not None:
                                 await notice_task
                                 notice_task = None
+                            self._ensure_enabled(identity)
                         except BaseException:
                             lock.release()
                             raise
@@ -1087,6 +1247,7 @@ class ChatService:
                              send_lifetime=None, messaging=None):
         mcp_args = () if servers is None else (servers,)
         identity = (conversation.platform_id, conversation.bot_id, conversation.key)
+        self._ensure_enabled(identity)
         barrier = self._reset_barriers.get(identity)
         if barrier is not None:
             raise _ResetPreempted(barrier)
@@ -1152,8 +1313,15 @@ class ChatService:
         rows = await self._delta(conversation, state.last_seen_journal_id, upper)
         if not any(row.journal_id == wake.journal_id for row in rows):
             raise RuntimeError("inbound wake message is absent from journal delta")
+        resume_through = 0
+        if getattr(self, "console_store", None) is not None:
+            key = self.console_store.session_key(dict(zip(
+                ("platform_id", "bot_id", "conversation_key"), identity)))
+            resume_through = self.console_store.read()["sessions"][key].get("resume_through_journal_id", 0)
+        # TODO(待确认): validate resume-specific message/token budgets by replay;
+        # existing MAX_DELTA_ROWS/MAX_DELTA_BYTES remain the current bounds.
         prompt = self._prompt(conversation, rows, wake.journal_id, state.last_seen_journal_id,
-                              history_floor=history_floor)
+                              history_floor=history_floor, resume_through_journal_id=resume_through)
         image_blocks = []
         if vision is not None:
             # Automatically load only images attached to this wake and the
@@ -1190,7 +1358,7 @@ class ChatService:
                     visual_header[target + '_count'] = len(entries)
                 prompt = self._prompt(conversation, rows, wake.journal_id, state.last_seen_journal_id,
                                       visual_input=visual_header, visible_ids=visible_ids,
-                                      history_floor=history_floor)
+                                      history_floor=history_floor, resume_through_journal_id=resume_through)
                 final_ids = {json.loads(line)['journal_id'] for line in prompt.splitlines()[1:]}
                 if final_ids == visible_ids:
                     break
@@ -1208,7 +1376,8 @@ class ChatService:
             # text window too, retaining the original incomplete-history flag.
             if not (visual['images'] or visual['errors'] or visual.get('omitted')):
                 prompt = self._prompt(conversation, rows, wake.journal_id, state.last_seen_journal_id,
-                                      visible_ids=visible_ids, history_floor=history_floor)
+                                      visible_ids=visible_ids, history_floor=history_floor,
+                                      resume_through_journal_id=resume_through)
             image_blocks = visual['images']
         trusted_source = None
         if self.trusted_sources:
@@ -1225,7 +1394,11 @@ class ChatService:
         barrier = self._reset_barriers.get(identity)
         if barrier is not None:
             raise _ResetPreempted(barrier)
+        self._ensure_enabled(identity)
         await asyncio.to_thread(self.state.begin_turn, *identity, state.session_id, upper)
+        # set_enabled may run while begin_turn is persisted in its worker thread.
+        # Preserve that pending marker, but do not start the model after disable.
+        self._ensure_enabled(identity)
         if trace:
             trace.emit("dsh/start", journal_id=upper)
         # Errors before a confirmed DSH result leave a durable pending marker:
@@ -1237,10 +1410,22 @@ class ChatService:
             run_args += (trusted_source,)
         selected_route = (await asyncio.to_thread(self.state.get_model_route, *identity)
                           if hasattr(self.state, 'get_model_route') else None)
+        if getattr(self, "console_store", None) is not None:
+            settings = session_settings(self.console_store, conversation)
+            selected_route = (settings["model"]["provider"], settings["model"]["model"])
         run_options = {'images': image_blocks} if image_blocks else {}
         if selected_route is not None:
             run_options['model_route'] = selected_route
-        active = _ActiveRun(state.session_id, inbound_message_id=str(inbound_message_id),
+        # No await between this check and active-run registration. A disable
+        # operation on this event loop either sees the registered run to cancel,
+        # or has already published its admission barrier.
+        self._ensure_enabled(identity)
+        reserve = getattr(self.dsh, "reserve_turn", None)
+        cancel_token = reserve(state.session_id) if callable(reserve) else None
+        if cancel_token is not None:
+            run_options["cancel_token"] = cancel_token
+        active = _ActiveRun(state.session_id, cancel_token=cancel_token,
+                            inbound_message_id=str(inbound_message_id),
                             conversation=conversation, requester_id=str(wake.message.actor_id),
                             messaging=messaging, pending_cursor=upper)
         self._active_runs[identity] = active

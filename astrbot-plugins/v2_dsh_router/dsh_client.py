@@ -9,7 +9,10 @@ import stat
 import copy
 import time
 import json
+import inspect
 import secrets
+import socket
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -65,8 +68,11 @@ class AcpRuntime:
                     return super(PromptWriteClient, inner_self)._write_message(message)
                 session_id = message.get("params", {}).get("sessionId")
                 with self._control_lock:
-                    super(PromptWriteClient, inner_self)._write_message(message)
                     token = self._active_prompts.get(session_id)
+                    if token is not None and (token["requested"] or (
+                            token.get("cancel_event") is not None and token["cancel_event"].is_set())):
+                        raise DshTurnCancelled("DSH turn was cancelled before prompt write")
+                    super(PromptWriteClient, inner_self)._write_message(message)
                     if token is not None:
                         token["dispatched"] = True
                         if token.get("trace"):
@@ -79,6 +85,13 @@ class AcpRuntime:
                "DSH_SYSTEM_PROMPT": instructions.read_text(encoding="utf-8"),
                "V2_DSH_PROVIDER": provider, "V2_DSH_MODEL": model,
                "V2_DSH_HOME": str(Path(dsh_home).resolve())}
+        self._console_control_dir = None
+        if os.environ.get("V2_CONSOLE_STATE_FILE"):
+            self._console_control_dir = tempfile.TemporaryDirectory(prefix="v2-control-")
+            self._console_control_path = str(Path(self._console_control_dir.name) / "control.sock")
+            self._console_control_token = secrets.token_hex(32)
+            env.update(V2_CONSOLE_CONTROL_SOCKET=self._console_control_path,
+                       V2_CONSOLE_CONTROL_TOKEN=self._console_control_token)
         if background_callback_url is not None or background_callback_token is not None:
             if (not isinstance(background_callback_url, str) or
                     not background_callback_url.startswith("http://127.0.0.1:") or
@@ -112,9 +125,14 @@ class AcpRuntime:
             })
         if Path(patch).name == "v2-agent-owner.patch.yml":
             env["V2_QQ_OWNERS"] = os.environ.get("V2_QQ_OWNERS", "[]")
+            if os.environ.get("V2_CONSOLE_STATE_FILE"):
+                env["V2_OWNER_WORKSPACE_LOCK_FILE"] = str(Path(dsh_home) / "workspace-file.lock")
         if owner_shell_env is not None:
             env["V2_OWNER_SHELL_ENV_JSON"] = json.dumps(owner_shell_env, separators=(",", ":"))
         if group_runtime:
+            if os.environ.get("V2_CONSOLE_STATE_FILE"):
+                env["V2_CONSOLE_STATE_FILE"] = os.environ["V2_CONSOLE_STATE_FILE"]
+                env["V2_QQ_OWNERS"] = os.environ.get("V2_QQ_OWNERS", "[]")
             env.update({
                 "V2_GROUP_WORKSPACE_ROOT": str(group_runtime["workspaceRoot"]),
                 "V2_GROUP_PLATFORM_ID": str(group_runtime["platformId"]),
@@ -291,9 +309,7 @@ class AcpRuntime:
         selected = next(c['value'] for c in previous['choices'] if (c['provider'], c['model']) == route)
         return model_view(self._set_native_model(session_id, selected))
 
-    def run(self, session_id, delta, images=None):
-        if getattr(self, "shared_models", None) is not None:
-            self._refresh_shared_catalog(session_id)
+    def run(self, session_id, delta, images=None, *, cancel_event=None):
         if images is not None:
             if not self.image_prompts:
                 raise RuntimeError("pinned DSH ACP connection did not advertise image prompt capability")
@@ -302,16 +318,38 @@ class AcpRuntime:
             prompt = [{"type": "text", "text": delta}, *copy.deepcopy(images)]
         else:
             prompt = [{"type": "text", "text": delta}]
+        # Register this exact turn before any catalog work. A cancellation can
+        # then latch while refresh is blocking, and it cannot leak to a later
+        # prompt that happens to reuse this ACP session ID.
+        token = {"requested": bool(cancel_event and cancel_event.is_set()),
+                 "dispatched": False, "trace": CURRENT_TRACE.get(),
+                 "cancel_event": cancel_event}
+        with self._control_lock:
+            if session_id in self._active_prompts:
+                raise RuntimeError("DSH session already has an active prompt")
+            self._active_prompts[session_id] = token
+        if token["requested"]:
+            with self._control_lock:
+                if self._active_prompts.get(session_id) is token:
+                    self._active_prompts.pop(session_id, None)
+            raise DshTurnCancelled("DSH turn was cancelled before model preparation")
+        try:
+            if getattr(self, "shared_models", None) is not None:
+                self._refresh_shared_catalog(session_id)
+            with self._control_lock:
+                if token["requested"] or (cancel_event is not None and cancel_event.is_set()):
+                    raise DshTurnCancelled("DSH turn was cancelled before prompt dispatch")
+        except BaseException:
+            with self._control_lock:
+                if self._active_prompts.get(session_id) is token:
+                    self._active_prompts.pop(session_id, None)
+            raise
         final_message_id = None
         final_chunks = []
         protocol_errors = []
         trace = CURRENT_TRACE.get()
         tool_starts = {}
-        token = {"requested": False, "dispatched": False, "trace": trace}
-        with self._control_lock:
-            if session_id in self._active_prompts:
-                raise RuntimeError("DSH session already has an active prompt")
-            self._active_prompts[session_id] = token
+        token["trace"] = trace
         def collect(notification):
             nonlocal final_message_id
             if notification.method != "session/update" or notification.payload.get("sessionId") != session_id:
@@ -378,13 +416,17 @@ class AcpRuntime:
             raise RuntimeError("DSH completed without a text reply")
         return text
 
-    def cancel_session(self, session_id):
+    def cancel_session(self, session_id, cancel_event=None):
         """Request cancellation of this session's current prompt without waiting."""
         with self._control_lock:
             token = self._active_prompts.get(session_id)
             if token is None:
+                return bool(cancel_event is not None and cancel_event.is_set())
+            if cancel_event is not None and token.get("cancel_event") is not cancel_event:
                 return False
             token["requested"] = True
+            if cancel_event is not None:
+                cancel_event.set()
             trace = token.get("trace")
             control = CURRENT_TRACE.get()
             if trace:
@@ -411,6 +453,29 @@ class AcpRuntime:
         if subscription is not None:
             subscription.close()
         self.client.close()
+        directory = getattr(self, "_console_control_dir", None)
+        if directory is not None:
+            directory.cleanup()
+
+    def compact_session(self, session_id):
+        path = getattr(self, "_console_control_path", None)
+        if not path:
+            raise RuntimeError("DSH console control is not enabled")
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(300)
+            connection.connect(path)
+            connection.sendall((json.dumps({"action": "compact", "session_id": session_id,
+                                           "token": self._console_control_token}) + "\n").encode())
+            response = b""
+            while b"\n" not in response:
+                chunk = connection.recv(4096)
+                if not chunk or len(response) + len(chunk) > 4096:
+                    raise RuntimeError("DSH compaction receipt was lost; inspect session before retrying")
+                response += chunk
+            receipt = json.loads(response.split(b"\n", 1)[0])
+            if receipt.get("ok") is not True:
+                raise RuntimeError("DSH manual compaction did not complete")
+            return {"compacted": receipt["compacted"]}
 
 
 class DshTurnCancelled(RuntimeError):
@@ -543,6 +608,7 @@ class DshClient:
         self._lock = threading.Lock()
         self._close_lock = threading.Lock()
         self._session_locks = {}
+        self._turn_tokens = {}
         self._sessions = set()
         self._session_servers = {}
         self._confirmed_model_routes = {}
@@ -602,6 +668,11 @@ class DshClient:
     def model_status(self, session_id, mcp_servers=None, *, model_route=None):
         return self._model_control(session_id, mcp_servers, model_route=model_route)
 
+    def compact_session(self, session_id, mcp_servers=None, *, model_route=None):
+        self._model_control(session_id, mcp_servers, model_route=model_route)
+        with self._session_lock(session_id):
+            return self.runtime.compact_session(session_id)
+
     def select_model(self, session_id, provider, model, mcp_servers=None, *, previous_route=None):
         return self._model_control(session_id, mcp_servers, selection=(provider, model), model_route=previous_route)
 
@@ -628,7 +699,85 @@ class DshClient:
                 self._confirmed_model_routes[session_id] = (result['current']['provider'], result['current']['model'])
             return result
 
-    def run(self, session_id, journal_delta, mcp_servers=None, trusted_source=None, *, images=None, model_route=None):
+    def _runtime_run(self, session_id, delta, *, images=None, cancel_token):
+        run = self.runtime.run
+        parameters = inspect.signature(run).parameters.values()
+        names = {item.name for item in parameters}
+        options = {}
+        if "cancel_event" in names:
+            options["cancel_event"] = cancel_token
+        if images is not None:
+            options["images"] = images
+        return run(session_id, delta, **options)
+
+    def reserve_turn(self, session_id):
+        """Synchronously reserve cancellation identity before a worker starts."""
+        if not isinstance(session_id, str) or not session_id:
+            raise ValueError("session ID is required")
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("DSH client is closed")
+            if session_id in self._quarantined_sessions:
+                raise RuntimeError("DSH session is quarantined")
+            if session_id in self._turn_tokens:
+                raise RuntimeError("DSH session already has a reserved turn")
+            token = threading.Event()
+            self._turn_tokens[session_id] = token
+            return token
+
+    def run(self, session_id, journal_delta, mcp_servers=None, trusted_source=None, *, images=None, model_route=None, cancel_token=None):
+        if not session_id or not journal_delta:
+            raise ValueError("session ID and journal delta are required")
+        if cancel_token is None:
+            # Direct callers historically queue on the per-session lock.
+            # Reserve only when the preceding turn has released its token.
+            with self._lock:
+                condition = self.__dict__.setdefault("_turn_condition", threading.Condition(self._lock))
+                while session_id in self._turn_tokens:
+                    condition.wait()
+                if self._closed:
+                    raise RuntimeError("DSH client is closed")
+                if session_id in self._quarantined_sessions:
+                    raise RuntimeError("DSH session is quarantined")
+                cancel_token = threading.Event()
+                self._turn_tokens[session_id] = cancel_token
+        else:
+            with self._lock:
+                if self._turn_tokens.get(session_id) is not cancel_token:
+                    raise RuntimeError("DSH turn cancellation token is stale or not reserved")
+        try:
+            return self._run_reserved(session_id, journal_delta, mcp_servers, trusted_source,
+                                      images=images, model_route=model_route,
+                                      cancel_token=cancel_token)
+        finally:
+            with self._lock:
+                if self._turn_tokens.get(session_id) is cancel_token:
+                    self._turn_tokens.pop(session_id, None)
+                condition = self.__dict__.get("_turn_condition")
+                if condition is not None:
+                    condition.notify_all()
+
+    def _check_prepared_cancellation(self, session_id, cancel_token):
+        if not cancel_token.is_set():
+            return
+        # Preparation may already have loaded the native SID. Drain it while
+        # owning the run lock, keeping it tracked until close is confirmed.
+        with self._lock:
+            loaded = session_id in self._sessions
+        if loaded:
+            try:
+                self.runtime.close_session(session_id)
+            except BaseException as error:
+                with self._lock:
+                    self._quarantined_sessions[session_id] = error
+                raise DshInfrastructureFailure("SESSION_DRAIN_FAILED") from error
+            with self._lock:
+                self._sessions.discard(session_id)
+                self._session_servers.pop(session_id, None)
+                self._confirmed_model_routes.pop(session_id, None)
+        raise DshTurnCancelled("DSH turn was cancelled during preparation")
+
+    def _run_reserved(self, session_id, journal_delta, mcp_servers=None, trusted_source=None, *, images=None, model_route=None, cancel_token):
         if not session_id or not journal_delta:
             raise ValueError("session ID and journal delta are required")
         if self.enable_authorization and trusted_source is None:
@@ -646,8 +795,9 @@ class DshClient:
                 transport_alive = getattr(self.runtime, "transport_alive", None)
                 if callable(transport_alive) and not transport_alive():
                     raise DshInfrastructureFailure("RUNTIME_UNAVAILABLE")
-                if ready and self._session_servers[session_id] != servers:
-                    raise ValueError("MCP binding changed for an active DSH session")
+            self._check_prepared_cancellation(session_id, cancel_token)
+            if ready and self._session_servers[session_id] != servers:
+                raise ValueError("MCP binding changed for an active DSH session")
             if model_route is not None:
                 model_route = validate_model_route(model_route)
             if not ready:
@@ -662,24 +812,27 @@ class DshClient:
                     self._sessions.add(session_id)
                     self._session_servers[session_id] = servers
                     self._confirmed_model_routes[session_id] = model_route or (self.settings['provider'], self.settings['model'])
+                self._check_prepared_cancellation(session_id, cancel_token)
             else:
                 desired = model_route or (self.settings['provider'], self.settings['model'])
                 with self._lock:
                     confirmed = self._confirmed_model_routes.get(session_id)
                 if confirmed != desired:
                     self.runtime.model_status(session_id, servers or None, model_route=model_route)
+                    self._check_prepared_cancellation(session_id, cancel_token)
                     with self._lock:
                         self._confirmed_model_routes[session_id] = desired
             if not self.enable_authorization:
-                if images is None:
-                    return self.runtime.run(session_id, journal_delta)
-                return self.runtime.run(session_id, journal_delta, images=images)
+                self._check_prepared_cancellation(session_id, cancel_token)
+                return self._runtime_run(session_id, journal_delta, images=images,
+                                         cancel_token=cancel_token)
+            self._check_prepared_cancellation(session_id, cancel_token)
             nonce = self.turn_sources.publish(session_id, trusted_source, journal_delta, images=images)
             try:
-                if images is None:
-                    result = self.runtime.run(session_id, journal_delta)
-                else:
-                    result = self.runtime.run(session_id, journal_delta, images=images)
+                if cancel_token.is_set():
+                    raise DshTurnCancelled("DSH turn was cancelled before prompt dispatch")
+                result = self._runtime_run(session_id, journal_delta, images=images,
+                                           cancel_token=cancel_token)
             except BaseException as failure:
                 receipt = None
                 if self.turn_sources is not None:
@@ -751,15 +904,28 @@ class DshClient:
                         "until runtime shutdown"
                     ) from cleanup_error
                 return result
-
-    def cancel_session(self, session_id):
+    def cancel_session(self, session_id, cancel_token=None):
         """Cancel an active turn without acquiring its per-session run lock."""
         with self._lock:
             if self._closed or session_id in self._quarantined_sessions:
                 return False
             runtime = self.runtime
+            current = self._turn_tokens.get(session_id)
+            if cancel_token is not None and current is not cancel_token:
+                return False
+            if current is not None:
+                current.set()
+            elif cancel_token is not None:
+                return False
         cancel = getattr(runtime, "cancel_session", None)
-        return bool(cancel(session_id)) if cancel is not None else False
+        if cancel is not None:
+            try:
+                accepted = bool(cancel(session_id, current))
+            except TypeError:
+                accepted = bool(cancel(session_id))
+        else:
+            accepted = False
+        return accepted or current is not None
 
     def health(self):
         with self._lock:

@@ -1,0 +1,2 @@
+# Vite/Monaco output includes intentional whitespace in bundled literals.
+astrbot-plugins/v2_console/pages/console/assets/* -whitespace linguist-generated=true

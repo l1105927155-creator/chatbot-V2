@@ -7,6 +7,7 @@ import {
   verifyTurnImageProofs, validateTurnImages,
 } from './trusted-turn-guard.mjs'
 import { researchDelegation } from './background-authority.mjs'
+import { withOwnerWorkspaceLock } from './host-workspace-lock.mjs'
 
 export const name = 'v2-owner-host-guard'
 
@@ -87,7 +88,7 @@ export class OwnerHostGuard {
         || exec.signal?.aborted || binding.signal?.aborted) {
         throw new Error('V2 Owner host authorization denied: current turn expired before execution')
       }
-      return next()
+      return withOwnerWorkspaceLock(exec, next)
     })
     ctx.on('tools/result', exec => this.captured.delete(exec.token))
   }

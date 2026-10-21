@@ -83,13 +83,24 @@ def _install_astrbot_api_stub() -> None:
 
 
 def _load_plugin(relative_path: str, module_name: str):
-    _install_astrbot_api_stub()
-    source = REPO_ROOT / relative_path
-    spec = importlib.util.spec_from_file_location(module_name, source)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    names = ("astrbot", "astrbot.api", "astrbot.api.event")
+    previous = {name: sys.modules.get(name) for name in names}
+    try:
+        _install_astrbot_api_stub()
+        source = REPO_ROOT / relative_path
+        spec = importlib.util.spec_from_file_location(module_name, source)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    finally:
+        # A plugin import stub must not replace AstrBot's MessageChain for the
+        # unrelated native messaging tests collected in the same interpreter.
+        for name, original in previous.items():
+            if original is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = original
 
 
 class _Event:

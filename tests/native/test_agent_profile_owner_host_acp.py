@@ -55,6 +55,7 @@ with TemporaryDirectory(prefix="owner-host-acp-", dir=root / ".runtime") as tmp:
     command = "python3 -c " + __import__('shlex').quote(py) + "; pwd"
     env = {
         "LC_MESSAGES": "C", "V2_EXECUTION_PROFILE": "owner-host",
+        "V2_OWNER_WORKSPACE_LOCK_FILE": str(home / "workspace-file.lock"),
         "DSH_SYSTEM_PROMPT": (root / "dsh/profile/agent-owner.md").read_text(),
         "V2_DSH_PROVIDER": "owner-host-native-acceptance", "V2_DSH_MODEL": "scripted",
         "V2_TURN_SOURCE_DIR": str(publisher.directory), "V2_TURN_SOURCE_EPOCH": publisher.epoch,
@@ -146,6 +147,7 @@ with TemporaryDirectory(prefix="owner-host-cancel-", dir=root / ".runtime") as t
     command = "printf started > " + str(started) + "; (sleep 4; printf late > " + str(late) + ") & sleep 30"
     env = {
         "LC_MESSAGES":"C", "V2_EXECUTION_PROFILE":"owner-host",
+        "V2_OWNER_WORKSPACE_LOCK_FILE":str(home / "workspace-file.lock"),
         "DSH_SYSTEM_PROMPT":(root / "dsh/profile/agent-owner.md").read_text(),
         "V2_DSH_PROVIDER":"owner-host-native-acceptance", "V2_DSH_MODEL":"scripted",
         "V2_OWNER_HOST_PROBE_CANCEL":"1", "V2_OWNER_HOST_PROBE_TRACE":str(base / "trace.jsonl"),
