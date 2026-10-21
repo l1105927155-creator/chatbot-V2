@@ -10,7 +10,10 @@ AstrBot + DeepSeek Harness (DSH) 的干净集成项目。上游版本固定于 [
 - [`docs/personal-agent-acceptance.md`](docs/personal-agent-acceptance.md)：真实 QQ 固定故事验收清单。
 - [`docs/personal-agent-operations.md`](docs/personal-agent-operations.md)：部署与运维。
 - [`AGENTS.md`](AGENTS.md)：开发约束。
+- [QQ 文件收发](docs/qq-file-transfer-validation-2026-10-18.md)：任意文件格式、工作区隔离与验证范围。
 - [人格与指南热更新](docs/guide-hot-reload-validation-2026-10-18.md)：可编辑文件、生效时机与验证。
+- [QQ 原生视觉](docs/phases/qq-native-vision-2026-10-18.md)：图片上下文、文件任务与来源绑定。
+- [Agent 用户命令](docs/phases/agent-command-surface.md)：真实会话重置、停止执行、Owner 权限和历史起点；已部署，见[验证记录](docs/agent-command-surface-validation.md)。
 
 当前版本保留两个信任域和三种工具组合：`owner-host`、`group-sandbox`、`safe-chat`。Owner 精确身份的独立私聊使用部署账户可用的主机环境；每个已准入群（包括群内 Owner）有独立的沙箱运行时、工作区、会话和状态；普通非 Owner 私聊使用 `safe-chat`。人格、Scene 和 Skill 不授予权限。正常 QQ 收发经过 AstrBot，Journal 是唯一聊天事实记录。具体资源边界见[执行域实施记录](docs/execution-domain-validation-2026-10-16.md)。
 

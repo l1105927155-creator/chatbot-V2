@@ -144,12 +144,15 @@ def test_acp_startup_and_restart_do_not_create_sessions_or_prompt(tmp_path, monk
         def request(self,method,params,*,response_model,**kwargs):
             self.methods.append(method)
             assert method=='initialize', 'startup must not create or prompt a session'
-            return response_model(agentCapabilities={'sessionCapabilities':{'resume':{}}})
+            return response_model(agentCapabilities={'sessionCapabilities':{'resume':{}},
+                                                     'promptCapabilities':{'image':True}})
         def close(self):self.closed=True
     monkeypatch.setattr(deepseek_harness.client,'HarnessClient',Transport)
     kw=settings(tmp_path);kw.pop('harness_factory')
     for _ in range(2):
-        client=module.DshClient(**kw);client.close()
+        client=module.DshClient(**kw)
+        assert client.runtime.image_prompts is True
+        client.close()
     assert len(transports)==2
     assert all(t.methods==['initialize'] and t.closed for t in transports)
     assert all(t.config.env['V2_DSH_MODEL']=='test-model' for t in transports)
@@ -318,8 +321,9 @@ def test_authorized_run_cleans_source_after_runtime_failure_and_restart_uses_new
     client = module.DshClient(**settings(tmp_path, FailedPrompt), enable_authorization=True)
     directory = Path(client.settings['source_dir'])
     epoch = client.settings['source_epoch']
-    with pytest.raises(TimeoutError, match='prompt timed out'):
+    with pytest.raises(module.DshTurnOutcomeUnknown) as failure:
         client.run('session', 'delta', trusted_source=source)
+    assert failure.value.code == 'NO_TERMINAL_RECEIPT'
     assert list(directory.iterdir()) == []
     assert ('close', 'session') in client.runtime.calls
     client.close()
@@ -343,8 +347,9 @@ def test_failed_native_drain_retains_source_and_quarantines_session_until_shutdo
     client = module.DshClient(**settings(tmp_path, Undrainable), enable_authorization=True)
     directory = Path(client.settings['source_dir'])
     path = directory / module.TurnSourcePublisher.filename('session')
-    with pytest.raises(RuntimeError, match='trusted source retained'):
+    with pytest.raises(module.DshInfrastructureFailure) as failure:
         client.run('session', 'delta', trusted_source=source)
+    assert failure.value.code == 'SESSION_DRAIN_FAILED'
     assert path.exists()
     with pytest.raises(RuntimeError, match='quarantined'):
         client.run('session', 'overlap', trusted_source=source)
@@ -377,8 +382,9 @@ def test_shutdown_failures_retain_sources_reject_work_and_allow_close_retry(tmp_
     client = module.DshClient(**settings(tmp_path, RetryShutdown), enable_authorization=True)
     directory = Path(client.settings['source_dir'])
     path = directory / module.TurnSourcePublisher.filename('session')
-    with pytest.raises(RuntimeError, match='trusted source retained'):
+    with pytest.raises(module.DshInfrastructureFailure) as failure:
         client.run('session', 'delta', trusted_source=source)
+    assert failure.value.code == 'SESSION_DRAIN_FAILED'
     assert path.exists()
     with pytest.raises(ExceptionGroup, match='shutdown failed'):
         client.close()
@@ -682,6 +688,149 @@ def test_authorized_native_cancel_drains_and_cleans_owner_source(tmp_path):
         with pytest.raises(module.DshTurnCancelled): turn.result(2)
     assert ("close", "owner-sid") in client.runtime.calls
     assert list(directory.iterdir()) == []
+    client.close()
+
+
+def test_acp_prompt_sends_exact_text_before_ordered_images_and_requires_advertisement():
+    from types import SimpleNamespace
+    runtime = object.__new__(module.AcpRuntime)
+    runtime._control_lock = threading.RLock()
+    runtime._active_prompts = {}
+    runtime.image_prompts = True
+    calls = []
+    class Client:
+        def notify(self, *_args, **_kwargs): pass
+    runtime.client = Client()
+    def request(method, params, **kwargs):
+        calls.append((method, params))
+        if method == 'session/prompt':
+            notify = kwargs['on_notification']
+            notify(SimpleNamespace(method='session/update', payload={
+                'sessionId': 'image-session',
+                'update': {'sessionUpdate': 'agent_message_chunk', 'messageId': 'image-message-id',
+                           'content': {'type': 'text', 'text': 'ok'}},
+            }))
+            return {'stopReason': 'end_turn'}
+        raise AssertionError(method)
+    runtime.request = request
+    images = [
+        {'type': 'image', 'data': 'AQ==', 'mimeType': 'image/png'},
+        {'type': 'image', 'data': 'Ag==', 'mimeType': 'image/jpeg'},
+    ]
+    assert runtime.run('image-session', 'exact journal delta', images=images) == 'ok'
+    assert calls == [('session/prompt', {
+        'sessionId': 'image-session',
+        'prompt': [{'type': 'text', 'text': 'exact journal delta'}, *images],
+    })]
+    runtime.image_prompts = False
+    calls.clear()
+    with pytest.raises(RuntimeError, match='did not advertise image'):
+        runtime.run('image-session', 'delta', images=images)
+    assert calls == []
+
+
+def _run_acp_updates(updates, *, stop_reason='end_turn'):
+    from types import SimpleNamespace
+    runtime = object.__new__(module.AcpRuntime)
+    runtime._control_lock = threading.RLock()
+    runtime._active_prompts = {}
+    runtime.client = type('Client', (), {'notify': lambda *_args, **_kwargs: None})()
+    callback_errors = []
+    request_returned = []
+    def request(method, _params, **kwargs):
+        assert method == 'session/prompt'
+        callback = kwargs['on_notification']
+        for update in updates:
+            try:
+                callback(SimpleNamespace(method='session/update', payload={
+                    'sessionId': 'collector-session', 'update': update,
+                }))
+            except Exception as error:  # SDK notifications must not lose callback errors.
+                callback_errors.append(error)
+        request_returned.append(True)
+        return {'stopReason': stop_reason}
+    runtime.request = request
+    return runtime, callback_errors, request_returned
+
+
+def test_acp_returns_only_final_assistant_message_after_tool_call():
+    runtime, callback_errors, request_returned = _run_acp_updates([
+        {'sessionUpdate': 'agent_message_chunk', 'messageId': 'tool-step',
+         'content': {'type': 'text', 'text': 'TOOL_PRELUDE must not be returned'}},
+        {'sessionUpdate': 'tool_call', 'toolCallId': 'call-1', 'title': 'history_search'},
+        {'sessionUpdate': 'agent_message_chunk', 'messageId': 'final-message',
+         'content': {'type': 'text', 'text': 'final '}},
+        {'sessionUpdate': 'agent_message_chunk', 'messageId': 'final-message',
+         'content': {'type': 'text', 'text': 'reply'}},
+    ])
+    assert runtime.run('collector-session', 'prompt') == 'final reply'
+    assert request_returned == [True] and callback_errors == []
+    assert runtime._active_prompts == {}
+
+
+@pytest.mark.parametrize('update', [
+    {'sessionUpdate': 'agent_message_chunk', 'messageId': 'image-only-message',
+     'content': {'type': 'image', 'data': 'AQ==', 'mimeType': 'image/png'}},
+    {'sessionUpdate': 'agent_thought_chunk', 'messageId': 'thought-only-message',
+     'content': {'type': 'text', 'text': 'private reasoning is not the reply'}},
+])
+def test_acp_new_non_text_or_thought_message_does_not_reuse_older_text(update):
+    runtime, callback_errors, _returned = _run_acp_updates([
+        {'sessionUpdate': 'agent_message_chunk', 'messageId': 'earlier-message',
+         'content': {'type': 'text', 'text': 'stale narration'}},
+        update,
+    ])
+    with pytest.raises(RuntimeError, match='without a text reply'):
+        runtime.run('collector-session', 'prompt')
+    assert callback_errors == []
+
+
+@pytest.mark.parametrize('message_id', [None, '', '   ', 42])
+def test_acp_invalid_assistant_message_id_is_reported_after_request_returns(message_id):
+    runtime, callback_errors, request_returned = _run_acp_updates([
+        {'sessionUpdate': 'agent_message_chunk', 'messageId': message_id,
+         'content': {'type': 'text', 'text': 'must not become a reply'}},
+    ])
+    with pytest.raises(RuntimeError, match='ACP protocol error.*messageId'):
+        runtime.run('collector-session', 'prompt')
+    assert request_returned == [True]
+    assert callback_errors == []
+    assert runtime._active_prompts == {}
+
+
+def test_acp_message_id_change_replaces_candidate_and_empty_end_turn_stays_failure():
+    runtime, callback_errors, _returned = _run_acp_updates([
+        {'sessionUpdate': 'agent_message_chunk', 'messageId': 'message-a',
+         'content': {'type': 'text', 'text': 'old'}},
+        {'sessionUpdate': 'agent_message_chunk', 'messageId': 'message-b',
+         'content': {'type': 'text', 'text': 'new'}},
+    ])
+    assert runtime.run('collector-session', 'prompt') == 'new'
+    assert callback_errors == []
+
+    empty, _callback_errors, _returned = _run_acp_updates([
+        {'sessionUpdate': 'tool_call', 'toolCallId': 'call-2', 'title': 'tool'},
+    ])
+    with pytest.raises(RuntimeError, match='without a text reply'):
+        empty.run('collector-session', 'prompt')
+
+
+def test_dsh_client_keeps_legacy_fake_runtime_call_for_no_images_and_passes_image_keyword(tmp_path):
+    class ImageRuntime(Runtime):
+        def run(self, sid, delta, **kwargs):
+            if not kwargs:
+                self.calls.append((sid, delta))
+            else:
+                self.calls.append(('image-run', sid, delta, kwargs.get('images')))
+            return sid
+    client = module.DshClient(**settings(tmp_path, ImageRuntime))
+    session = client.create_session()
+    assert client.run(session, 'plain') == session
+    image = [{'type': 'image', 'data': 'AQ==', 'mimeType': 'image/png'}]
+    assert client.run(session, 'picture', images=image) == session
+    assert client.runtime.calls == [
+        (session, 'plain'), ('image-run', session, 'picture', image),
+    ]
     client.close()
 
 

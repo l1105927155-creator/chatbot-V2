@@ -4,6 +4,7 @@ import { mkdirSync, lstatSync, openSync, readFileSync, fstatSync, closeSync, con
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createGuideReader } from './trusted-guides.mjs'
+import { createWorkspaceReader } from './workspace-files.mjs'
 
 export const name = 'v2-agent-persona'
 export const inject = ['agents', 'systemPrompt']
@@ -47,9 +48,18 @@ export function apply(ctx, config) {
   const personaDir = config?.personaDir ?? defaultPersonaDir
   const readGuideFile = createGuideReader(ctx.logger)
   if (typeof personaDir !== 'string' || !personaDir.startsWith('/')) throw new Error('absolute personaDir required')
+  // The deployment only sets this environment variable for admitted group
+  // sandbox runtimes, so this does not broaden discovery in owner/safe-chat.
+  const groupWorkspace = config?.workspaceRoot ?? process.env.V2_GROUP_WORKSPACE_ROOT
+  const workspaceReader = config?.workspaceReader ?? (groupWorkspace
+    ? createWorkspaceReader({ workspaceRoot: groupWorkspace, logger: ctx.logger })
+    : undefined)
+  const readWorkspaceGuide = workspaceReader?.readGuide
   // Fail at startup for missing or invalid deployed guides, then read the selected file
   // again for every prompt assembly so ordinary edits take effect in the next turn.
-  for (const id of personaIds) readGuideFile(join(personaDir, id + '.md'))
+  if (!readWorkspaceGuide) {
+    for (const id of personaIds) readGuideFile(join(personaDir, id + '.md'))
+  }
   mkdirSync(root, { recursive: true, mode: 0o700 })
   const meta = lstatSync(root)
   if (!meta.isDirectory() || meta.isSymbolicLink() || (meta.mode & 0o077) !== 0
@@ -65,23 +75,45 @@ export function apply(ctx, config) {
         name: 'v2:active-persona',
         order: scope.systemPrompt.getSectionOrder('DEPLOYMENT_PERSONA_PREFIX') + 1,
         interpolate: false,
-        text: () => currentPersona(root, personaDir, agent.session.id, readGuideFile),
+        // A group workspace persona is the complete local persona for this
+        // Agent. It intentionally replaces the selectable global persona and
+        // session state; deleting it removes this scoped section's content.
+        text: () => readWorkspaceGuide
+          ? readWorkspaceGuide('persona.md')
+          : currentPersona(root, personaDir, agent.session.id, readGuideFile),
       })
     })
-    fibers.set(agent, fiber)
-    return fiber
+    const unlisten = readWorkspaceGuide
+      ? agent.ctx.on('system-prompt/assemble', async (_assembly, _context, next) => {
+        const assembled = await next()
+        let changed = false
+        const sections = await Promise.all(assembled.sections.map(async section => {
+          if (section.name !== 'v2:active-persona' || typeof section.text?.then !== 'function') return section
+          changed = true
+          return { ...section, text: await section.text }
+        }))
+        return changed ? { ...assembled, sections } : assembled
+      })
+      : undefined
+    const installation = { fiber, unlisten }
+    fibers.set(agent, installation)
+    return installation
   }
   function dispose(agent) {
-    const fiber = fibers.get(agent)
-    if (!fiber) return
+    const installation = fibers.get(agent)
+    if (!installation) return
     fibers.delete(agent)
-    void fiber.dispose().catch(error => ctx.logger.warn('persona disposal failed: ' + String(error)))
+    installation.unlisten?.()
+    void installation.fiber.dispose().catch(error => ctx.logger.warn('persona disposal failed: ' + String(error)))
   }
   for (const agent of ctx.agents.list()) install(agent)
   ctx.on('agent/created', async ({ agent }) => { await install(agent) })
   ctx.on('agent/disposed', ({ agent }) => { dispose(agent) })
   ctx.effect(() => async () => {
-    const pending = [...fibers.values()].map(fiber => fiber.dispose())
+    const pending = [...fibers.values()].map(({ fiber, unlisten }) => {
+      unlisten?.()
+      return fiber.dispose()
+    })
     fibers.clear()
     await Promise.all(pending)
   }, 'v2-agent-persona cleanup')

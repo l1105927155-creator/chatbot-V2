@@ -1,18 +1,19 @@
 /** Owner-only, one-turn Bash confinement for the pinned DSH sandbox seam. */
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { createHash } from 'node:crypto'
-import { lstatSync, readFileSync, realpathSync, readdirSync, openSync, fstatSync, closeSync, constants } from 'node:fs'
+import { lstatSync, realpathSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { isAbsolute, join, relative, resolve, sep, dirname } from 'node:path'
 import { SandboxProvider } from '../../node_modules/@deepseek-ai/dsh-sandbox/lib/index.js'
+import { readTurnSource, validateClaimedPrompt, sameTurnSource,
+  verifyTurnImageProofs, validateTurnImages } from './trusted-turn-guard.mjs'
+import { researchDelegation } from './background-authority.mjs'
 
 export const name = 'v2-owner-sandbox'
 
-const fields = ['platform_id', 'bot_id', 'conversation_key', 'requester_id',
-  'inbound_message_id', 'epoch', 'session_id', 'nonce', 'prompt_sha256']
 const safeMcp = new Set(['mcp__astrbot__history_recent', 'mcp__astrbot__history_before',
-  'mcp__astrbot__history_search', 'mcp__astrbot__current_group_info', 'mcp__astrbot__qq_send_origin'])
-const allowedTools = new Set(['bash', 'skill', 'web_search', 'web_fetch', ...safeMcp])
+  'mcp__astrbot__history_search', 'mcp__astrbot__history_read_image', 'mcp__astrbot__current_group_info', 'mcp__astrbot__current_group_members', 'mcp__astrbot__qq_prepare_reply', 'mcp__astrbot__qq_send_origin',
+  'mcp__astrbot__qq_file_receive', 'mcp__astrbot__qq_file_send', 'mcp__astrbot__meme_list', 'mcp__astrbot__meme_send', 'mcp__astrbot__plugin_status', 'mcp__astrbot__bili_dynamics', 'mcp__astrbot__bili_subscribe', 'mcp__astrbot__bili_subscriptions', 'mcp__astrbot__bili_unsubscribe', 'mcp__astrbot__twitter_subscribe', 'mcp__astrbot__twitter_subscriptions', 'mcp__astrbot__twitter_unsubscribe'])
+const allowedTools = new Set(['bash', 'skill', 'web_search', 'web_fetch', 'background_research', ...safeMcp])
 const text = value => typeof value === 'string' && value.length > 0
   && value.trim() === value && !/[\x00-\x1f\x7f]/.test(value)
 const within = (base, path) => path === base || path.startsWith(base + sep)
@@ -88,7 +89,18 @@ export class OwnerSandbox extends SandboxProvider {
     ctx.on('agent/inbox/claimed', ({agent, turn, message}) => this.bind(agent, turn, message))
     ctx.on('agent/pre-step', async ({agent, turn, signal}, next) => {
       const binding = this.bound.get(agent)
-      if (binding?.turn === turn) binding.signal = signal
+      if (binding?.turn === turn) {
+        binding.signal = signal
+        if (binding.source.image_manifest !== undefined && !binding.imagesVerified) {
+          if (signal?.aborted) signal.throwIfAborted()
+          this.binding(agent, false)
+          await validateTurnImages(ctx, this.root, binding.source, binding.message)
+          if (signal?.aborted || binding.signal?.aborted) throw new Error('inactive turn during image validation')
+          this.binding(agent, false)
+          if (this.bound.get(agent) !== binding || binding.turn !== turn) throw new Error('turn changed during image validation')
+          binding.imagesVerified = true
+        }
+      }
       return next()
     })
     ctx.on('agent/turn-stopping', ({agent, turn}) => {
@@ -129,25 +141,7 @@ export class OwnerSandbox extends SandboxProvider {
 
   load(sessionId) {
     if (!text(sessionId)) throw new Error('invalid session ID')
-    const file = join(this.root, createHash('sha256').update(sessionId).digest('hex') + '.json')
-    const descriptor = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW)
-    let source
-    try {
-      const meta = fstatSync(descriptor)
-      if (!meta.isFile() || (meta.mode & 0o077) !== 0
-        || (typeof process.getuid === 'function' && meta.uid !== process.getuid())) {
-        throw new Error('source file must be private')
-      }
-      source = JSON.parse(readFileSync(descriptor, 'utf8'))
-    } finally {
-      closeSync(descriptor)
-    }
-    if (!source || Object.keys(source).sort().join(',') !== [...fields].sort().join(',')
-      || !Object.values(source).every(text)
-      || source.epoch !== this.epoch || source.session_id !== sessionId) {
-      throw new Error('invalid current source')
-    }
-    return Object.freeze(source)
+    return readTurnSource(this.root, this.epoch, sessionId)
   }
 
   assertOwner(source) {
@@ -164,23 +158,29 @@ export class OwnerSandbox extends SandboxProvider {
     try {
       const source = this.load(agent.session.id)
       this.assertOwner(source)
-      const content = message?.content
-      if (!Array.isArray(content) || content.length !== 1 || content[0].type !== 'text'
-        || typeof content[0].text !== 'string'
-        || createHash('sha256').update(content[0].text).digest('hex') !== source.prompt_sha256) {
-        throw new Error('claimed prompt mismatch')
-      }
-      this.bound.set(agent, {source, turn})
+      validateClaimedPrompt(message, source)
+      this.bound.set(agent, {source, turn, message, imagesVerified: source.image_manifest === undefined})
     } catch {
       this.rejected.set(agent, turn)
     }
   }
 
-  binding(agent) {
+  binding(agent, requireVerifiedImages = true) {
+    const delegated = researchDelegation(agent)
+    if (delegated) {
+      if (delegated.profile !== 'owner-sandbox' || delegated.signal?.aborted) {
+        throw new Error('background owner sandbox authority expired')
+      }
+      this.assertOwner(delegated.source)
+      return {source: delegated.source, turn: delegated.taskId,
+        signal: delegated.signal, imagesVerified: true, delegated}
+    }
     const binding = this.bound.get(agent)
     if (!binding || binding.signal?.aborted) throw new Error('no trusted current turn')
     const latest = this.load(agent.session.id)
-    if (fields.some(field => latest[field] !== binding.source[field])) throw new Error('source expired')
+    if (!sameTurnSource(latest, binding.source)) throw new Error('source expired')
+    verifyTurnImageProofs(this.root, latest)
+    if (requireVerifiedImages && !binding.imagesVerified) throw new Error('trusted image sequence has not been verified')
     this.assertOwner(latest)
     return binding
   }

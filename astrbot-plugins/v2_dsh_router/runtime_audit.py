@@ -20,16 +20,17 @@ CURRENT_TRACE = contextvars.ContextVar("v2_audit_trace", default=None)
 CURRENT_SEND = contextvars.ContextVar("v2_audit_send", default=None)
 TOOLS = frozenset({"bash", "skill", "web_search", "web_fetch", *(
     "mcp__astrbot__" + name for name in
-    ("history_recent", "history_before", "history_search", "current_group_info", "qq_send_origin"))})
+    ("history_recent", "history_before", "history_search", "current_group_info", "current_group_members", "qq_prepare_reply", "qq_send_origin", "qq_file_receive", "qq_file_send", 'meme_list', 'meme_send', 'plugin_status', 'bili_dynamics', 'bili_subscribe', 'bili_subscriptions', 'bili_unsubscribe', 'twitter_subscribe', 'twitter_subscriptions', 'twitter_unsubscribe'))})
 EVENTS = frozenset({"turn/queued", "turn/start", "turn/completed", "turn/failed", "turn/duplicate",
     "dsh/start", "dsh/dispatched", "dsh/stop", "dsh/error", "tool/start", "tool/end", "cancel/requested", "recovery/resolved",
-    "control/request", "send/start", "send/returned", "send/failed", "send/receipt", "delivery/final_failed"})
-IDS = frozenset({"session_id", "message_id", "attempt_id", "related_turn_id", "call_id"})
-NUMBERS = frozenset({"journal_id", "previous_cursor", "pending_cursor", "queue_ms", "elapsed_ms"})
-ENUMS = {"tool": TOOLS | {"other"}, "status": {"in_progress", "completed", "failed", "other"},
+    "control/request", "session/reset_started", "session/reset_completed", "session/reset_failed",
+    "send/start", "send/returned", "send/failed", "send/receipt", "delivery/final_failed", "delivery/reset_suppressed", "delivery/content_rejected"})
+IDS = frozenset({"session_id", "previous_session_id", "message_id", "attempt_id", "related_turn_id", "call_id"})
+NUMBERS = frozenset({"journal_id", "previous_cursor", "pending_cursor", "history_after", "discarded_pending", "queue_ms", "elapsed_ms", "reply_chars"})
+ENUMS = {"code": {"OUTPUT_CHANNEL_MISMATCH", "other"},"tool": TOOLS | {"other"}, "status": {"in_progress", "completed", "failed", "other"},
     "stop_reason": {"end_turn", "cancelled", "max_tokens", "other"},
     "send_kind": {"final", "mcp", "control"},
-    "control": {"persona", "scene", "status", "cancel", "recover", "metrics", "other"},
+    "control": {"persona", "scene", "status", "cancel", "recover", "metrics", "new", "reset", "stop", "help", "provider", "stats", "set", "unset", "other"},
     "error_type": {"CancelledError", "DshTurnCancelled", "PendingTurnError", "RecoveryError", "FinalReplyDeliveryError", "ActionFailed",
         "TimeoutError", "JsonRpcError", "ConnectionError", "RuntimeError", "ValueError", "KeyError", "other"},
     "action": {"send_msg", "send_group_msg", "send_private_msg", "send_group_forward_msg", "send_private_forward_msg"}}
@@ -141,7 +142,7 @@ class AuditStore:
                 "cancelled_turns": self._counts[(domain, "cancelled_turns")],
                 "audit_write_errors": self.write_errors}
 
-    def rows(self):
+    def rows(self, *, strict=False):
         # Readers only inspect owned private regular files; no arbitrary paths.
         for index in range(self.ARCHIVES, -1, -1):
             path = self.path if index == 0 else self.directory / f"events.{index}.jsonl"
@@ -158,14 +159,22 @@ class AuditStore:
                     try:
                         yield json.loads(line)
                     except json.JSONDecodeError:
+                        if strict:
+                            raise ValueError("invalid audit record") from None
                         # A process interruption can leave a partial last line.
                         continue
 
-    def receipt_evidence(self, journal):
+    def receipt_evidence(self, journal, conversation=None, *, strict=False):
         """Join exact receipt IDs to canonical facts, never text/time guesses."""
-        for row in self.rows():
-            if row.get("event") != "send/receipt":
-                continue
+        # Snapshot the retained receipt metadata under the existing writer
+        # lock, so a concurrent archive rotation cannot hide a receipt.
+        with self._lock:
+            receipts = [row for row in self.rows(strict=strict)
+                        if row.get("event") == "send/receipt" and (
+                            conversation is None or (
+                                row.get("platform_id"), row.get("bot_id"), row.get("conversation_key")) == (
+                                conversation.platform_id, conversation.bot_id, conversation.key))]
+        for row in receipts:
             matches = journal.by_message_id(row["platform_id"], row["bot_id"], row["message_id"])
             confirmed = [entry.journal_id for entry in matches if entry.message.direction == "outbound"
                          and entry.message.conversation_key == row["conversation_key"]]

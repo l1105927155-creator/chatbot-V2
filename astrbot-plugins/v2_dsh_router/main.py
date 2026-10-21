@@ -5,20 +5,29 @@ from __future__ import annotations
 import os
 import asyncio
 import importlib.util
+import hashlib
 import sys
 from sys import maxsize
 from pathlib import Path
 
 from astrbot.api import star
+from astrbot.api.message_components import File
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
+from astrbot.core.star.filter.command import GreedyStr
 
 from .dsh_client import DshTurnCancelled, start_client
 from .routing import should_route
-from .service import ChatService, PendingTurnError, RecoveryError, FinalReplyDeliveryError
+from .service import ChatService, PendingTurnError, RecoveryError, ResetError, FinalReplyDeliveryError, ModelTurnError
 from .delivery_error import notify_delivery_error
 from .turn_error import notify_turn_error
+from .reply_safety import ReplyContentError
+from .messaging import QQMessaging
+from .meme_library import MemeLibrary
+from .plugin_capabilities import PluginCapabilities
 from .state import StateStore, migration_needed
 from .mcp_server import McpServer
+from .file_transfer import FileTransfer, resolve_onebot_file
+from .vision import QQVision
 from .trust_domain import Owner, classify, parse_owners
 from .persona_state import PersonaStateStore
 from .scene_state import SceneStateStore
@@ -54,11 +63,13 @@ class V2DshRouter(star.Star):
     async def initialize(self) -> None:
         self._closing = False
         self._initialized = False
+        self._commands_ready = False
+        self._command_surface = None
         self._active = set()
         self._pending_notice_keys = set()
         # The plugin is symlinked into AstrBot's data/plugins directory by V2.
         repo = Path(__file__).resolve().parents[2]
-        runtime = repo / ".runtime"
+        runtime = (repo / ".runtime").resolve(strict=True)
         contract = os.environ.get("V2_EXECUTION_CONTRACT")
         if contract != "2":
             raise RuntimeError("V2_EXECUTION_CONTRACT=2 is required; refusing legacy execution configuration")
@@ -82,6 +93,7 @@ class V2DshRouter(star.Star):
         chat_state = StateStore(own_dir / "state-chat.sqlite3")
         owner_state = StateStore(own_dir / "state-owner-host.sqlite3") if self.owners else None
         self.mcp = McpServer(journal, logger=self.logger, health=self.health)
+        self.mcp.configure_background(self._background_event)
         self.clients = {}
         self.services = {}
         self._group_runtimes = {}
@@ -99,10 +111,14 @@ class V2DshRouter(star.Star):
                 patch=repo / "dsh/profile/v2-agent-group.patch.yml",
                 instructions=repo / "dsh/profile/agent-group.md",
                 execution_profile="safe-chat",
+                enable_authorization=True,
+                background_callback_url=self.mcp.background_callback_url,
+                background_callback_token=self.mcp.background_callback_token,
             )
             self.services["chat"] = ChatService(
                 journal, chat_state, self.clients["chat"], self.mcp,
                 audit=self.audit, domain="chat", execution_profile="safe-chat",
+                trusted_sources=True,
             )
             if self.owners:
                 self.clients["owner"] = await start_client(
@@ -114,6 +130,8 @@ class V2DshRouter(star.Star):
                     enable_authorization=True,
                     execution_profile="owner-host",
                     owner_shell_env=_private_shell_environment(),
+                    background_callback_url=self.mcp.background_callback_url,
+                    background_callback_token=self.mcp.background_callback_token,
                 )
                 self.services["owner"] = ChatService(
                     journal, owner_state, self.clients["owner"], self.mcp,
@@ -157,6 +175,167 @@ class V2DshRouter(star.Star):
                 ) from startup_error
             raise
         self._initialized = True
+
+    @filter.on_astrbot_loaded()
+    async def install_agent_commands(self):
+        """Bind user commands after all native handlers have been registered."""
+        from .command_surface import install_command_surface
+        self._command_surface = await install_command_surface(previous=self._command_surface)
+        self._commands_ready = True
+
+    @filter.on_plugin_loaded()
+    async def refresh_agent_commands(self, metadata):
+        """Keep the same surface when the router or native commands reload."""
+        if (getattr(self, "_initialized", False) and not self._closing and
+                getattr(metadata, "name", None) in {"v2_dsh_router", "builtin_commands"}):
+            await self.install_agent_commands()
+
+    @filter.command("new")
+    async def new_chat(self, event: AstrMessageEvent, args: GreedyStr = ""):
+        """开始干净的 DSH 对话；群聊仅 Bot Owner 可用。"""
+        await self._agent_command(event, "new", args)
+
+    @filter.command("reset")
+    async def reset_chat(self, event: AstrMessageEvent, args: GreedyStr = ""):
+        """开始干净的 DSH 对话，与 /new 相同。"""
+        await self._agent_command(event, "reset", args)
+
+    @filter.command("stop")
+    async def stop_chat(self, event: AstrMessageEvent, args: GreedyStr = ""):
+        """请求停止当前 DSH 执行；群聊仅 Bot Owner 可用。"""
+        await self._agent_command(event, "stop", args)
+
+    @filter.command("help")
+    async def agent_help(self, event: AstrMessageEvent, args: GreedyStr = ""):
+        """查看当前 Agent-Bot 命令及作用范围。"""
+        await self._agent_command(event, "help", args)
+
+    @filter.command("provider")
+    async def provider_notice(self, event: AstrMessageEvent, args: GreedyStr):
+        """查看或切换当前会话的 DSH 模型。"""
+        await self._agent_command(event, "provider", args)
+
+    @filter.command("stats")
+    async def stats_notice(self, event: AstrMessageEvent, args: GreedyStr = ""):
+        """说明 DSH 统计的实际作用范围。"""
+        await self._agent_command(event, "stats", args)
+
+    @filter.command("set")
+    async def set_notice(self, event: AstrMessageEvent, args: GreedyStr = ""):
+        """说明 Agent 配置的实际管理入口。"""
+        await self._agent_command(event, "set", args)
+
+    @filter.command("unset")
+    async def unset_notice(self, event: AstrMessageEvent, args: GreedyStr = ""):
+        """说明 Agent 配置的实际管理入口。"""
+        await self._agent_command(event, "unset", args)
+
+    async def _agent_command(self, event, action, args=""):
+        event.set_extra("v2_deterministic_handled", True)
+        task = asyncio.current_task()
+        self._active.add(task)
+        trace_token = None
+        trace = None
+
+        async def reply(text):
+            async def native_send(value):
+                self.onebot_audit.bind(getattr(event, "bot", None))
+                await event.send(MessageChain().message(value))
+            return await trace.send(native_send, text, "control") if trace else await native_send(text)
+
+        try:
+            if self._closing or not self._initialized or not self._commands_ready:
+                await reply("Agent 命令尚未就绪，请稍后再试。")
+                return
+            if event.get_platform_name() != "aiocqhttp":
+                await reply("这些 Agent 命令用于当前已启用的 QQ 会话。")
+                return
+            from data.plugins.v2_journal.journal import message_from_onebot
+            raw = getattr(event.message_obj, "raw_message", None)
+            message = message_from_onebot(event.get_platform_id(), raw)
+            if not message.message_id or message.direction != "inbound":
+                raise ValueError("Agent command requires an inbound canonical message")
+            domain = classify(message, self.owners)
+            if message.conversation_key not in self.allowed_conversations:
+                await reply("当前会话尚未启用 Agent。")
+                return
+            trace = self.audit.trace(message.conversation, message.message_id, domain)
+            trace_token = CURRENT_TRACE.set(trace)
+            trace.emit("control/request", control=action)
+            if action == "help":
+                from .command_surface import help_text
+                await reply(help_text())
+                return
+            if action == 'provider':
+                from .model_command import describe_model, select_route
+                argument = args.strip()
+                changing = argument not in {'', 'list'}
+                if (changing and message.conversation_key.startswith('group:') and
+                        Owner(message.platform_id, message.bot_id, message.actor_id) not in self.owners):
+                    await reply('群聊共享一个 Agent 会话，仅 Bot Owner 可以切换模型；/provider 和 /provider list 可查看模型。')
+                    return
+                service = await self._service_for(message)
+                view = await service.model_status(message.conversation, get_group=event.get_group)
+                if not changing:
+                    await reply(describe_model(view, listing=argument == 'list'))
+                    return
+                try:
+                    route = select_route(argument, view['choices'])
+                except ValueError as exc:
+                    await reply(str(exc))
+                    return
+                if route is None:
+                    view = await service.use_default_model(message.conversation, get_group=event.get_group)
+                else:
+                    view = await service.select_model(message.conversation, *route, get_group=event.get_group)
+                current = view['current']
+                await reply(f"已将本会话模型切换为 {current['provider']} / {current['model']}。后续轮次使用此模型，上下文、人格和场景保留。")
+                return
+            if action in {"stats", "set", "unset"}:
+                notices = {
+                    "stats": "/stats 尚未接通 DSH 的 Token 统计。Bot Owner 可用 /v2agent metrics 查看当前运行周期的请求与完成情况。",
+                    "set": "/set 尚未接通 DSH 配置。Bot Owner 可用 /v2agent persona 或 scene 管理当前会话选项，指南文档支持热更新。",
+                    "unset": "/unset 尚未接通 DSH 配置。Bot Owner 可用 /v2agent persona 或 scene 管理当前会话选项，指南文档支持热更新。",
+                }
+                await reply(notices[action])
+                return
+            if (message.conversation_key.startswith("group:") and
+                    Owner(message.platform_id, message.bot_id, message.actor_id) not in self.owners):
+                await reply("群聊共享一个 Agent 会话，仅 Bot Owner 可以使用 /new、/reset、/stop。")
+                return
+            if args.strip():
+                await reply("用法：/" + action)
+                return
+            service = self._cached_service_for(message)
+            barrier = None
+            if service is not None and action in {"new", "reset"}:
+                barrier = service.begin_reset(message.conversation, message.message_id)
+            if service is None:
+                service = await self._service_for(message)
+            if action in {"new", "reset"}:
+                await service.reset_conversation(message.conversation, message.message_id,
+                                                 get_group=event.get_group, barrier=barrier)
+                await reply("已开始新的 Agent 对话，历史检索从本次重置后开始。人格、场景和工作区文件保留。")
+            elif action == "stop":
+                accepted = await service.cancel(message.conversation)
+                await reply("已请求停止当前 Agent 执行。已发生的操作会保留；Bot Owner 可用 /v2agent status 核对状态。"
+                            if accepted else "当前没有可停止的模型执行。已有待核对结果仍需由 Bot Owner 核对恢复。")
+        except PendingTurnError:
+            await reply("当前会话有结果待核对，本次未切换模型。请由 Bot Owner 使用 /v2agent status 核对后再继续。"
+                        if action == 'provider' else
+                        "当前会话有结果待核对，尚未重置。请由 Bot Owner 使用 /v2agent status 核对，再按提示恢复。")
+        except ResetError as exc:
+            await reply(str(exc))
+        except Exception:
+            self.logger.exception("V2 Agent command %s failed", action)
+            await reply("模型目录同步或切换尚未完成，请检查 DSH Web 模型设置或运行日志，再查询 /provider。"
+                        if action == 'provider' else
+                        "Agent 命令未完成，请由 Bot Owner 检查运行日志；未确认重置或停止成功。")
+        finally:
+            if trace_token is not None:
+                CURRENT_TRACE.reset(trace_token)
+            self._active.discard(task)
+            event.stop_event()
 
     def _migration_marker(self) -> Path:
         return self.runtime_root / "execution-migration-approved.json"
@@ -229,6 +408,15 @@ class V2DshRouter(star.Star):
         from data.plugins.v2_journal.journal import Conversation
         return Conversation(platform_id, bot_id, key)
 
+    async def _background_event(self, event):
+        """Route native task events only to the service owning the parent SID."""
+        if getattr(self, "_closing", False):
+            return False
+        for service in tuple(getattr(self, "services", {}).values()):
+            if await service.handle_background_event(event):
+                return True
+        return False
+
     async def _ensure_group_service(self, platform_id: str, bot_id: str, group_id: str):
         if not all(isinstance(value, str) and value for value in (platform_id, bot_id, group_id)):
             raise ValueError("group execution identity is incomplete")
@@ -267,6 +455,8 @@ class V2DshRouter(star.Star):
                 instructions=self.repo / "dsh/profile/agent-group-sandbox.md",
                 enable_authorization=True, execution_profile="group-sandbox",
                 group_runtime=group_runtime,
+                background_callback_url=self.mcp.background_callback_url,
+                background_callback_token=self.mcp.background_callback_token,
             )
             service = ChatService(self.mcp.journal, state, client, self.mcp,
                                   trusted_sources=True, audit=self.audit,
@@ -286,6 +476,18 @@ class V2DshRouter(star.Star):
                     raise
                 self._migration_marker().unlink(missing_ok=True)
             return service
+
+    def _cached_service_for(self, message):
+        """Select a prepared service without yielding before a reset barrier."""
+        services = getattr(self, "services", {})
+        if message.conversation_key.startswith("group:"):
+            group_id = message.conversation_key.removeprefix("group:")
+            for name, runtime in getattr(self, "_group_runtimes", {}).items():
+                if (runtime["platform_id"], runtime["bot_id"], runtime["group_id"]) == (
+                        message.platform_id, message.bot_id, group_id):
+                    return services.get(name)
+            return None
+        return services.get(classify(message, self.owners))
 
     async def _service_for(self, message):
         if message.conversation_key.startswith("group:"):
@@ -378,13 +580,15 @@ class V2DshRouter(star.Star):
                     for group_id in admitted_group_ids
                 )
         connected = self._onebot_connected()
+        commands_ready = bool(getattr(self, "_commands_ready", True))
         core = bool(self._initialized and not self._closing and journal_ready and state_ready
-                    and acp_ready and owner_ready and groups_ready)
+                    and acp_ready and owner_ready and groups_ready and commands_ready)
         return {"pid": os.getpid(), "core_ready": core, "ready": core and connected,
                 "closing": self._closing, "onebot_connected": connected, "journal_ready": journal_ready,
                 "journal_readable": bool(journal_readable), "journal_capture_intact": bool(capture_intact),
                 "journal_collector_ready": collector_ready, "journal_capture_failures": capture_failures,
                 "state_ready": state_ready, "acp_ready": bool(acp_ready),
+                "command_surface_ready": commands_ready,
                 "owner_host_ready": owner_ready, "group_sandboxes_ready": groups_ready,
                 "active_turns": len(self._active), "queued": sum(s._queued for s in self.services.values()),
                 "pending_conversations": pending, "quarantined_sessions": quarantined,
@@ -459,15 +663,36 @@ class V2DshRouter(star.Star):
             if kind == "status" and not value:
                 status = await service.status(message.conversation)
                 labels = {"not-started": "尚未开始", "running": "执行中", "pending": "结果待核对", "idle": "空闲"}
+                persona_label = ("本群 persona.md" if service.execution_profile == "group-sandbox"
+                                 else status["persona"])
+                fault_label = {"infrastructure": "运行通道故障", "unknown": "执行结果未知",
+                               "cancelled": "操作已取消，结果待核对"}.get(
+                                   status.get("pending_fault_kind"), "")
+                fault_code = status.get("pending_fault_code")
+                fault_detail = ("；原因：" + fault_label +
+                                (("（" + fault_code + "）") if fault_code else "")
+                                if fault_label else "")
+                details = status.get("pending_fault_details") or {}
+                confirmed_tools = details.get("confirmed_tools", [])
+                unknown_tools = details.get("unknown_tools", [])
+                if confirmed_tools:
+                    fault_detail += "；已确认完成的工具：" + "、".join(confirmed_tools[:8])
+                if unknown_tools:
+                    fault_detail += "；结果未知的工具：" + "、".join(unknown_tools[:8])
+                if fault_code in {"NO_TERMINAL_RECEIPT", "SESSION_DRAIN_FAILED"}:
+                    fault_detail += "；未收到原生终态，工具执行和消息发送状态无法确认"
                 await reply("Agent：" + labels[status["state"]]
-                            + "；人格：" + status["persona"] + "；场景：" + status["scene"]
+                            + "；人格：" + persona_label + "；场景：" + status["scene"]
                             + "；模式：" + ("Owner 主机执行" if service.execution_profile == "owner-host"
                                            else "群聊隔离执行" if service.execution_profile == "group-sandbox"
                                            else "安全聊天")
                             + ("；待核对 Journal：" + str(status["pending_upper_cursor"])
-                               + "。核对执行和发送结果后，可用 /v2agent recover "
+                               + fault_detail + "。核对已发生的执行和发送结果后，可用 /v2agent recover "
                                + str(status["pending_upper_cursor"]) + " 跳过该轮并解除暂停，系统不会重试旧输入。"
                                if status["state"] == "pending" else "。"))
+                return
+            if kind == "persona" and service.execution_profile == "group-sandbox":
+                await reply("本群人格由 /workspace/persona.md 定义。请在普通请求中说明想调整的风格并让我编辑这个文件；保存后下一轮自动生效。")
                 return
             if kind in choices and value == "list":
                 await reply(("可用人格：" if kind == "persona" else "可用场景：")
@@ -497,6 +722,44 @@ class V2DshRouter(star.Star):
                 CURRENT_TRACE.reset(trace_token)
             self._active.discard(task)
 
+    def _file_transfer(self, event, message, service):
+        profile = service.execution_profile
+        workspace = Path(service.dsh.settings['workspace'])
+        verify = None
+        storage_root = workspace
+        if profile == 'group-sandbox':
+            module = _group_runtime_module(self.repo)
+            verify = lambda: module.verified_group_workspace(workspace)
+        else:
+            identity = '\0'.join((message.platform_id, message.bot_id, message.conversation_key))
+            # Existing stopped-writer backups already include plugin_data.
+            # Owner's execution cwd stays unchanged; only received attachments
+            # go to this private durable inbox, outside version-controlled code.
+            storage_root = (Path(star.StarTools.get_data_dir('v2_dsh_router')) / 'attachments'
+                            / hashlib.sha256(identity.encode()).hexdigest())
+            storage_root.mkdir(parents=True, mode=0o700, exist_ok=True)
+            if profile == 'safe-chat':
+                workspace = storage_root
+
+        async def resolve(segment):
+            return await resolve_onebot_file(event.bot, message.conversation, segment)
+
+        async def send_file(path, name):
+            self.onebot_audit.bind(event.bot)
+            async def native_send(_):
+                await event.send(MessageChain([File(name=name, file=str(path))]))
+            trace = transfer.trace
+            if trace:
+                await trace.send(native_send, None, 'mcp')
+            else:
+                await native_send(None)
+
+        transfer = FileTransfer(self.mcp.journal, message.conversation, workspace,
+                                profile=profile, verify_root=verify, resolve=resolve, send=send_file,
+                                spool_dir=Path(star.StarTools.get_data_dir('v2_dsh_router')) / 'file-spool',
+                                storage_root=storage_root)
+        return transfer
+
     @filter.event_message_type(filter.EventMessageType.ALL, priority=-maxsize)
     async def route_chat(self, event: AstrMessageEvent) -> None:
         raw = getattr(event.message_obj, "raw_message", None)
@@ -517,16 +780,38 @@ class V2DshRouter(star.Star):
             service = await self._service_for(message)
             domain = classify(message, self.owners)
 
+            self.onebot_audit.bind(getattr(event, "bot", None))
+            messaging = QQMessaging(event, self.mcp.journal, message.conversation)
+
             async def send(reply: str) -> None:
-                self.onebot_audit.bind(getattr(event, "bot", None))
-                await event.send(MessageChain().message(reply))
+                await messaging.send_final(reply)
 
             self._active.add(task)
             turn_started = True
+            async def resolve_image(segment):
+                return await resolve_onebot_file(event.bot, message.conversation, segment)
+
+            async def send_meme(path):
+                from astrbot.api.message_components import Image
+                async def native_send(_):
+                    await event.send(MessageChain([Image.fromFileSystem(str(path))]))
+                trace = CURRENT_TRACE.get()
+                if trace:
+                    await trace.send(native_send, None, 'mcp')
+                else:
+                    await native_send(None)
+
             await service.handle(
                 message.conversation, message.message_id, send,
-                get_group=event.get_group,
+                get_group=event.get_group, files=self._file_transfer(event, message, service),
+                vision=QQVision(resolve_image), messaging=messaging,
+                memes=MemeLibrary(self.runtime_root.parent / 'meme', send_meme),
+                plugins=PluginCapabilities(self.context, event),
             )
+        except ReplyContentError as exc:
+            self.logger.warning("V2 withheld invalid model reply (code=%s)", exc.code)
+            if turn_started and message is not None:
+                await notify_turn_error(event, message.conversation, self.owners, "invalid_reply", self.logger)
         except FinalReplyDeliveryError as exc:
             self.logger.exception("V2 final reply delivery failed for QQ message %s; turn consumed, no replay",
                                   raw.get("message_id"))
@@ -534,21 +819,29 @@ class V2DshRouter(star.Star):
                             else "journalctl --user -u chatbot-v2-agent.service")
             await notify_delivery_error(event, message.conversation, self.owners, exc, self.logger,
                                         log_location)
+        except ModelTurnError as exc:
+            self.logger.warning("V2 model turn terminated before any tool call for QQ message %s (code=%s)",
+                                raw.get("message_id"), exc.code)
+            if turn_started and message is not None:
+                await notify_turn_error(event, message.conversation, self.owners, "model", self.logger,
+                                        code=exc.code, tools_completed=exc.tools_completed)
         except DshTurnCancelled:
             self.logger.info("V2 DSH cancellation confirmed for QQ message %s; outcome pending review",
                              raw.get("message_id"))
-            if turn_started and message is not None:
+            reset_cancel = (turn_started and message is not None and
+                            callable(getattr(service, "is_reset_cancellation", None)) and
+                            service.is_reset_cancellation(message.conversation, message.message_id))
+            if turn_started and message is not None and not reset_cancel:
                 await notify_turn_error(event, message.conversation, self.owners, "cancelled", self.logger)
         except PendingTurnError as exc:
             self.logger.error("V2 DSH conversation paused: %s", exc)
             if turn_started and message is not None:
                 try:
-                    state = await asyncio.to_thread(service.state.get, message.conversation.platform_id,
-                                                    message.conversation.bot_id, message.conversation.key)
+                    status = await service.status(message.conversation)
                 except Exception:
-                    state = None
-                    self.logger.exception("V2 cannot read pending cursor for turn notice")
-                pending_cursor = getattr(state, "pending_upper_cursor", None)
+                    status = {}
+                    self.logger.exception("V2 cannot read pending fault status for turn notice")
+                pending_cursor = status.get("pending_upper_cursor")
                 notice_key = (message.conversation.platform_id, message.conversation.bot_id,
                               message.conversation.key, pending_cursor)
                 notices = getattr(self, "_pending_notice_keys", None)
@@ -557,16 +850,25 @@ class V2DshRouter(star.Star):
                 if notice_key not in notices:
                     notices.difference_update({key for key in notices if key[:3] == notice_key[:3]})
                     notices.add(notice_key)
-                    await notify_turn_error(event, message.conversation, self.owners, "pending", self.logger)
+                    fault_kind = status.get("pending_fault_kind")
+                    notice_kind = fault_kind if fault_kind in {"infrastructure", "unknown"} else "pending"
+                    await notify_turn_error(event, message.conversation, self.owners, notice_kind, self.logger)
         except Exception:
             self.logger.exception("V2 DSH turn failed for QQ message %s", raw.get("message_id"))
-            if turn_started and message is not None:
-                await notify_turn_error(event, message.conversation, self.owners, "failed", self.logger)
+            if message is not None and message.conversation_key in self.allowed_conversations:
+                kind = "infrastructure" if service is None else "failed"
+                await notify_turn_error(event, message.conversation, self.owners, kind, self.logger,
+                                        code="INITIALIZATION_FAILED" if service is None else None)
         finally:
             self._active.discard(task)
 
     async def _close_runtime(self) -> None:
         errors = []
+        for service in tuple(getattr(self, "services", {}).values()):
+            try:
+                await service.close_background()
+            except BaseException as error:
+                errors.append(error)
         for client in reversed(tuple(getattr(self, "clients", {}).values())):
             try:
                 await asyncio.to_thread(client.close)
@@ -596,4 +898,11 @@ class V2DshRouter(star.Star):
                     await asyncio.shield(draining)
                 except asyncio.CancelledError:
                     continue
-        await self._close_runtime()
+        try:
+            await self._close_runtime()
+        finally:
+            if getattr(self, "_command_surface", None) is not None:
+                from .command_surface import restore_command_surface
+                await restore_command_surface(self._command_surface)
+                self._command_surface = None
+                self._commands_ready = False

@@ -42,6 +42,13 @@ try {
   assert.equal(toolGuard({
     agent, name: 'read', arguments: { file_path: '/etc/hostname' }, signal: new AbortController().signal,
   }), undefined, 'verified Owner may call native host file tools')
+  for (const name of ['mcp__astrbot__qq_prepare_reply', 'mcp__astrbot__current_group_members', 'mcp__astrbot__qq_file_receive', 'mcp__astrbot__qq_file_send']) {
+    assert.equal(toolGuard({agent, name, token: name, arguments: {}, signal: new AbortController().signal}),
+      undefined, `verified Owner may call ${name}`)
+  }
+  assert.match(String(toolGuard({agent, name: 'mcp__astrbot__qq_file_read_any_path',
+    arguments: {}, signal: new AbortController().signal})), /tool is unavailable/,
+  'file tools are allowlisted by exact name')
   assert.match(String(toolGuard({
     agent, name: 'bash', arguments: { command: 'sleep 1', run_in_background: true },
     signal: new AbortController().signal,
@@ -53,6 +60,8 @@ try {
   const race = { agent, name: 'read', token: 'source-race', arguments: { file_path: '/etc/hostname' } }
   assert.equal(toolGuard(race), undefined)
   writeFileSync(sourcePath, JSON.stringify({ ...source, nonce: 'rotated-before-execute' }), { mode: 0o600 })
+  assert.match(String(toolGuard({agent, name: 'mcp__astrbot__qq_file_send', token: 'stale-file', arguments: {}})),
+    /current turn source changed/, 'file tools also require the latest turn source')
   let reachedTool = false
   await assert.rejects(listeners.get('tools/execute')(race, async () => { reachedTool = true }), /current turn source changed/)
   assert.equal(reachedTool, false, 'source is rechecked at tools/execute immediately before the native operation')

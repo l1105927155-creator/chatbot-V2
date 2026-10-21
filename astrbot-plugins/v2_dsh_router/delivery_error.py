@@ -3,6 +3,11 @@
 import asyncio
 import re
 
+try:
+    from .reply_mentions import send_reply
+except ImportError:  # Support contract tests loading the plugin modules directly.
+    from reply_mentions import send_reply
+
 
 def error_summary(error):
     # Never forward exception strings: they may contain reply text, URLs or credentials.
@@ -27,7 +32,7 @@ async def notify_delivery_error(event, conversation, owners, error, logger, log_
                   f"错误记录位置：{log_location or 'Bot 服务运行日志'}\n不影响后续消息处理。")
     try:
         # Notification failure must not reopen the completed turn or trigger a retry loop.
-        await asyncio.wait_for(event.send(chain), timeout=10)
+        await asyncio.wait_for(send_reply(event, chain), timeout=10)
     except Exception:
         logger.exception("V2 delivery error notification failed; no retry")
 

@@ -39,7 +39,7 @@ def _group_trigger(event: Any, raw: Mapping, segments: list) -> bool:
 
 
 def should_route(event: Any, raw: Any) -> bool:
-    """Admit addressed text or a bare Bot mention unless already claimed.
+    """Admit addressed text/attachments or a bare Bot mention unless already claimed.
 
     Pinned AstrBot clears each plugin handler's result before running the next
     one, so ``event.get_result()`` is not a reliable ownership signal at the
@@ -72,18 +72,12 @@ def should_route(event: Any, raw: Any) -> bool:
         return False
     if plain:
         return True
-    # Only extend the no-text case to an actual call of this Bot. Media,
-    # reply-only messages, @all and mentions of other members stay excluded.
-    # Whitespace text segments are common in real QQ mention payloads.
-    return raw["message_type"] == "group" and all(
-        isinstance(segment, Mapping)
-        and isinstance(segment.get("data"), Mapping)
-        and (
-            (segment.get("type") == "at"
-             and str(segment["data"].get("qq", "")) == str(raw.get("self_id", "")))
-            or (segment.get("type") == "text"
-                and isinstance(segment["data"].get("text"), str)
-                and not segment["data"]["text"].strip())
-        )
-        for segment in segments
-    )
+    # An attachment is itself a user message. Group messages still require the
+    # real mention/resolved Bot reply checked above; upload notices stay passive.
+    if any(isinstance(segment, Mapping) and segment.get('type') in {'file', 'image', 'record', 'video'}
+           and isinstance(segment.get('data'), Mapping) for segment in segments):
+        return True
+    # Group addressing was already verified above. An actual Bot mention or
+    # platform-resolved Bot reply is itself a wake, even without plain text.
+    # Other components do not undo that explicit address.
+    return raw["message_type"] == "group"

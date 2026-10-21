@@ -6,6 +6,7 @@ of the plugin loader. One row represents one platform message ID.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import time
@@ -13,6 +14,14 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
+
+
+MEDIA_METADATA_KEYS = frozenset({
+    "busid", "cache", "c", "duration", "file", "file_id", "file_name",
+    "file_size", "id", "magic", "md5", "name", "path", "proxy", "size",
+    "media_type", "sub_type", "subtype", "summary", "thumb", "thumbnail",
+    "timeout", "url",
+})
 
 
 @dataclass(frozen=True)
@@ -65,6 +74,19 @@ def _small_scalar(value: Any) -> str | int | float | bool | None:
     return value
 
 
+def _media_metadata(data: Mapping[str, Any]) -> dict[str, str | int | float | bool]:
+    """Return bounded media metadata without colliding with segment.type."""
+    result: dict[str, str | int | float | bool] = {}
+    for source_key, raw_value in data.items():
+        key = "media_type" if source_key == "type" else source_key
+        if key not in MEDIA_METADATA_KEYS:
+            continue
+        value = _small_scalar(raw_value)
+        if value is not None:
+            result[key] = value
+    return result
+
+
 def normalize_segments(segments: list[dict[str, Any]]) -> tuple[dict[str, Any], str | None]:
     """Retain useful OneBot metadata without storing inline media payloads."""
     normalized: list[dict[str, Any]] = []
@@ -97,14 +119,81 @@ def normalize_segments(segments: list[dict[str, Any]]) -> tuple[dict[str, Any], 
             normalized.append({"type": "reply", "message_id": reference})
             continue
         item: dict[str, Any] = {"type": kind or "unknown"}
-        # QQ media feedback provides file IDs, names, sizes, and sometimes URLs.
-        # Keep these scalar references, but never keep a base64/data payload.
-        for key in ("file_id", "file", "name", "file_name", "file_size", "url", "id", "summary"):
-            value = _small_scalar(data.get(key))
-            if value is not None:
-                item[key] = value
+        # Keep the adapter's scalar metadata intact (including NapCat's busid),
+        # while excluding inline media and oversized payload-like values.
+        item.update(_media_metadata(data))
         normalized.append(item)
     return {"text": "".join(text_parts), "segments": normalized}, reply_to
+
+
+def message_from_group_upload(
+    platform_id: str,
+    raw: Mapping[str, Any],
+    *,
+    observed_at_ns: int | None = None,
+) -> Message:
+    """Build an idempotent Journal reference for a OneBot group_upload notice.
+
+    OneBot v11 upload notices have no message_id. The Journal reference below
+    is intentionally synthetic and must not be presented as a QQ message ID.
+    """
+    if raw.get("post_type") != "notice" or raw.get("notice_type") != "group_upload":
+        raise ValueError("unsupported OneBot notice")
+    bot_id = _identifier(raw.get("self_id"))
+    group_id = _identifier(raw.get("group_id"))
+    actor_id = _identifier(raw.get("user_id"))
+    if not platform_id or not bot_id or not group_id or not actor_id:
+        raise ValueError("platform, bot, group, and uploader IDs are required")
+    file_data = raw.get("file")
+    if not isinstance(file_data, Mapping):
+        raise ValueError("group_upload notice has no file metadata")
+    metadata = _media_metadata(file_data)
+    # NapCat's busid is a business category (often 102), not a unique file
+    # identity. Hash the full event tuple; file.id is mandatory so two files
+    # from the same second and busid cannot collapse into one Journal row.
+    file_id_value = _small_scalar(file_data.get("id"))
+    if file_id_value is None:
+        raise ValueError("group_upload notice has no stable file id")
+    metadata["id"] = file_id_value
+    # FileTransfer.receive accepts the native file segment shape and resolves
+    # the resource from file_id or id. Keep both aliases at the segment root.
+    metadata.setdefault("file_id", file_id_value)
+    timestamp = raw.get("time")
+    try:
+        created_at = int(timestamp) if timestamp is not None else None
+    except (ValueError, TypeError):
+        created_at = None
+    if created_at is None or created_at < 0:
+        raise ValueError("group_upload notice has no valid event time")
+    identity = json.dumps(
+        [str(file_id_value), _identifier(file_data.get("busid")), created_at],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    reference_id = "notice:group_upload:" + hashlib.sha256(identity).hexdigest()
+    content = {
+        "text": "",
+        "segments": [{"type": "file", **metadata}],
+        "event_type": "group_upload",
+        "message_id_is_synthetic": True,
+        "is_message_delivery_receipt": False,
+    }
+    direction = "outbound" if actor_id == bot_id else "inbound"
+    return Message(
+        platform_id=platform_id,
+        bot_id=bot_id,
+        conversation_key=f"group:{group_id}",
+        conversation_type="group",
+        direction=direction,
+        actor_id=actor_id,
+        actor_name=None,
+        source="unknown" if direction == "outbound" else "user",
+        message_id=reference_id,
+        reply_to=None,
+        content=content,
+        created_at=created_at,
+        observed_at_ns=observed_at_ns if observed_at_ns is not None else time.time_ns(),
+    )
 
 
 def message_from_onebot(
@@ -366,12 +455,19 @@ class JournalStore:
             raise ValueError("limit must be between 1 and 500")
         return limit
 
-    def recent(self, conversation: Conversation, limit: int = 50) -> list[JournalRow]:
+    @staticmethod
+    def _after_id(after_id: int) -> int:
+        if isinstance(after_id, bool) or not isinstance(after_id, int) or after_id < 0:
+            raise ValueError("after_id must be a non-negative integer")
+        return after_id
+
+    def recent(self, conversation: Conversation, limit: int = 50, *, after_id: int = 0) -> list[JournalRow]:
+        after_id = self._after_id(after_id)
         with self._db() as conn:
             rows = conn.execute(
                 """SELECT * FROM journal WHERE platform_id=? AND bot_id=?
-                   AND conversation_key=? ORDER BY journal_id DESC LIMIT ?""",
-                (conversation.platform_id, conversation.bot_id, conversation.key, self._limit(limit)),
+                   AND conversation_key=? AND journal_id>? ORDER BY journal_id DESC LIMIT ?""",
+                (conversation.platform_id, conversation.bot_id, conversation.key, after_id, self._limit(limit)),
             ).fetchall()
         return [self._row(row) for row in reversed(rows)]
 
@@ -384,12 +480,16 @@ class JournalStore:
             ).fetchall()
         return [self._row(row) for row in rows]
 
-    def before(self, conversation: Conversation, journal_id: int, limit: int = 100) -> list[JournalRow]:
+    def before(self, conversation: Conversation, journal_id: int, limit: int = 100, *,
+               after_id: int = 0) -> list[JournalRow]:
+        after_id = self._after_id(after_id)
         with self._db() as conn:
             rows = conn.execute(
                 """SELECT * FROM journal WHERE platform_id=? AND bot_id=?
-                   AND conversation_key=? AND journal_id<? ORDER BY journal_id DESC LIMIT ?""",
-                (conversation.platform_id, conversation.bot_id, conversation.key, journal_id, self._limit(limit)),
+                   AND conversation_key=? AND journal_id<? AND journal_id>?
+                   ORDER BY journal_id DESC LIMIT ?""",
+                (conversation.platform_id, conversation.bot_id, conversation.key, journal_id, after_id,
+                 self._limit(limit)),
             ).fetchall()
         return [self._row(row) for row in reversed(rows)]
 
@@ -400,6 +500,7 @@ class JournalStore:
         *,
         before_id: int | None = None,
         limit: int = 100,
+        after_id: int = 0,
     ) -> list[JournalRow]:
         """Search text in one conversation, returning rows in journal order.
 
@@ -412,14 +513,17 @@ class JournalStore:
             raise ValueError("query must be at most 200 characters")
         if before_id is not None and (not isinstance(before_id, int) or before_id <= 0):
             raise ValueError("before_id must be a positive integer")
+        after_id = self._after_id(after_id)
         limit = self._limit(limit)
         clauses = [
             "platform_id=?", "bot_id=?", "conversation_key=?",
+            "journal_id>?",
             "lower(json_extract(content_json, '$.text')) LIKE lower(?) ESCAPE '\\'",
         ]
         escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         params: list[Any] = [
             conversation.platform_id, conversation.bot_id, conversation.key,
+            after_id,
             f"%{escaped}%",
         ]
         if before_id is not None:

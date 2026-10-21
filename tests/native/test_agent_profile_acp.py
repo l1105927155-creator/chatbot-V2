@@ -27,6 +27,7 @@ class ObjectResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 root = Path(os.environ["V2_REPO_ROOT"])
+guide_text = (root / "dsh/plugins/agent-profile/decision-guide.md").read_text().strip()
 sys.path.insert(0, str(root / "astrbot-plugins" / "v2_dsh_router"))
 from persona_state import PersonaStateStore
 from scene_state import SceneStateStore
@@ -123,7 +124,7 @@ with TemporaryDirectory(prefix="agent-profile-acp-", dir=root / ".runtime") as t
         assert "before_id 设为" not in first_request
         assert "Journal ID 是全局编号" not in first_request
         assert calls[0]["skills"] == initial["skills"]
-        assert json.dumps(calls[0]["messages"], ensure_ascii=False).count("当前可见信息足够时") == 1
+        assert json.dumps(calls[0]["messages"], ensure_ascii=False).count(json.dumps(guide_text, ensure_ascii=False)[1:-1]) == 1
 
         def change_count():
             return len(skill_changes.read_text(encoding="utf-8").splitlines()) if skill_changes.exists() else 0
@@ -151,7 +152,7 @@ with TemporaryDirectory(prefix="agent-profile-acp-", dir=root / ".runtime") as t
         assert len(calls) == 2, calls
         assert calls[1]["sessionId"] == session_id
         assert "分析型 Agent-Bot" in json.dumps(calls[1]["messages"], ensure_ascii=False)
-        assert json.dumps(calls[1]["messages"], ensure_ascii=False).count("当前可见信息足够时") == 1
+        assert json.dumps(calls[1]["messages"], ensure_ascii=False).count(json.dumps(guide_text, ensure_ascii=False)[1:-1]) == 1
         assert "你是这段 QQ 对话中的 Agent-Bot" not in json.dumps(calls[1]["messages"], ensure_ascii=False)
         assert calls[1]["tools"] == initial["tools"]
         assert "web-research" in calls[1]["skills"], calls[1]["skills"]
@@ -189,7 +190,7 @@ with TemporaryDirectory(prefix="agent-profile-acp-", dir=root / ".runtime") as t
         assert len(calls) == 3, calls
         assert calls[2]["sessionId"] == session_id
         assert "分析型 Agent-Bot" in json.dumps(calls[2]["messages"], ensure_ascii=False)
-        assert json.dumps(calls[2]["messages"], ensure_ascii=False).count("当前可见信息足够时") == 1
+        assert json.dumps(calls[2]["messages"], ensure_ascii=False).count(json.dumps(guide_text, ensure_ascii=False)[1:-1]) == 1
         assert calls[2]["tools"] == initial["tools"]
         assert calls[2]["skills"] == resumed["skills"]
         resumed_history = json.dumps(calls[2]["messages"], ensure_ascii=False)

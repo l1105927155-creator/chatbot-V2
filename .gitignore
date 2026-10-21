@@ -9,3 +9,7 @@ __pycache__/
 
 # AstrBot import-time fallback data; never commit generated config or secrets.
 /data/
+
+# Local QQ attachments and temporary native-test profiles.
+/inbox/
+/dsh/.native-*/

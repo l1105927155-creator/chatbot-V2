@@ -21,6 +21,8 @@ async def main():
     router.owners = frozenset()
     router.logger = logging.getLogger('delivery-test')
     router.audit = NS(path='/test/audit/events.jsonl', write_errors=0)
+    # This contract covers notification drain during shutdown, not file transfer.
+    router._file_transfer = lambda *_args: None
     started, release, closed = asyncio.Event(), asyncio.Event(), asyncio.Event()
     async def handle(*args, **kwargs):
         raise m.FinalReplyDeliveryError(ConnectionError('test'))

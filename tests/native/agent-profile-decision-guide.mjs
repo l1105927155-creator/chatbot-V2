@@ -14,7 +14,7 @@ const guideFile = join(guides, 'guide.md')
 const instructionsFile = join(guides, 'profile.md')
 const projectGuideFile = join(guides, 'AGENTS.md')
 writeFileSync(projectGuideFile, '仅 Owner 项目指南 ONE')
-const guideText = readFileSync(new URL('../../dsh/plugins/agent-profile/decision-guide.md', import.meta.url), 'utf8')
+const guideText = readFileSync(new URL('../../dsh/plugins/agent-profile/decision-guide.md', import.meta.url), 'utf8') + '\nDECISION_GUIDE_VERSION_ONE\n'
 writeFileSync(guideFile, guideText)
 writeFileSync(instructionsFile, 'Deployment baseline')
 const ctx = new Context()
@@ -102,13 +102,9 @@ try {
   }
 
   const text = renderPrompt(one)
-  assert.match(text, /当前可见信息足够时/)
-  const principles = sectionText(one, 'v2:decision-guide')
-  assert.match(principles, /需要专门方法时才加载相关 Skill/)
-  assert.match(principles, /身份与权限由宿主核验/)
-  assert.match(principles, /核验结果后再声称完成/)
-  assert.ok(principles.length < 500, 'standing principles must stay small; procedures belong to tools/Skills')
-  assert.doesNotMatch(principles, /qq_send_origin|Markdown|50到200|300到500|阴阳怪气|before_id|nonce/)
+  assert.match(text, /DECISION_GUIDE_VERSION_ONE/)
+  assert.equal(sectionText(one, 'v2:decision-guide'), guideText.trim(),
+    'load the actual editable guide verbatim, without imposing frozen wording')
   assert.equal(one.sections.filter(section => section.name === 'v2:decision-guide').length, 1)
   assert.equal(two.sections.filter(section => section.name === 'v2:decision-guide').length, 1)
   assert.equal(untouched.sections.some(section => section.name === 'v2:decision-guide'), false)
@@ -123,7 +119,7 @@ try {
   assert.equal(changed.web_search.description.includes('可能变化'), true)
   assert.equal(changed.web_fetch.description.includes('具体相关 URL'), true)
   assert.equal(changed.bash.description.includes('Owner 独立私聊'), true)
-  assert.match(renderPrompt(newlyCreated), /需要专门方法时才加载相关 Skill/)
+  assert.match(renderPrompt(newlyCreated), /DECISION_GUIDE_VERSION_ONE/)
   for (const original of base) {
     const actual = changed[original.name]
     assert.ok(actual)
@@ -143,7 +139,7 @@ try {
 
   assert.match(sectionText(one, 'v2:owner-project-guide'), /仅 Owner 项目指南 ONE/)
   writeFileSync(projectGuideFile, '仅 Owner 项目指南 TWO')
-  writeFileSync(guideFile + '.new', guideText.replace('当前可见信息足够时', '热更新指南版本二'))
+  writeFileSync(guideFile + '.new', guideText.replace('DECISION_GUIDE_VERSION_ONE', '热更新指南版本二'))
   renameSync(guideFile + '.new', guideFile)
   writeFileSync(instructionsFile, '热更新 Profile 版本二')
   const refreshed = await ctx.systemPrompt.assemble({ scope: owner })
@@ -152,7 +148,7 @@ try {
   const removed = await ctx.systemPrompt.assemble({ scope: owner })
   assert.equal(sectionText(removed, 'v2:owner-project-guide'), '')
   assert.match(sectionText(refreshed, 'v2:decision-guide'), /热更新指南版本二/)
-  assert.doesNotMatch(sectionText(refreshed, 'v2:decision-guide'), /当前可见信息足够时/)
+  assert.doesNotMatch(sectionText(refreshed, 'v2:decision-guide'), /DECISION_GUIDE_VERSION_ONE/)
   assert.match(sectionText(refreshed, 'deployment:persona-prefix'), /热更新 Profile 版本二/)
   assert.doesNotMatch(sectionText(refreshed, 'deployment:persona-prefix'), /Deployment baseline/)
   assert.equal(byName(refreshed.tools).keep.description, base[3].description)

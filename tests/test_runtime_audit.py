@@ -50,7 +50,7 @@ def test_native_tool_notifications_are_correlated_without_model_payloads(tmp_pat
              "status": "in_progress", "rawInput": {"token": secret}},
             {"sessionUpdate": "tool_call_update", "toolCallId": secret, "status": "failed",
              "content": [{"text": secret}]},
-            {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": secret}},
+            {"sessionUpdate": "agent_message_chunk", "messageId": "final-audit", "content": {"type": "text", "text": secret}},
         ]:
             callback(SimpleNamespace(method="session/update", payload={"sessionId": "native-session", "update": update}))
         return {"stopReason": "end_turn"}
@@ -227,3 +227,41 @@ def test_operator_inspector_uses_readonly_journal_and_missing_inputs_are_not_cre
         "--audit", str(missing), "--journal", str(journal.path)],
         capture_output=True, text=True, timeout=5)
     assert result.returncode != 0 and not missing.exists()
+
+
+def test_receipt_observation_is_scoped_and_survives_restart_and_archive(tmp_path):
+    store = AuditStore(tmp_path / 'audit')
+    j = JournalStore(tmp_path / 'journal.sqlite3')
+    conv = Conversation('qq', '1', 'group:3')
+    other = Conversation('qq', '1', 'group:4')
+    store.trace(conv, 'in-1', 'chat').emit('send/receipt', message_id='sent-1')
+    store.trace(other, 'in-2', 'chat').emit('send/receipt', message_id='other-sent')
+    # Existing rotated operational evidence, not a second delivery ledger.
+    store.path.rename(store.directory / 'events.1.jsonl')
+    restarted = AuditStore(store.directory)
+    checks = list(restarted.receipt_evidence(j, conversation=conv))
+    assert len(checks) == 1 and checks[0]['message_id'] == 'sent-1'
+    assert checks[0]['journal_confirmed'] is False
+    append(j, 'delayed reply', 'sent-1', outbound=True)
+    checks = list(restarted.receipt_evidence(j, conversation=conv))
+    assert checks[0]['journal_confirmed'] is True
+    assert len(list(restarted.receipt_evidence(j))) == 2
+
+
+def test_strict_receipt_check_rejects_corrupt_operational_evidence(tmp_path):
+    store = AuditStore(tmp_path / 'audit')
+    j = JournalStore(tmp_path / 'journal.sqlite3')
+    store.path.write_text('{partial-audit-record', encoding='utf-8')
+    store.path.chmod(0o600)
+    assert list(store.receipt_evidence(j)) == []
+    with pytest.raises(ValueError, match='invalid audit record'):
+        list(store.receipt_evidence(j, strict=True))
+
+
+def test_native_messaging_tool_names_remain_observable(tmp_path):
+    store = AuditStore(tmp_path / "audit")
+    trace = store.trace(Conversation("qq", "1", "group:3"), "incoming", "chat")
+    for name in ("mcp__astrbot__current_group_members", "mcp__astrbot__qq_prepare_reply"):
+        trace.emit("tool/start", tool=name)
+    assert [row["tool"] for row in store.rows()] == [
+        "mcp__astrbot__current_group_members", "mcp__astrbot__qq_prepare_reply"]

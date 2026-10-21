@@ -195,14 +195,122 @@ def test_execution_generation_import_keeps_only_clean_cursor_and_uses_fresh_sess
     old = state.StateStore(tmp_path / "old.sqlite3")
     legacy = old.get_or_create(PLATFORM, BOT, GROUP, "legacy-native-sid")
     old.advance(PLATFORM, BOT, GROUP, legacy.session_id, 27)
-    legacy = old.get(PLATFORM, BOT, GROUP)
+    legacy = state.SessionState(legacy.platform_id, legacy.bot_id, legacy.conversation_key,
+                               legacy.session_id, 27, None, 19)
     fresh = state.StateStore(tmp_path / "new.sqlite3")
 
     migrated = fresh.import_mapping(legacy, "new-native-sid")
     assert migrated.session_id == "new-native-sid"
     assert migrated.last_seen_journal_id == 27
+    assert migrated.history_after_journal_id == 19
     assert migrated.pending_upper_cursor is None
-    assert old.get(PLATFORM, BOT, GROUP) == legacy
+    assert old.get(PLATFORM, BOT, GROUP).history_after_journal_id == 0
+    assert old.get(PLATFORM, BOT, GROUP).session_id == legacy.session_id
+
+
+def test_schema_v2_migrates_history_floor_and_cursor_to_zero(tmp_path):
+    path = tmp_path / "state-v2.sqlite3"
+    conn = sqlite3.connect(path)
+    with conn:
+        conn.executescript("""
+            CREATE TABLE conversation_state (
+                platform_id TEXT NOT NULL, bot_id TEXT NOT NULL,
+                conversation_key TEXT NOT NULL, session_id TEXT NOT NULL,
+                last_seen_journal_id INTEGER NOT NULL DEFAULT 0,
+                pending_upper_cursor INTEGER,
+                PRIMARY KEY (platform_id,bot_id,conversation_key)
+            );
+            INSERT INTO conversation_state VALUES ('p','b','private:u','sid',12,NULL);
+            PRAGMA user_version=2;
+        """)
+    conn.close()
+    migrated = state.StateStore(path).get("p", "b", "private:u")
+    assert migrated.last_seen_journal_id == 12
+    assert migrated.history_after_journal_id == 0
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
+
+
+def test_rotate_session_sets_clean_history_floor_and_preserves_journal(tmp_path):
+    store = state.StateStore(tmp_path / "state.sqlite3")
+    current = store.get_or_create(PLATFORM, BOT, PRIVATE, "old-sid")
+    store.advance(PLATFORM, BOT, PRIVATE, current.session_id, 20)
+    rotated = store.rotate_session(PLATFORM, BOT, PRIVATE, current.session_id, 20,
+                                   "new-sid", 25)
+    assert rotated.session_id == "new-sid"
+    assert rotated.last_seen_journal_id == rotated.history_after_journal_id == 25
+    assert rotated.pending_upper_cursor is None
+    assert store.get(PLATFORM, BOT, PRIVATE) == rotated
+
+
+def test_rotate_session_cas_rejects_stale_sid_cursor_and_pending(tmp_path):
+    store = state.StateStore(tmp_path / "state.sqlite3")
+    current = store.get_or_create(PLATFORM, BOT, PRIVATE, "old-sid")
+    store.advance(PLATFORM, BOT, PRIVATE, current.session_id, 20)
+    current = store.get(PLATFORM, BOT, PRIVATE)
+    with pytest.raises(ValueError, match="session changed"):
+        store.rotate_session(PLATFORM, BOT, PRIVATE, "stale", 20, "new", 25)
+    with pytest.raises(ValueError, match="cursor changed"):
+        store.rotate_session(PLATFORM, BOT, PRIVATE, current.session_id, 19, "new", 25)
+    store.begin_turn(PLATFORM, BOT, PRIVATE, current.session_id, 22)
+    before = store.get(PLATFORM, BOT, PRIVATE)
+    with pytest.raises(RuntimeError, match="outcome is pending"):
+        store.rotate_session(PLATFORM, BOT, PRIVATE, current.session_id, 20, "new", 25)
+    assert store.get(PLATFORM, BOT, PRIVATE) == before
+    with pytest.raises(RuntimeError, match="outcome is pending"):
+        store.rotate_session(PLATFORM, BOT, PRIVATE, current.session_id, 20, "new", 25,
+                             expected_pending=21)
+    rotated = store.rotate_session(PLATFORM, BOT, PRIVATE, current.session_id, 20,
+                                   "new", 25, expected_pending=22)
+    assert rotated.session_id == "new" and rotated.pending_upper_cursor is None
+    assert rotated.history_after_journal_id == 25
+
+
+def test_rotate_session_rejects_same_sid_or_cursor_rollback(tmp_path):
+    store = state.StateStore(tmp_path / "state.sqlite3")
+    current = store.get_or_create(PLATFORM, BOT, PRIVATE, "same")
+    store.advance(PLATFORM, BOT, PRIVATE, current.session_id, 20)
+    with pytest.raises(ValueError, match="must differ"):
+        store.rotate_session(PLATFORM, BOT, PRIVATE, "same", 20, "same", 20)
+    with pytest.raises(ValueError, match="precedes"):
+        store.rotate_session(PLATFORM, BOT, PRIVATE, "same", 20, "new", 19)
+
+
+def test_rotate_session_can_atomically_initialize_unmapped_conversation(tmp_path):
+    store = state.StateStore(tmp_path / "state.sqlite3")
+    created = store.rotate_session(PLATFORM, BOT, PRIVATE, None, None, "first-sid", 31)
+    assert created.session_id == "first-sid"
+    assert created.last_seen_journal_id == created.history_after_journal_id == 31
+    with pytest.raises(ValueError, match="created before"):
+        store.rotate_session(PLATFORM, BOT, PRIVATE, None, None, "racing-sid", 32)
+    assert store.get(PLATFORM, BOT, PRIVATE) == created
+
+
+def test_competing_rotations_use_one_compare_and_set_winner(tmp_path):
+    store = state.StateStore(tmp_path / "state.sqlite3")
+    current = store.get_or_create(PLATFORM, BOT, PRIVATE, "old-sid")
+    start = threading.Barrier(2)
+    outcomes: list[str] = []
+
+    def rotate(new_sid, command_id):
+        start.wait()
+        try:
+            store.rotate_session(PLATFORM, BOT, PRIVATE, current.session_id, 0,
+                                 new_sid, command_id)
+            outcomes.append(new_sid)
+        except ValueError:
+            outcomes.append("conflict")
+
+    threads = [threading.Thread(target=rotate, args=("new-a", 10)),
+               threading.Thread(target=rotate, args=("new-b", 11))]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert len(outcomes) == 2 and outcomes.count("conflict") == 1
+    winner = store.get(PLATFORM, BOT, PRIVATE)
+    assert winner.session_id in {"new-a", "new-b"}
+    assert winner.history_after_journal_id == winner.last_seen_journal_id in {10, 11}
 
 
 def test_execution_generation_import_refuses_pending_and_preserves_target(tmp_path):

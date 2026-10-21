@@ -25,7 +25,7 @@ const ownerId = '1105927155'
 const epoch = 'epoch'
 const delta = 'trusted journal delta'
 const sourcePath = join(sourceRoot, createHash('sha256').update(sessionId).digest('hex') + '.json')
-let turn = 0, call = 0, executions = 0
+let turn = 0, call = 0, executions = 0, fileExecutions = 0
 const agent = { session: { id: sessionId, header: { cwd: workspace } } }
 const ctx = new Context()
 const volumeScript = fileURLToPath(new URL('../../scripts/owner-workspace.py', import.meta.url))
@@ -97,6 +97,9 @@ try {
     return JSON.stringify({code: result.status, out: result.stdout, err: result.stderr})
   }))
   ctx.tools.register(defineTool('unknown', () => { executions++; return 'bad' }))
+  for (const name of ['mcp__astrbot__qq_prepare_reply', 'mcp__astrbot__current_group_members', 'mcp__astrbot__qq_file_receive', 'mcp__astrbot__qq_file_send']) {
+    ctx.tools.register(defineTool(name, () => { fileExecutions++; return name + ' ok' }))
+  }
   assert.match(output(await dispatch('bash', {command:'echo never'})), /authorization denied/)
   assert.equal(executions, 0)
 
@@ -112,6 +115,12 @@ try {
   unlinkSync(sourcePath)
   publish(first)
   bind(first)
+  for (const name of ['mcp__astrbot__qq_prepare_reply', 'mcp__astrbot__current_group_members', 'mcp__astrbot__qq_file_receive', 'mcp__astrbot__qq_file_send']) {
+    assert.match(output(await dispatch(name)), new RegExp(name + ' ok'), `${name} is allowed in a valid Owner turn`)
+  }
+  assert.equal(fileExecutions, 4)
+  assert.match(output(await dispatch('mcp__astrbot__qq_file_open_any_path')), /unavailable tool/,
+    'the guard does not allow arbitrary file-like tools')
   let result = JSON.parse(output(await dispatch('bash', {
     command: 'printf "ok:%s:%s" "$HOME" "$HOST_TEST_SECRET"',
   })))
@@ -157,23 +166,30 @@ try {
 
   publish({...first, nonce:'replacement'})
   assert.match(output(await dispatch('bash', {command:'true'})), /source expired/)
+  assert.match(output(await dispatch('mcp__astrbot__qq_file_send')), /source expired/,
+    'file MCP calls reject expired turn identity')
   ctx.emit('agent/turn-stopping', {agent, turn})
   assert.match(output(await dispatch('bash', {command:'true'})), /no trusted current turn/)
 
   const group = publish(source(ownerId, 'group:123'))
   bind(group)
   assert.match(output(await dispatch('bash', {command:'true'})), /authorization denied/)
+  assert.match(output(await dispatch('mcp__astrbot__qq_file_receive')), /authorization denied/,
+    'Owner file calls reject group-domain identity')
   ctx.emit('agent/turn-stopping', {agent, turn})
 
   const outsider = publish(source('other'))
   bind(outsider)
   assert.match(output(await dispatch('bash', {command:'true'})), /authorization denied/)
+  assert.match(output(await dispatch('mcp__astrbot__qq_file_send')), /authorization denied/,
+    'Owner file calls reject non-Owner identity')
   ctx.emit('agent/turn-stopping', {agent, turn})
 
   const mismatch = publish(source())
   bind(mismatch, 'wrong prompt')
   assert.match(output(await dispatch('bash', {command:'true'})), /authorization denied/)
   assert.equal(executions, 6)
+  assert.equal(fileExecutions, 4, 'denied or stale file calls never reach the tool implementation')
   console.log(JSON.stringify({
     ownerPrivateOnly:true, promptAndNonceBound:true, executionGuard:true,
     workspaceWrite:true, subdirWorkdir:true, outsideReadWriteDenied:true,

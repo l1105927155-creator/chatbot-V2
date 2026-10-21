@@ -247,6 +247,24 @@ def test_standard_send_envelope_reconciles_and_filters(tmp_path, action, payload
     assert result["differences"] == []
 
 
+def test_group_member_list_response_is_an_action_not_a_send_receipt(tmp_path):
+    root = _root(tmp_path)
+    store = SandboxStore(root / "onebot")
+    store.record_action("get_group_member_list", {"group_id": 91000},
+                        {"status": "ok", "retcode": 0, "data": [{"user_id": 7}, {"user_id": 8}]},
+                        "ok")
+    store.close()
+
+    result = EvidenceSnapshotter(root).snapshot()
+
+    assert len(result["simulator"]["actions"]) == 1
+    assert result["simulator"]["actions"][0]["action"] == "get_group_member_list"
+    assert result["simulator"]["actions"][0]["response"]["data"] == [
+        {"user_id": 7}, {"user_id": 8}]
+    assert result["receipts"] == []
+    assert result["differences"] == []
+
+
 def test_lifecycle_keeps_newest_when_sources_and_archives_exceed_limit(tmp_path):
     root = _root(tmp_path)
     def write_events(name, start, end):

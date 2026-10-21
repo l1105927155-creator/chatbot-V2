@@ -22,6 +22,7 @@ class ObjectResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 root = Path(os.environ["V2_REPO_ROOT"])
+guide_text = (root / "dsh/plugins/agent-profile/decision-guide.md").read_text().strip()
 sys.path.insert(0, str(root / "astrbot-plugins" / "v2_journal"))
 sys.path.insert(0, str(root / "astrbot-plugins" / "v2_dsh_router"))
 from journal import JournalStore, Conversation, message_from_onebot
@@ -115,7 +116,7 @@ async def scenario(base):
         assert "普通交流" in schemas["web_search"]["description"]
         assert "不可信" in schemas["web_fetch"]["description"]
         for call in calls:
-            assert json.dumps(call["messages"], ensure_ascii=False).count("当前可见信息足够时") == 1
+            assert json.dumps(call["messages"], ensure_ascii=False).count(json.dumps(guide_text, ensure_ascii=False)[1:-1]) == 1
         recent = schemas["mcp__astrbot__history_recent"]
         assert "普通交流" in recent["description"]
         assert "不可信" in recent["description"]
@@ -125,8 +126,10 @@ async def scenario(base):
         assert "不包含该ID" in schemas["mcp__astrbot__history_before"]["description"]
         assert "partial" in schemas["mcp__astrbot__current_group_info"]["description"]
         send = schemas["mcp__astrbot__qq_send_origin"]
-        assert "platform_confirmed=false" in send["description"]
-        assert set(send["parameters"]["properties"]) == {"text"}
+        assert "不自动重发" in send["description"]
+        assert set(send["parameters"]["properties"]) == {"text", "mention_user_ids", "reply_to_journal_id"}
+        assert "mcp__astrbot__qq_prepare_reply" in schemas
+        assert "mcp__astrbot__current_group_members" in schemas
         observed = json.dumps(calls[1]["messages"], ensure_ascii=False)
         assert "older context: yellow pear" in observed, observed
         assert "other group secret violet melon" not in observed, observed

@@ -1,10 +1,34 @@
-# 当前实施入口（2026-10-18：人格与指南热更新已部署）
+# 当前实施入口（QQ 交流表达阶段）
+
+当前追加：[并行研究与前台忙碌回执](docs/parallel-background-validation-2026-10-20.md)。同一会话复用原生 DSH 子 Agent 并行研究，创建授权绑定串行化；父轮次仍阻塞时先由程序确认收件，避免完全无回应，实质回答沿用会话串行。69 项工程回归、3 个原生 ACP 执行域、6 个完整模拟 QQ 场景及真实 Flash 双任务样本通过；备份部署完成，QQ 连接健康，原会话/模型/Journal 保留。
+
+已部署：[回复正文完整性](docs/phases/reply-output-integrity-2026-10-20.md)。生产群工具后最终正文混入自我推敲内容；按ACP消息身份采集最终正文，发送前整体检查明确协议/自我控制异常，不重跑已发工具。旧链路精确回放复现，新链路5个完整模拟QQ场景与149项工程/原生ACP回归通过，备份后已部署，QQ连接健康、原会话/模型/工作区保留；同WB原情景3次实时响应未再复现，不据此宣称上游根因已消除，见[验证与部署](docs/reply-output-integrity-validation-2026-10-20.md)。
+
+已部署：[唤醒历史与故障回复](docs/phases/wake-history-errors-2026-10-20.md)。仅当前附图和明确引用图片自动进入视觉输入，历史图片按需查看，旧像素按轮卸载；结构化终态驱动程序兜底、失败轮次结束或局部暂停。完整工程门、实际 ACP 与5个完整模拟 QQ 场景通过，备份部署后 QQ 连接健康；生产群旧15339轮次已核实无工具执行后精确解除暂停，原 Session/模型/工作区保留。见[验证与部署](docs/wake-history-errors-validation-2026-10-20.md)。
+
+已部署：[群工作区指南与分层 Skill](docs/phases/workspace-guides-skills-2026-10-20.md)。群级 `persona.md`、`AGENTS.md` 模板与动态加载、本群 Skill 优先和全局继承已接通；458项 Python 分组回归、原生 Node、实际 ACP 与真实 Flash 跨会话经验沉淀/复用样本通过。两个已准入群初始化完成，已有文件、会话、模型和 Journal 保留，QQ 连接正常；生产群既有1个待核对轮次原样保留。见[验证与部署](docs/workspace-guides-skills-validation-2026-10-20.md)。保持成员共享维护和 `/new` 不删除持久工作区，不新增后台学习平台。
+
+已部署：[前台持续交互与后台研究](docs/phases/background-research-2026-10-20.md)。复用 DSH 原生子 Agent 与 Jobs，支持前台继续交流、真实进度、追加要求及完成通知；取消和重置隔离、三类执行域真实 ACP、四个模拟 QQ 场景、真实 Flash 样本与工程门各分组通过，备份部署后 QQ 连接及原会话/模型/Journal 已核对。见[验证与部署](docs/background-research-validation-2026-10-20.md)。不扩展定时任务或通用多 Agent 平台，任务不跨重启续跑；进入真实 QQ 与生产群反馈观察，准入保持原有范围。
+
+已部署：[DSH Web与QQ Bot共享模型目录](docs/phases/shared-model-catalog-2026-10-19.md)。Web模型配置新增/修改后，已有Bot会话通过原生适配器与ACP目录通知自动同步；模型配置/凭据共享，会话与权限保持隔离。130项回归、原生热更新与实际协议请求、6个完整模拟QQ场景及真实wb模型调用通过，见[验证与部署](docs/shared-model-catalog-validation-2026-10-20.md)。只读轨迹入口已建看板task-2a6b81452c，按用户要求暂不执行。
+
+当前追加工作：[看板三项任务](docs/phases/kanban-follow-up-2026-10-19.md)。按用户授权依次处理无正文提及/引用唤醒、实际DSH模型查看与切换、共享meme及AstrBot第三方插件调用。目标和备注已通过kanban MCP读取，三项实现及工程/模拟QQ验证已上线，状态为待验收，见[验证记录](docs/kanban-follow-up-validation-2026-10-19.md)。共享图库114张；Bilibili/Twitter沿用作者插件的订阅、轮询和投递。FxTwitter正式探活成功，Bilibili需重新登录后才能自动推送；真实QQ客户端复测与用户最终验收保留。
 
 当前产品契约：[执行环境归属纠偏](docs/phases/execution-domain-correction-2026-10-16.md)。Owner 真实独立私聊使用 Linux 部署账户的主机原生文件、前台 Shell 与网络；已准入群在本群独立沙箱中执行，包括群内 Owner；普通非 Owner 私聊保持 safe-chat。两个信任域与三个工具组合不混用，人格和 Scene 不授予权限。
+
+当前实施阶段：[QQ 交流表达与模型消息边界](docs/phases/chat-expression.md)。闲聊接话自然、观点讨论按追问展开、工具结果按信息需要交代；由模型决定内容深度与消息边界，不统一限句或按字数机械分条。简短原则与少量示范已完成48轮真实Flash隔离比较：消息边界与平台/Journal链路核对通过，示范有局部帮助，但自然交流可靠性未达到目标；候选指南未替换正式版本，阶段尚未交付上线。见[观察结论及证据](docs/chat-expression-evaluation.md)。ACP最终正文采集等工作区修正未据此宣称已部署。
+
+已部署：[Agent-Bot 用户命令收敛](docs/phases/agent-command-surface.md)。按用户确认的严格重置范围，已接通 `/new`、`/reset`、`/stop` 与实际 DSH；新会话历史工具和旧附件导入从重置点开始，群聊控制仅限 Bot Owner。保留平台命令，未接通的 AstrBot AI 命令明确说明。502项工程测试、6个模拟QQ命令场景、真实Flash重置测试及文件回归通过，已备份并受控重启部署；原SID、cursor、pending和Journal保留，新增起点默认0。见[验证与部署](docs/agent-command-surface-validation.md)；真实QQ客户端复测仍单独保留。
+
+本轮追加：[模型选择 QQ 原生提及和引用](docs/phases/qq-model-messaging.md)。按用户修正，撤下普通回复强制@发言人的规则；DSH通过工具选择当前群成员和引用，指南引导交流对象，宿主只核验并通过AstrBot构造组件。支持先引用A回答、再@B转告，引用受当前会话重置边界限制。24项组件/MCP、48项集成、9项审计、9个模拟QQ场景及7个文件回归通过，3个真实Flash场景观察通过，已备份部署并恢复QQ连接。验证及部署见[记录](docs/qq-model-messaging-validation.md)；上一轮固定提及方案证据保留，但普通交流规则已被本轮取代。
 
 本轮工作：[四项审查整改](docs/phases/review-remediation-2026-10-17.md)。用户授权修复 Journal 采集健康盲点、失败/暂停提示、回复简洁与必要语义分段、当前文档一致性，并通过隔离沙箱验收。源码修改及聚焦/隔离沙箱/真实模型样本验证已完成，详见[本轮验证](docs/review-remediation-validation-2026-10-17.md)；已随模型切换重启部署，见[模型生效记录](docs/model-1017-deployment-2026-10-18.md)，不以模拟 QQ 代替真实 QQ 和三天观察。
 
 本轮追加：[人格与指南热更新](docs/phases/guide-hot-reload-2026-10-18.md)。读取实际Bot人格、共享指南、Profile以及Owner固定工作目录AGENTS.md，在原生下一次模型请求组装时更新；Skill沿用原生目录刷新与按需正文加载。完整gate、同PID/SID实际请求、真实模型和沙箱验证已通过，机制已安装到正式服务；后续编辑Markdown无需重启，详见[验证与部署](docs/guide-hot-reload-validation-2026-10-18.md)。
+
+本轮追加：[QQ 二进制文件收发](docs/phases/qq-file-transfer-2026-10-18.md)。补齐当前会话附件导入与文件发送工具、群上传通知采集、纯附件路由，以及各执行域文件隔离。所有文件格式按原始字节收发；模型理解能力和文件传输能力分别验证。已通过原生/隔离链路及真实Flash模型样本验证并部署，原Session与Journal保留；真实QQ收件仍待复测。见[验证/部署记录](docs/qq-file-transfer-validation-2026-10-18.md)。
+
+本轮追加：[QQ 原生视觉](docs/phases/qq-native-vision-2026-10-18.md)。图片从 canonical 引用经 AstrBot 解析，以原生 ACP image 块进入当前 Flash；图片顺序/内容与可信来源绑定，文件保存服务于明确任务。指南采用正向职责并按常驻原则、能力说明和 Persona 分层。聚焦、原生、完整工程门及真实模型6场景通过，已保留Session/Journal受控重启部署；见[验证/部署记录](docs/qq-native-vision-validation-2026-10-18.md)。真实QQ图片需现场复测，旧轮次只有元数据的图片需重新发送。
 
 当前模型：`deepseek-official / deepseek-flash`，官方当前对应 DeepSeek-V4.1-Flash-1017；正式配置、进程与 Owner 会话原生记录已复核。旧 Session 恢复通过原生 ACP 应用部署模型，同SID/历史/cursor/pending保留。low 思考及1M上下文保持。
 
@@ -14,12 +38,12 @@
 - 纠偏实现已随 `537f0b3` 部署；原生机制、独立模拟 QQ、真实模型、取消恢复、重启和备份恢复证据见 [实施记录](docs/execution-domain-validation-2026-10-16.md)。这不是最终真实 QQ 安全验收。
 - 最新远端审计见 [代码复审](docs/execution-domain-code-audit-2026-10-16.md)。P2 工具入口覆盖和累计群卷容量已随 `6cab564` 验证并部署，见[审计处理记录](docs/execution-domain-audit-remediation-2026-10-16.md)；保留 P3 前台/时限边界，不扩展其它执行模式或另建权限平台。
 - 用户授权按不超过五个生产群安排容量：每群1GiB、总预留5GiB、宿主至少保留1GiB余量；取消准入后数据保留并继续计入预算。预算或磁盘不足只拒绝新增，不自动删旧数据。
-- 正式准入仍只有主群1055300305与 Owner 私聊1105927155；994363760为未准入对照，不因容量预算扩大自动准入。
+- 正式准入为主群1055300305、用户新增的生产群697823265与 Owner 私聊1105927155。2026-10-20补齐生产群的 AstrBot 平台白名单，Agent准入与平台放行分别管理；994363760仍为未准入对照，不因容量预算扩大自动准入。
 - 主目标仍是 Personal Agent-Bot 在真实 QQ 中可靠使用：群聊、人格/技能、历史、Owner 主机执行、群沙箱执行、Research、可核对的取消恢复及运维。下一步由用户进行真实固定故事验收，再连续观察3天；影响稳定性的修复后重新观察。
 - 自动验证核对原始事件、平台反馈、canonical Journal、Router 与原生工具结果；历史旧合同“Owner 受限、群无 Bash”的通过项不计入新要求。
 - 架构入口：[Agent-Bot 运行时](docs/architecture/agent-bot-runtime.md)；真实验收：[清单](docs/personal-agent-acceptance.md)；运维：[手册](docs/personal-agent-operations.md)。模型决策整改及早期阶段记录保留，不覆盖本节当前契约。
 
-不新增长期记忆、主动任务、后台 Jobs、多 Agent、多渠道或通用控制平台；沙箱仅按本次审计和真实验收发现的缺口补充。
+除本轮明确授权的后台研究外，不新增长期记忆、定时主动任务、通用后台执行、多 Agent 平台、多渠道或通用控制平台；沙箱仅按本次审计和真实验收发现的缺口补充。
 
 ---
 

@@ -211,3 +211,59 @@ def test_budget_lock_parent_allows_readability_but_rejects_foreign_writers(tmp_p
         with pytest.raises(PermissionError, match='parent'):
             group_volume.prepare_group(runtime, 'p', 'b', 'one')
         assert not (runtime / 'group-storage').exists()
+
+
+def test_group_info_created_on_prepare_and_backfilled_for_existing_volume(tmp_path, monkeypatch):
+    import json
+
+    rows = []
+    _mock_volume_backend(monkeypatch, rows)
+    monkeypatch.setattr(group_volume.shutil, 'disk_usage',
+                        lambda path: type('Usage', (), {'free': 10 * group_volume.GROUP_BYTES})())
+    result = group_volume.prepare_group(tmp_path / '.runtime', 'qq-platform', '123456', '622671856')
+    info = Path(result['directory']) / 'group-info.json'
+    expected = {'version': 1, 'platform_id': 'qq-platform',
+                'bot_id': '123456', 'group_id': '622671856'}
+    assert json.loads(info.read_text()) == expected
+    assert info.stat().st_mode & 0o777 == 0o600
+    assert info.parent != Path(result['workspace'])
+    # Exercise the real reuse branch without allocating/mounting an ext4 image.
+    Path(result['image']).touch()
+    group_volume.owner_volume.manifest_path(Path(result['workspace'])).touch()
+    info.unlink()
+    again = group_volume.prepare_group(tmp_path / '.runtime', 'qq-platform', '123456', '622671856')
+    assert again['key'] == result['key']
+    assert json.loads(info.read_text()) == expected
+    assert not list(info.parent.glob('.group-info-*.tmp'))
+
+
+def test_group_info_replacement_does_not_modify_link_target(tmp_path):
+    import json
+    import os
+
+    directory = tmp_path / 'group'
+    directory.mkdir()
+    outside = tmp_path / 'outside.json'
+    outside.write_text('keep')
+    info = directory / 'group-info.json'
+    info.symlink_to(outside)
+    group_volume._write_group_info(directory, 'p', 'b', 'g')
+    assert outside.read_text() == 'keep' and not info.is_symlink()
+    info.unlink()
+    os.link(outside, info)
+    group_volume._write_group_info(directory, 'p', 'b', 'other')
+    assert outside.read_text() == 'keep'
+    assert json.loads(info.read_text())['group_id'] == 'other'
+
+
+def test_group_info_failed_atomic_replace_preserves_previous_file(tmp_path, monkeypatch):
+    directory = tmp_path / 'group'
+    directory.mkdir()
+    info = directory / 'group-info.json'
+    info.write_text('previous')
+    def fail_replace(*args): raise OSError('simulated write failure')
+    monkeypatch.setattr(group_volume.os, 'replace', fail_replace)
+    with pytest.raises(OSError, match='simulated write failure'):
+        group_volume._write_group_info(directory, 'p', 'b', 'g')
+    assert info.read_text() == 'previous'
+    assert not list(directory.glob('.group-info-*.tmp'))

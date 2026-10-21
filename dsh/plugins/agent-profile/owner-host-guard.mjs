@@ -2,9 +2,11 @@
 // danger-full-access policy is only loaded by the Owner Profile; this guard
 // still requires a fresh, exact private-Owner source for every tool call.
 import {
-  TURN_SOURCE_FIELDS, parseConfiguredOwners, privateSourceRoot,
-  readTurnSource, validateClaimedPrompt, validateOwnerSource,
+  parseConfiguredOwners, privateSourceRoot,
+  readTurnSource, validateClaimedPrompt, validateOwnerSource, sameTurnSource,
+  verifyTurnImageProofs, validateTurnImages,
 } from './trusted-turn-guard.mjs'
+import { researchDelegation } from './background-authority.mjs'
 
 export const name = 'v2-owner-host-guard'
 
@@ -12,8 +14,10 @@ const allowedTools = new Set([
   'bash', 'read', 'read_image', 'write', 'edit', 'glob', 'grep',
   'skill', 'web_search', 'web_fetch',
   'mcp__astrbot__history_recent', 'mcp__astrbot__history_before',
-  'mcp__astrbot__history_search', 'mcp__astrbot__current_group_info',
-  'mcp__astrbot__qq_send_origin',
+  'mcp__astrbot__history_search', 'mcp__astrbot__history_read_image', 'mcp__astrbot__current_group_info',
+  'mcp__astrbot__current_group_members', 'mcp__astrbot__qq_prepare_reply', 'mcp__astrbot__qq_send_origin', 'mcp__astrbot__qq_file_receive',
+  'mcp__astrbot__qq_file_send', 'mcp__astrbot__meme_list', 'mcp__astrbot__meme_send', 'mcp__astrbot__plugin_status', 'mcp__astrbot__bili_dynamics', 'mcp__astrbot__bili_subscribe', 'mcp__astrbot__bili_subscriptions', 'mcp__astrbot__bili_unsubscribe', 'mcp__astrbot__twitter_subscribe', 'mcp__astrbot__twitter_subscriptions', 'mcp__astrbot__twitter_unsubscribe',
+  'background_research',
 ])
 
 export class OwnerHostGuard {
@@ -30,7 +34,18 @@ export class OwnerHostGuard {
     ctx.on('agent/inbox/claimed', ({ agent, turn, message }) => this.bind(agent, turn, message))
     ctx.on('agent/pre-step', async ({ agent, turn, signal }, next) => {
       const binding = this.bound.get(agent)
-      if (binding?.turn === turn) binding.signal = signal
+      if (binding?.turn === turn) {
+        binding.signal = signal
+        if (binding.source.image_manifest !== undefined && !binding.imagesVerified) {
+          if (signal?.aborted) signal.throwIfAborted()
+          this.current(agent, false)
+          await validateTurnImages(ctx, this.root, binding.source, binding.message)
+          if (signal?.aborted || binding.signal?.aborted) throw new Error('inactive turn during image validation')
+          this.current(agent, false)
+          if (this.bound.get(agent) !== binding || binding.turn !== turn) throw new Error('turn changed during image validation')
+          binding.imagesVerified = true
+        }
+      }
       return next()
     })
     ctx.on('agent/turn-stopping', ({ agent, turn }) => {
@@ -84,19 +99,27 @@ export class OwnerHostGuard {
       const source = readTurnSource(this.root, this.epoch, agent.session.id)
       validateOwnerSource(source, this.owners)
       validateClaimedPrompt(message, source)
-      this.bound.set(agent, { source, turn })
+      this.bound.set(agent, { source, turn, message, imagesVerified: source.image_manifest === undefined })
     } catch {
       this.rejected.set(agent, turn)
     }
   }
 
-  current(agent) {
+  current(agent, requireVerifiedImages = true) {
+    const delegated = researchDelegation(agent)
+    if (delegated) {
+      if (delegated.profile !== 'owner-host' || delegated.signal?.aborted) throw new Error('background host authority expired')
+      return { source: delegated.source, turn: delegated.taskId, signal: delegated.signal,
+        imagesVerified: true, delegated }
+    }
     const binding = this.bound.get(agent)
     if (!binding || binding.signal?.aborted) throw new Error('no trusted current turn')
     const latest = readTurnSource(this.root, this.epoch, agent.session.id)
-    if (TURN_SOURCE_FIELDS.some(field => latest[field] !== binding.source[field])) {
+    if (!sameTurnSource(latest, binding.source)) {
       throw new Error('current turn source changed')
     }
+    verifyTurnImageProofs(this.root, latest)
+    if (requireVerifiedImages && !binding.imagesVerified) throw new Error('trusted image sequence has not been verified')
     validateOwnerSource(latest, this.owners)
     return binding
   }

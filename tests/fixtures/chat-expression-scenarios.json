@@ -1,0 +1,177 @@
+{
+  "version": 1,
+  "title": "QQ Agent conversational expression paired evaluation",
+  "turns_per_scenario": "scenario-specific",
+  "scenarios": [
+    {
+      "id": "familiar-game-chat",
+      "conversation": "group:91000",
+      "topic": "闲聊自然节奏",
+      "turns": [
+        {
+          "user": "我上个月买的《巫师3》还没开，最近又在看别的游戏。",
+          "intent": "分享近况",
+          "human_checks": [
+            "像熟人自然接话",
+            "不过度展开或盘问"
+          ]
+        },
+        {
+          "user": "黑旗记忆重置版值得买吗？我就是看海战很心动。",
+          "intent": "轻量征求意见",
+          "human_checks": [
+            "先给清楚态度",
+            "有自然的补充联想或追问空间"
+          ]
+        },
+        {
+          "user": "也不是非得买，我怕优惠错过了。但我确实买得比玩得快。",
+          "intent": "熟人式追问",
+          "human_checks": [
+            "回应用户提到的矛盾",
+            "语气亲近而不训斥",
+            "便于对方继续接话"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "product-opinion-discussion",
+      "conversation": "group:91000",
+      "topic": "观点展开与回应异议",
+      "turns": [
+        {
+          "user": "我觉得 HarnessWB 虽然给新用户很多积分，但它产品定位是通用助理，不是编码助理。它在解释代码时还会默认画思维导图，工具也不太适合编码。",
+          "intent": "提出带理由的产品观点",
+          "human_checks": [
+            "针对观点表态",
+            "说明理由或保留判断",
+            "篇幅与观点复杂度相称"
+          ]
+        },
+        {
+          "user": "可是免费积分确实很多，先用着不也挺划算吗？",
+          "intent": "提出异议",
+          "human_checks": [
+            "承认积分的实际价值",
+            "回应它是否改变产品定位判断"
+          ]
+        },
+        {
+          "user": "能具体展开说说，哪些设计会影响编码体验，以及你会怎么判断值不值得用吗？",
+          "intent": "要求详细展开",
+          "human_checks": [
+            "给出具体设计和影响",
+            "形成可用的判断标准",
+            "不为追求短而省略关键论据"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "tool-results-and-file-work",
+      "conversation": "private:90009",
+      "topic": "工具短结果与复杂文件结果",
+      "workspace_files": {
+        "price.txt": "黑旗记忆重置版\n标准版：人民币 248 元\n豪华版：人民币 328 元\n当前折扣：标准版 9 折，豪华版无折扣\n",
+        "review-notes.md": "# 评测记录\n\n## 优点\n- 海战仍是主要乐趣，操作反馈清晰。\n- 画面和角色细节升级明显。\n\n## 风险\n- 主线和任务结构与原版相近，重复体验者的新鲜感有限。\n- 目前性能测试只覆盖中高端显卡，低配表现未知。\n\n## 购买建议\n- 已有原版且尚未重玩：等待更深折扣。\n- 首次接触系列且喜欢海战：可考虑标准版。\n- 豪华版追加内容不足以单独支撑差价。\n"
+      },
+      "turns": [
+        {
+          "user": "帮我看下工作区里的 price.txt，标准版现在多少钱？",
+          "intent": "读取文件并给短结果",
+          "tool": "file",
+          "human_checks": [
+            "准确读出折后价格",
+            "只给完成当前问题所需的信息"
+          ]
+        },
+        {
+          "user": "再读一下 review-notes.md，结合评测里的优点、风险和购买建议，认真分析标准版和豪华版怎么选，并把结论整理到 purchase-summary.txt，最后核对文件内容。",
+          "intent": "读取文件、复杂分析与文件交付",
+          "tool": "file",
+          "expected_output_file": "purchase-summary.txt",
+          "required_file_terms": [
+            "标准版",
+            "豪华版"
+          ],
+          "human_checks": [
+            "使用文件中的关键事实",
+            "分别说明适合买标准版及等待的情形",
+            "比较豪华版差价而不过度压缩",
+            "purchase-summary.txt实际创建且含有推荐、风险和版本选择依据",
+            "简洁说明保存位置"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "reset-history-explanation",
+      "conversation": "private:90009",
+      "topic": "基于可见证据解释重置与历史范围",
+      "turns": [
+        {
+          "user": "刚才聊到哪了？",
+          "intent": "在新会话询问先前内容",
+          "human_checks": [
+            "根据当前可用上下文诚实回答",
+            "不把历史不可见说成记录已删除"
+          ]
+        },
+        {
+          "user": "你根据什么知道重置了？你能确认记录被删除了吗？",
+          "intent": "追问重置依据与数据留存",
+          "human_checks": [
+            "把宿主重置提示和其在Journal中的可见位置作为证据",
+            "区分检索起点、可见上下文和Journal留存",
+            "明确不能仅据此确认旧记录删除",
+            "回答具体且不把猜测写成事实"
+          ]
+        }
+      ]
+    }
+  ],
+  "human_rubric": {
+    "rating_scale": [
+      "strong",
+      "adequate",
+      "weak",
+      "unacceptable"
+    ],
+    "dimensions": [
+      {
+        "id": "intent_fit",
+        "label": "表达深度是否匹配当前交谈意图"
+      },
+      {
+        "id": "conversational_rhythm",
+        "label": "闲聊、追问和异议是否像连续的人类交流"
+      },
+      {
+        "id": "claim_quality",
+        "label": "观点、文件和历史事实是否准确完整"
+      },
+      {
+        "id": "message_boundaries",
+        "label": "每条消息是否形成自然完整的发言，边界是否有交流作用"
+      },
+      {
+        "id": "tool_reporting",
+        "label": "工具结果、文件操作和交付说明是否适量且可核对"
+      }
+    ],
+    "paired_comparison": [
+      "principles",
+      "examples",
+      "tie"
+    ],
+    "rules": [
+      "看完整多轮轨迹，判断每一轮是否承接上下文；不以单轮字数或消息条数单独判优。",
+      "不把工具链通过视为表达通过；工具准确性和表达适配度分别评分。",
+      "只有独立完整且有自然交流作用的消息边界才算正向；机械拆句、同义重复、无意义拆条扣分。",
+      "观点型复杂请求可以充分展开；闲聊的简短和补充消息可以自然分条。",
+      "重置场景中，‘当前看不到/检索不到’不能被表述成‘旧记录已删除’，除非轨迹另有删除证据。"
+    ],
+    "evaluator_status": "unrated"
+  }
+}

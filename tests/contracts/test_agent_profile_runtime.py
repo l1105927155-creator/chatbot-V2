@@ -16,6 +16,9 @@ def test_real_router_profiles_and_control_without_model_or_qq():
         from astrbot.core.star.star_manager import PluginManager
         from astrbot.core.star.star import star_map
         from astrbot.api import star
+        import data.plugins
+        if os.environ.get('V2_PROFILE_TEST_PLUGIN_ROOT'):
+            data.plugins.__path__ = [os.environ['V2_PROFILE_TEST_PLUGIN_ROOT'], *data.plugins.__path__]
         import data.plugins.v2_dsh_router.main as router_module
 
         async def main():
@@ -107,12 +110,23 @@ def test_real_router_profiles_and_control_without_model_or_qq():
                     assert router.services['owner'].state.get('contract','900001','private:900003').session_id==private.session_id
                     assert owner.scenes.current(private.session_id)['scene']=='research'
                     await router.configure_agent(Event(group=True), 'persona', 'companion')
+                    assert '/workspace/persona.md' in replies[-1]
+                    assert '下一轮自动生效' in replies[-1]
+                    assert group_service.state.get('contract','900001','group:42') is None
+                    await router.configure_agent(Event(group=True), 'status', '')
+                    assert '人格：本群 persona.md' in replies[-1]
+                    assert 'Agent：尚未开始' in replies[-1]
+                    await router.configure_agent(Event(group=True), 'persona', 'list')
+                    assert '/workspace/persona.md' in replies[-1]
+                    assert group_service.state.get('contract','900001','group:42') is None
+                    await router.configure_agent(Event(group=True), 'scene', 'research')
                     group=group_service.state.get('contract','900001','group:42')
                     assert group is not None
-                    assert group_client.personas.current(group.session_id)['persona']=='companion'
+                    assert group_client.personas.current(group.session_id)['persona']=='default'
+                    assert group_client.scenes.current(group.session_id)['scene']=='research'
                     assert owner.personas.current(private.session_id)['persona']=='analyst'
                     await router.configure_agent(Event(group=True), 'status', '')
-                    assert replies[-1]=='Agent：空闲；人格：companion；场景：casual-chat；模式：群聊隔离执行。'
+                    assert replies[-1]=='Agent：空闲；人格：本群 persona.md；场景：research；模式：群聊隔离执行。'
                     router.services['owner'].state.begin_turn('contract','900001','private:900003',private.session_id,1)
                     await router.configure_agent(Event(), 'status', '')
                     assert 'Agent：结果待核对；人格：analyst；场景：research' in replies[-1]

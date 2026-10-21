@@ -26,6 +26,7 @@ ASTRBOT = ROOT / ".runtime/astrbot"
 DSH = ROOT / ".runtime/dsh-runtime/node_modules/.bin/dsh"
 CONFIG_KEYS = {"version", "execution_contract", "provider", "model", "allowed_conversations", "owners",
                "mcp_port", "credential_env_file", "owner_workdir", "group_sandbox"}
+OPTIONAL_CONFIG_KEYS = {"group_storage_policy", "shared_models_home"}
 GROUP_STORAGE_POLICY_DEFAULT = {"total_mib": 5120, "min_free_mib": 1024, "inactive_data": "retain"}
 GROUP_SANDBOX_KEYS = {"storage_mib", "memory_mib", "tasks", "cpu_quota", "max_command_seconds", "network"}
 GROUP_SANDBOX_CONTRACT = {
@@ -57,7 +58,7 @@ def _load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
         except OSError:
             pass
         raise
-    if (not isinstance(data, dict) or set(data) not in (CONFIG_KEYS, CONFIG_KEYS | {"group_storage_policy"})
+    if (not isinstance(data, dict) or set(data) - OPTIONAL_CONFIG_KEYS != CONFIG_KEYS
             or data.get("version") != 2 or type(data.get("version")) is not int
             or data.get("execution_contract") != 2 or type(data.get("execution_contract")) is not int):
         raise ValueError("invalid service config schema")
@@ -86,6 +87,9 @@ def _load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
     owner_workdir = data["owner_workdir"]
     if not isinstance(owner_workdir, str) or not Path(owner_workdir).is_absolute():
         raise ValueError("owner_workdir must be an absolute path")
+    shared_home = data.get("shared_models_home")
+    if shared_home is not None and (not isinstance(shared_home, str) or not Path(shared_home).is_absolute()):
+        raise ValueError("shared_models_home must be an absolute path")
     group_sandbox = data["group_sandbox"]
     if not isinstance(group_sandbox, dict) or set(group_sandbox) != GROUP_SANDBOX_KEYS:
         raise ValueError("group_sandbox must match the verified execution contract")
@@ -137,6 +141,12 @@ def _prepare(config: dict[str, Any]) -> None:
 
 def _runtime_env(config: dict[str, Any]) -> dict[str, str]:
     env = dict(os.environ)
+    for key in ("V2_SHARED_MODELS_PROFILE", "V2_SHARED_MODELS_CREDENTIALS"):
+        env.pop(key, None)
+    if config.get("shared_models_home"):
+        shared = Path(config["shared_models_home"])
+        env["V2_SHARED_MODELS_PROFILE"] = str(shared / "profiles/web/cordis.patch.yml")
+        env["V2_SHARED_MODELS_CREDENTIALS"] = str(shared / ".credentials.yaml")
     policy = config.get("group_storage_policy", GROUP_STORAGE_POLICY_DEFAULT)
     env.update({
         "V2_DSH_PROVIDER": config["provider"],

@@ -10,6 +10,7 @@ import fcntl
 import json
 import os
 import re
+import secrets
 import shutil
 import stat
 from pathlib import Path
@@ -49,6 +50,23 @@ def paths(root: Path, platform_id: str, bot_id: str, group_id: str) -> dict[str,
     directory = root / key
     return {"key": key, "directory": directory, "workspace": directory / "workspace",
             "image": directory / "workspace.ext4"}
+
+
+def _write_group_info(directory: Path, platform_id: str, bot_id: str, group_id: str) -> None:
+    """Write a human-readable label; authorization still uses the supplied identity."""
+    payload = {"version": 1, "platform_id": platform_id,
+               "bot_id": bot_id, "group_id": group_id}
+    temporary = directory / f".group-info-{secrets.token_hex(12)}.tmp"
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        # Replacing the entry also avoids following any stale symlink/hardlink.
+        os.replace(temporary, directory / "group-info.json")
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _budget_bytes(value: int | None, env_name: str, default: int) -> int:
@@ -149,6 +167,9 @@ def prepare_group(root: Path, platform_id: str, bot_id: str, group_id: str, *,
                     or metadata.st_uid != os.getuid() or metadata.st_mode & 0o077):
                 raise PermissionError("group volume directory must be private and owned")
             data = owner_volume.prepare(workspace, image, GROUP_BYTES)
+            _write_group_info(directory, platform_id, bot_id, group_id)
+            if os.path.ismount(workspace):
+                _seed_group_guides(workspace, directory)
             return {"key": selected["key"], "directory": str(directory),
                     "workspace": str(data["workspace"]), "image": str(data["image"]),
                     "bytes": data["bytes"]}
@@ -179,6 +200,9 @@ def prepare_group(root: Path, platform_id: str, bot_id: str, group_id: str, *,
             raise PermissionError("group volume directory must be private and owned")
         try:
             data = owner_volume.prepare(workspace, image, GROUP_BYTES)
+            _write_group_info(directory, platform_id, bot_id, group_id)
+            if os.path.ismount(workspace):
+                _seed_group_guides(workspace, directory)
         except BaseException:
             if created_directory:
                 _remove_new_group(directory, workspace, image)
@@ -192,6 +216,101 @@ def prepare_group(root: Path, platform_id: str, bot_id: str, group_id: str, *,
 
 def verified_group_workspace(workspace: Path) -> int:
     return owner_volume.verified_workspace(Path(workspace))
+
+
+def _seed_group_guides(workspace: Path, directory: Path) -> None:
+    """Seed first-run guides once without replacing workspace-owned files."""
+    template_root = Path(__file__).resolve().parents[2] / "templates" / "group"
+    names = ("AGENTS.md", "persona.md")
+    templates: dict[str, bytes] = {}
+    for name in names:
+        source = template_root / name
+        try:
+            info = source.lstat()
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > 128 * 1024:
+                raise ValueError(f"unsafe group guide template: {name}")
+            templates[name] = source.read_bytes()
+        except FileNotFoundError:
+            # Older deployment bundles may not yet include the templates.
+            # Leave no marker so a later release can initialize the workspace.
+            return
+
+    marker = directory / ".workspace-guides-initialized.json"
+    lock_fd = _budget_lock(directory / ".workspace-guides-bootstrap.lock")
+    try:
+        try:
+            marker_fd = os.open(marker, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        except FileNotFoundError:
+            marker_fd = None
+        if marker_fd is not None:
+            try:
+                info = os.fstat(marker_fd)
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                        or info.st_mode & 0o077 or info.st_nlink != 1):
+                    raise PermissionError("unsafe group guide initialization marker")
+            finally:
+                os.close(marker_fd)
+            return
+
+        pinned_fd = verified_group_workspace(workspace)
+        try:
+            root_fd = os.open(".", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                              dir_fd=pinned_fd)
+        except BaseException:
+            os.close(pinned_fd)
+            raise
+        try:
+            for name, content in templates.items():
+                temporary = f".workspace-guide-{secrets.token_hex(12)}.tmp"
+                fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                             os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=root_fd)
+                try:
+                    os.fchmod(fd, 0o644)
+                    view = memoryview(content)
+                    while view:
+                        written = os.write(fd, view)
+                        view = view[written:]
+                    os.fsync(fd)
+                finally:
+                    os.close(fd)
+                try:
+                    os.link(temporary, name, src_dir_fd=root_fd, dst_dir_fd=root_fd,
+                            follow_symlinks=False)
+                except FileExistsError:
+                    pass
+                finally:
+                    os.unlink(temporary, dir_fd=root_fd)
+            os.fsync(root_fd)
+        finally:
+            os.close(root_fd)
+            os.close(pinned_fd)
+
+        marker_content = json.dumps({"version": 1, "files": list(names)},
+                                    separators=(",", ":")).encode("utf-8") + b"\n"
+        temporary_marker = directory / f".workspace-guides-{secrets.token_hex(12)}.tmp"
+        fd = os.open(temporary_marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                     os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        try:
+            view = memoryview(marker_content)
+            while view:
+                written = os.write(fd, view)
+                view = view[written:]
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        try:
+            os.link(temporary_marker, marker, follow_symlinks=False)
+        except FileExistsError:
+            pass
+        finally:
+            temporary_marker.unlink(missing_ok=True)
+        parent_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(parent_fd)
+        finally:
+            os.close(parent_fd)
+    finally:
+        os.close(lock_fd)
 
 
 def unmount_group(workspace: Path) -> None:

@@ -1,0 +1,97 @@
+{
+  "version": 1,
+  "title": "Unseen continuous dialogue transfer",
+  "turns_per_scenario": "scenario-specific",
+  "scenarios": [
+    {
+      "id": "unseen-baking-pottery-transition",
+      "conversation": "private:90009",
+      "topic": "同会话闲聊、观点、工具、闲聊迁移",
+      "workspace_files": {
+        "class-options.txt": "A班：4节课，课程费用480元，材料费另收80元。\nB班：6节课，合计900元，已含材料费。\n"
+      },
+      "turns": [
+        {
+          "user": "我买了三本烘焙书一本没翻，今天又想报陶艺课哈哈。",
+          "intent": "分享近况",
+          "human_checks": [
+            "自然接话",
+            "不训斥或作心理诊断",
+            "给后续交流留空间"
+          ]
+        },
+        {
+          "user": "认真说，你觉得兴趣越多越好吗？我有点分不清是在探索，还是只喜欢开始的感觉。",
+          "intent": "从闲聊转认真观点讨论",
+          "human_checks": [
+            "针对问题提出观点及理由",
+            "允许充分解释",
+            "不直接诊断用户"
+          ]
+        },
+        {
+          "user": "先帮我看下工作区的 class-options.txt，A班算上材料平均每节多少钱？",
+          "intent": "转入工具核验短结果",
+          "tool": "file",
+          "human_checks": [
+            "确实读取文件",
+            "计算结果140元每节",
+            "结果简洁且不重复播报"
+          ]
+        },
+        {
+          "user": "好吧，先把书翻开，今天算你省了我一笔哈哈。",
+          "intent": "从工具操作回闲聊",
+          "human_checks": [
+            "自然回到轻松接话",
+            "不继续长篇建议",
+            "承接烘焙书上下文"
+          ]
+        }
+      ]
+    }
+  ],
+  "human_rubric": {
+    "rating_scale": [
+      "strong",
+      "adequate",
+      "weak",
+      "unacceptable"
+    ],
+    "dimensions": [
+      {
+        "id": "intent_fit",
+        "label": "表达深度是否匹配当前交谈意图"
+      },
+      {
+        "id": "conversational_rhythm",
+        "label": "闲聊、追问和异议是否像连续的人类交流"
+      },
+      {
+        "id": "claim_quality",
+        "label": "观点、文件和历史事实是否准确完整"
+      },
+      {
+        "id": "message_boundaries",
+        "label": "每条消息是否形成自然完整的发言，边界是否有交流作用"
+      },
+      {
+        "id": "tool_reporting",
+        "label": "工具结果、文件操作和交付说明是否适量且可核对"
+      }
+    ],
+    "paired_comparison": [
+      "principles",
+      "examples",
+      "tie"
+    ],
+    "rules": [
+      "看完整多轮轨迹，判断每一轮是否承接上下文；不以单轮字数或消息条数单独判优。",
+      "不把工具链通过视为表达通过；工具准确性和表达适配度分别评分。",
+      "只有独立完整且有自然交流作用的消息边界才算正向；机械拆句、同义重复、无意义拆条扣分。",
+      "观点型复杂请求可以充分展开；闲聊的简短和补充消息可以自然分条。",
+      "重置场景中，‘当前看不到/检索不到’不能被表述成‘旧记录已删除’，除非轨迹另有删除证据。"
+    ],
+    "evaluator_status": "unrated"
+  }
+}

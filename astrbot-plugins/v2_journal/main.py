@@ -9,7 +9,9 @@ from pathlib import Path
 from astrbot.api import star
 from astrbot.api.event import filter
 
-from .journal import JournalStore, message_from_onebot
+from .journal import JournalStore, message_from_group_upload, message_from_onebot
+
+CAPTURE_EVENTS = ("message", "message_sent", "notice.group_upload")
 
 
 @star.register(
@@ -19,7 +21,7 @@ from .journal import JournalStore, message_from_onebot
     "0.1.0",
 )
 class V2Journal(star.Star):
-    """Use OneBot message IDs as the idempotent platform identity."""
+    """Use OneBot message IDs and stable upload-notice references for idempotency."""
 
     async def initialize(self) -> None:
         self._initialized = False
@@ -77,11 +79,16 @@ class V2Journal(star.Star):
             if existing and existing[0] is client:
                 continue
             if existing:
-                for event_name in ("message", "message_sent"):
+                for event_name in CAPTURE_EVENTS:
                     existing[0].unhook_before(event_name, existing[1])
 
             async def observe(raw, platform_id=metadata.id):
-                if raw.get("post_type") not in ("message", "message_sent"):
+                is_message = raw.get("post_type") in ("message", "message_sent")
+                is_upload_notice = (
+                    raw.get("post_type") == "notice"
+                    and raw.get("notice_type") == "group_upload"
+                )
+                if not (is_message or is_upload_notice):
                     return
                 if self._closing:
                     await self._mark_capture_failure("shutdown_rejection")
@@ -91,7 +98,10 @@ class V2Journal(star.Star):
                     )
                     return
                 try:
-                    message = message_from_onebot(platform_id, raw)
+                    if is_upload_notice:
+                        message = message_from_group_upload(platform_id, raw)
+                    else:
+                        message = message_from_onebot(platform_id, raw)
                 except ValueError as exc:
                     await self._mark_capture_failure("malformed_event")
                     self.logger.error(
@@ -110,7 +120,7 @@ class V2Journal(star.Star):
 
             # The root before hooks run ahead of AstrBot's message.group/private
             # handlers, including their awaited conversion and pipeline filters.
-            for event_name in ("message", "message_sent"):
+            for event_name in CAPTURE_EVENTS:
                 client.hook_before(event_name, observe)
             self._bindings[metadata.id] = (client, observe)
             self.logger.info("V2 journal bound to OneBot messages: %s", metadata.id)
@@ -184,7 +194,7 @@ class V2Journal(star.Star):
     async def terminate(self) -> None:
         self._closing = True
         for client, callback in self._bindings.values():
-            for event_name in ("message", "message_sent"):
+            for event_name in CAPTURE_EVENTS:
                 client.unhook_before(event_name, callback)
         self._bindings.clear()
         if self._pending_writes:

@@ -154,14 +154,20 @@ try:
   assert (workspace / "marker.txt").read_text() == "ok"
   assert not host_sitecustomize_marker.exists(), "untrusted Python sitecustomize ran before sandbox setup"
   # Lock the exact complete model-facing inventory for this pinned Profile,
-  # including three SDK resource tools (visible but denied) and five scoped MCP tools.
+  # including SDK resource tools (visible but denied) and deployed scoped MCP capabilities.
   initial = json.loads(log.read_text().splitlines()[0])
   inventory = set(initial["tools"])
   expected = {"bash", "skill", "web_search", "web_fetch", "host_probe",
               "list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource",
               "mcp__astrbot__history_recent", "mcp__astrbot__history_before",
-              "mcp__astrbot__history_search", "mcp__astrbot__current_group_info",
-              "mcp__astrbot__qq_send_origin"}
+              "mcp__astrbot__history_search", "mcp__astrbot__history_read_image", "mcp__astrbot__current_group_info",
+              "mcp__astrbot__qq_send_origin", "mcp__astrbot__qq_file_receive", "mcp__astrbot__qq_file_send",
+              "mcp__astrbot__current_group_members", "mcp__astrbot__qq_prepare_reply",
+              "mcp__astrbot__meme_list", "mcp__astrbot__meme_send", "mcp__astrbot__plugin_status",
+              "mcp__astrbot__bili_dynamics", "mcp__astrbot__bili_subscribe",
+              "mcp__astrbot__bili_subscriptions", "mcp__astrbot__bili_unsubscribe",
+              "mcp__astrbot__twitter_subscribe", "mcp__astrbot__twitter_subscriptions",
+              "mcp__astrbot__twitter_unsubscribe"}
   assert inventory == expected, sorted(inventory)
   schemas = {tool["name"]:tool for tool in initial["toolSchemas"]}
   assert set(schemas) == expected
@@ -232,11 +238,15 @@ try:
       "sessionId":sid,"prompt":[{"type":"text","text":cgroup_prompt}],
     })
     deadline = time.monotonic() + 8
-    while not (workspace / "cgroup.txt").exists():
+    # Shell redirection creates the file before cat writes its content.
+    # Wait for the actual cgroup line, rather than racing the empty file.
+    cgroup_lines = []
+    while not any(line.startswith("0::") for line in cgroup_lines):
       assert not pending.done(), pending.result()
       assert time.monotonic() < deadline, "native Bash did not publish its cgroup path"
+      if (workspace / "cgroup.txt").exists():
+        cgroup_lines = (workspace / "cgroup.txt").read_text().splitlines()
       time.sleep(0.02)
-    cgroup_lines = (workspace / "cgroup.txt").read_text().splitlines()
     assert any(line.startswith("0::") for line in cgroup_lines), cgroup_lines
     cgroup = next(line.split("::",1)[1] for line in cgroup_lines if line.startswith("0::"))
     control = Path("/sys/fs/cgroup") / cgroup.lstrip("/")
@@ -342,8 +352,14 @@ try:
       assert not pending.done(), pending.result()
       assert time.monotonic() < deadline, "runtime-kill Bash did not start"
       time.sleep(0.02)
-    kill_cgroup = next(line.split("::",1)[1] for line in
-      (workspace / "runtime-kill-cgroup").read_text().splitlines() if line.startswith("0::"))
+    kill_lines = []
+    while not any(line.startswith("0::") for line in kill_lines):
+      assert not pending.done(), pending.result()
+      assert time.monotonic() < deadline, "runtime-kill Bash did not publish its cgroup path"
+      if (workspace / "runtime-kill-cgroup").exists():
+        kill_lines = (workspace / "runtime-kill-cgroup").read_text().splitlines()
+      time.sleep(0.02)
+    kill_cgroup = next(line.split("::",1)[1] for line in kill_lines if line.startswith("0::"))
     kill_unit = Path(kill_cgroup).name
     assert kill_unit.startswith("dsh-subprocess-") and kill_unit.endswith(".scope"), kill_unit
     os.kill(client._proc.pid, signal.SIGKILL)

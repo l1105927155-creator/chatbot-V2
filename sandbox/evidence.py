@@ -29,7 +29,7 @@ LIFECYCLE_EVENTS = {
     "turn/queued", "turn/start", "turn/completed", "turn/failed", "turn/duplicate",
     "dsh/start", "dsh/dispatched", "dsh/stop", "dsh/error", "tool/start", "tool/end",
     "cancel/requested", "recovery/resolved", "control/request", "send/start", "send/returned",
-    "send/failed", "send/receipt",
+    "send/failed", "send/receipt", "delivery/content_rejected",
 }
 
 
@@ -296,7 +296,11 @@ class EvidenceSnapshotter:
                 request = json.loads(action["request_json"])
             except (TypeError, json.JSONDecodeError, KeyError):
                 continue
-            message_id = (response or {}).get("data", {}).get("message_id") if isinstance(response, dict) else None
+            # OneBot APIs return different data shapes: send APIs return an
+            # object containing message_id, while lookup APIs may return a
+            # list. Only an actual object field can establish a send receipt.
+            response_data = response.get("data") if isinstance(response, dict) else None
+            message_id = response_data.get("message_id") if isinstance(response_data, dict) else None
             if message_id is None:
                 continue
             conversation = _action_conversation(action)

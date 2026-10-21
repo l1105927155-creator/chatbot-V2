@@ -1,4 +1,4 @@
-"""Lossless semantic grouping for the automatic final-reply path."""
+"""The final reply preserves the message boundary chosen by the Agent."""
 
 from __future__ import annotations
 
@@ -24,7 +24,6 @@ def load(name: str, path: Path):
     return module
 
 
-delivery = load("v2_reply_delivery", ROUTER / "reply_delivery.py")
 journal = load("v2_reply_delivery_journal", ROOT / "astrbot-plugins/v2_journal/journal.py")
 state = load("v2_reply_delivery_state", ROUTER / "state.py")
 service = load("v2_reply_delivery_service", ROUTER / "service.py")
@@ -34,75 +33,59 @@ def numbered_reply() -> str:
     return "".join(f"{index}. {letter * 340}\n\n" for index, letter in enumerate("ABC", 1)).rstrip()
 
 
-def test_short_reply_is_sent_byte_for_byte_as_one_message():
-    reply = "简短回答：https://example.com/a?x=1&y=2\n保持原样。"
-    assert delivery.split_final_reply(reply) == [reply]
+@pytest.mark.parametrize("reply", [
+    "先接住话题。\n\n补充一句自己的看法。\n\n留给对方接话。",
+    numbered_reply(),
+    "说明\n\n```python\n" + "print('完整')\n" * 100 + "```\n\n结束",
+    "https://example.com/a?x=1&y=2\n" + "正文" * 700,
+])
+def test_final_message_is_not_split_or_rewritten(tmp_path, reply):
+    j, s, conv, dsh, svc = setup_turn(tmp_path, reply)
+    delivered = []
+
+    async def send(text):
+        delivered.append(text)
+
+    assert asyncio.run(svc.handle(conv, "wake-1", send)) == reply
+    assert delivered == [reply]
+    assert s.get("qq", "1", conv.key).pending_upper_cursor is None
 
 
-def test_numbered_topics_group_losslessly_without_cutting_url_or_code():
-    first = "1. " + "甲" * 320 + " https://example.com/path?q=long-value\n\n"
-    second = "2. " + "乙" * 320 + "\n\n"
-    third = "3. " + "丙" * 320
-    reply = first + second + third
-    chunks = delivery.split_final_reply(reply)
-    assert len(chunks) == 3
-    assert "".join(chunks) == reply
-    assert all("https://example.com/path?q=long-value" not in chunk or chunk == first
-               for chunk in chunks)
-    assert all(chunk.startswith(("1. ", "2. ", "3. ")) for chunk in chunks)
-
-
-def test_fenced_code_block_stays_whole_and_unsplittable_text_is_not_cut():
-    code = "说明\n\n```python\n" + "print('完整')\n" * 100 + "```\n\n结束"
-    assert delivery.split_final_reply(code) == [code]
-    prose = "甲" * 750
-    assert delivery.split_final_reply(prose) == [prose]
-
-
-def test_failure_on_second_part_stops_delivery_and_consumes_completed_turn(tmp_path):
+def setup_turn(tmp_path, reply):
     j = journal.JournalStore(tmp_path / "journal.sqlite3")
     s = state.StateStore(tmp_path / "state.sqlite3")
-    conversation = journal.Conversation("qq", "1", "group:3")
+    conv = journal.Conversation("qq", "1", "group:3")
 
-    class LongReply:
+    class Reply:
         calls = []
-
         def create_session(self):
             return "session-1"
-
         def run(self, session_id, prompt):
             self.calls.append((session_id, prompt))
-            return numbered_reply()
+            return reply
 
-    dsh = LongReply()
+    dsh = Reply()
     svc = service.ChatService(j, s, dsh)
-    raw = {
+    j.append(journal.message_from_onebot("qq", {
         "post_type": "message", "message_type": "group", "self_id": 1,
         "user_id": 2, "group_id": 3, "message_id": "wake-1",
         "message": [{"type": "text", "data": {"text": "请详细说明"}}],
-    }
-    j.append(journal.message_from_onebot("qq", raw))
+    }))
+    return j, s, conv, dsh, svc
+
+
+def test_final_failure_is_not_retried_and_completed_input_is_consumed(tmp_path):
+    reply = numbered_reply()
+    j, s, conv, dsh, svc = setup_turn(tmp_path, reply)
     attempted = []
 
-    async def fail_second(text):
+    async def fail(text):
         attempted.append(text)
-        if len(attempted) == 2:
-            raise ConnectionError("part 2 delivery failed")
+        raise ConnectionError("platform receipt lost")
 
-    with pytest.raises(service.FinalReplyDeliveryError) as raised:
-        asyncio.run(svc.handle(conversation, "wake-1", fail_second))
-    assert isinstance(raised.value.cause, ConnectionError)
-    expected = delivery.split_final_reply(numbered_reply())
-    assert len(expected) == 3
-    assert attempted == expected[:2]
-    saved = s.get("qq", "1", "group:3")
+    with pytest.raises(service.FinalReplyDeliveryError):
+        asyncio.run(svc.handle(conv, "wake-1", fail))
+    assert attempted == [reply]
+    saved = s.get("qq", "1", conv.key)
     assert saved.last_seen_journal_id == 1 and saved.pending_upper_cursor is None
     assert len(dsh.calls) == 1
-
-
-
-def test_large_atomic_paragraph_does_not_prevent_later_topic_split():
-    reply = "1、" + "甲" * 650 + "\n\n2、" + "乙" * 650
-    chunks = delivery.split_final_reply(reply)
-    assert len(chunks) == 2 and "".join(chunks) == reply
-    assert chunks[1].startswith("2、")

@@ -48,9 +48,25 @@ def test_config_schema_rejects_extra_keys(tmp_path: Path) -> None:
     path = config(tmp_path / "config.json", credential, surprise=True)
     with pytest.raises(ValueError):
         agent_service._load_config(path)
+
     path = config(tmp_path / "legacy.json", credential, version=1, execution_contract=1)
     with pytest.raises(ValueError, match="schema"):
         agent_service._load_config(path)
+
+
+def test_shared_model_source_is_explicit_and_keeps_session_configuration(tmp_path, monkeypatch):
+    credential = private_file(tmp_path / "key.env", "DEEPSEEK_API_KEY=secret\n")
+    shared = tmp_path / "web-home"
+    path = config(tmp_path / "shared.json", credential, shared_models_home=str(shared))
+    loaded = agent_service._load_config(path)
+    monkeypatch.setenv("V2_SHARED_MODELS_PROFILE", "/inherited/untrusted.yml")
+    env = agent_service._runtime_env(loaded)
+    assert env["V2_SHARED_MODELS_PROFILE"] == str(shared / "profiles/web/cordis.patch.yml")
+    assert env["V2_SHARED_MODELS_CREDENTIALS"] == str(shared / ".credentials.yaml")
+    assert env["V2_DSH_MODEL"] == loaded["model"]
+    assert env["V2_QQ_ALLOWED_CONVERSATIONS"] == ",".join(loaded["allowed_conversations"])
+    loaded.pop("shared_models_home")
+    assert "V2_SHARED_MODELS_PROFILE" not in agent_service._runtime_env(loaded)
 
 
 @pytest.mark.parametrize("override", [

@@ -743,11 +743,11 @@ class SandboxApp:
                 raise KeyError("forward message not found")
             api_messages = self._forward_api_nodes(messages)
             return {"messages": api_messages, "message": api_messages}, None
-        if action in ("get_group_file_url", "get_private_file_url"):
-            asset = self.store.get_asset(str(params.get("file_id", "")))
+        if action in ("get_group_file_url", "get_private_file_url", "get_image", "get_file"):
+            asset = self.store.get_asset(str(params.get("file_id") or params.get("file", "")))
             if not asset:
                 raise KeyError("file not found")
-            return {"url": f"{self.asset_base_url}/api/assets/{asset['id']}", "file_name": asset["name"]}, None
+            return {"url": f"{self.asset_base_url}/api/assets/{asset['id']}", "file_name": asset["name"], "file_size": asset["size"]}, None
         if action in ("send_group_msg", "send_private_msg", "send_msg", "send_group_forward_msg", "send_private_forward_msg"):
             conv_type = "group" if "group" in action or (action == "send_msg" and params.get("message_type") == "group") else "private"
             conv_id = params.get("group_id") if conv_type == "group" else params.get("user_id")

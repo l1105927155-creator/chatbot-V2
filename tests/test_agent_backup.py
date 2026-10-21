@@ -220,6 +220,11 @@ def test_backup_restore_preserves_real_group_volume_and_router_state(tmp_path, m
                 shutil.move(str(path), str(quarantined / Path(component).name))
         agent_backup.restore_backup(root, archive)
         assert not os.path.ismount(workspace)
+        info = Path(data["directory"]) / "group-info.json"
+        assert json.loads(info.read_text()) == {
+            "version": 1, "platform_id": identity[0],
+            "bot_id": identity[1], "group_id": identity[2],
+        }
         assert (router_state / f"state-group-{key}.sqlite3").read_bytes() == b"router-group-mapping"
         assert (session_home / "native.json").read_text() == '{"sessionId":"group-session"}'
         reopened = group_volume.prepare_group(root / ".runtime", *identity)

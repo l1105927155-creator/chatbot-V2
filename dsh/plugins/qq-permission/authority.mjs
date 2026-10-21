@@ -5,12 +5,14 @@ import { readFileSync, realpathSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { dirname, isAbsolute, resolve, sep } from 'node:path'
 import { ScopeStore } from './scopes.mjs'
+import { researchDelegation } from '../agent-profile/background-authority.mjs'
 
 const fields = ['platform_id', 'bot_id', 'conversation_key', 'requester_id', 'inbound_message_id', 'epoch', 'session_id', 'nonce', 'prompt_sha256']
 const globals = ['read', 'write', 'edit', 'bash', 'conversation_scope_get', 'conversation_scope_update',
-  'list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource']
+  'list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource',
+  'web_search', 'web_fetch', 'skill', 'background_research']
 const safeMcp = new Set(['mcp__astrbot__history_recent', 'mcp__astrbot__history_before',
-  'mcp__astrbot__history_search', 'mcp__astrbot__current_group_info', 'mcp__astrbot__qq_send_origin'])
+  'mcp__astrbot__history_search', 'mcp__astrbot__history_read_image', 'mcp__astrbot__current_group_info', 'mcp__astrbot__qq_send_origin'])
 const text = value => typeof value === 'string' && value.length > 0 && value.trim() === value && !/[\x00-\x1f\x7f]/.test(value)
 const nested = (base, path) => path === base || path.startsWith(base + sep)
 
@@ -57,6 +59,9 @@ export class Authority extends Service {
         const binding = this.binding(exec.agent)
         if (exec.signal.aborted || binding.signal?.aborted) throw new Error('inactive turn')
         const name = exec.name
+        if (binding.delegated && !['web_search', 'web_fetch', 'skill'].includes(name)) {
+          throw new Error('tool unavailable to background safe-chat research')
+        }
         if (!safeMcp.has(name) && !globals.includes(name)) throw new Error('unavailable tool')
         if (exec.arguments?.sandbox_permissions && exec.arguments.sandbox_permissions !== 'workspace-write') {
           throw new Error('sandbox escalation is unavailable')
@@ -109,6 +114,13 @@ export class Authority extends Service {
   }
 
   binding(agent) {
+    const delegated = researchDelegation(agent)
+    if (delegated) {
+      if (delegated.profile !== 'safe-chat' || delegated.signal?.aborted) {
+        throw new Error('background safe-chat authority expired or unavailable')
+      }
+      return {source:delegated.source, turn:delegated.taskId, signal:delegated.signal, delegated}
+    }
     const binding = this.bound.get(agent)
     if (!binding || binding.signal?.aborted) throw new Error('no trusted current turn')
     const latest = this.load(agent.session.id)
@@ -121,6 +133,9 @@ export class Authority extends Service {
     const current = this.local.getStore()
     if (!current || current.execution.signal.aborted) throw new Error('no trusted execution')
     const binding = this.binding(current.agent)
+    if (binding.delegated && !['web_search', 'web_fetch', 'skill'].includes(current.execution.name)) {
+      throw new Error('tool unavailable to background safe-chat research')
+    }
     if (binding.turn !== current.turn || binding.source.nonce !== current.source.nonce) throw new Error('expired execution')
     return current.source
   }

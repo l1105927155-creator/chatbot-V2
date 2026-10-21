@@ -1,12 +1,15 @@
 """V2 adapter for pinned DSH's native ACP create/resume/prompt contract."""
 from __future__ import annotations
 import os
+from collections import Counter
+import re
 import asyncio
 import threading
 import stat
 import copy
 import time
 import json
+import secrets
 from pathlib import Path
 from typing import Any
 
@@ -17,11 +20,15 @@ DIRECT_NETWORK_ENV = {name: "" for name in (
     "all_proxy", "ALL_PROXY", "no_proxy", "NO_PROXY",
 )} | {"NODE_USE_ENV_PROXY": "0"}
 try:  # Support both AstrBot package loading and the isolated contract tests.
+    from .model_selection import model_route as validate_model_route, model_view
+    from .shared_models import SharedModels
     from .turn_source import TurnSourcePublisher
     from .persona_state import PersonaStateStore
     from .scene_state import SceneStateStore
     from .runtime_audit import CURRENT_TRACE, call_id
 except ImportError:  # pragma: no cover - exercised by tests loading this file directly
+    from model_selection import model_route as validate_model_route, model_view
+    from shared_models import SharedModels
     from turn_source import TurnSourcePublisher
     from persona_state import PersonaStateStore
     from scene_state import SceneStateStore
@@ -32,7 +39,8 @@ class AcpRuntime:
     """Use the pinned Python transport with DSH's native ACP methods."""
     def __init__(self, *, dsh_bin, dsh_home, workspace, patch, instructions, provider, model,
                  source_dir=None, source_epoch=None, scope_root=None,
-                 execution_profile=None, owner_shell_env=None, group_runtime=None):
+                 execution_profile=None, owner_shell_env=None, group_runtime=None,
+                 background_callback_url=None, background_callback_token=None):
         from deepseek_harness.client import HarnessClient, HarnessConfig
         from pydantic import BaseModel, ConfigDict
 
@@ -69,7 +77,26 @@ class AcpRuntime:
         # Pinned DSH classifies sandbox denials from English OS diagnostics.
         env = {"LC_MESSAGES": "C",
                "DSH_SYSTEM_PROMPT": instructions.read_text(encoding="utf-8"),
-               "V2_DSH_PROVIDER": provider, "V2_DSH_MODEL": model}
+               "V2_DSH_PROVIDER": provider, "V2_DSH_MODEL": model,
+               "V2_DSH_HOME": str(Path(dsh_home).resolve())}
+        if background_callback_url is not None or background_callback_token is not None:
+            if (not isinstance(background_callback_url, str) or
+                    not background_callback_url.startswith("http://127.0.0.1:") or
+                    not background_callback_url.endswith("/background/events") or
+                    not isinstance(background_callback_token, str) or
+                    len(background_callback_token) < 32):
+                raise ValueError("background callback endpoint and token must be configured together")
+            env.update({"V2_BACKGROUND_CALLBACK_URL": background_callback_url,
+                        "V2_BACKGROUND_CALLBACK_TOKEN": background_callback_token})
+        self.shared_models = None
+        if os.environ.get('V2_SHARED_MODELS_PROFILE'):
+            status = Path(dsh_home).resolve() / '.model-catalog-sync.json'
+            epoch = secrets.token_hex(16)
+            env.update({key: os.environ[key] for key in
+                        ('V2_SHARED_MODELS_PROFILE', 'V2_SHARED_MODELS_CREDENTIALS')})
+            env.update(V2_SHARED_MODELS_STATUS_FILE=str(status), V2_SHARED_MODELS_EPOCH=epoch)
+            self.shared_models = SharedModels(env['V2_SHARED_MODELS_PROFILE'], status, epoch)
+        self._catalog_lock = threading.RLock()
         if execution_profile:
             env["V2_EXECUTION_PROFILE"] = execution_profile
         if execution_profile == "owner-host":
@@ -112,6 +139,10 @@ class AcpRuntime:
             # None lets ACP use its native per-request timeout semantics.
             request_timeout_seconds=None if execution_profile == "owner-host" else 180,
         ))
+        self._model_notifications = (self.client.subscribe_notifications(
+            lambda n: n.method == 'session/update' and
+            (n.payload or {}).get('update', {}).get('sessionUpdate') == 'config_option_update'
+        ) if self.shared_models is not None else None)
         try:
             self.client.start()
             initialized = self.request("initialize", {
@@ -120,6 +151,10 @@ class AcpRuntime:
             })
             if "resume" not in initialized.get("agentCapabilities", {}).get("sessionCapabilities", {}):
                 raise RuntimeError("pinned DSH ACP runtime did not advertise session resume")
+            self.image_prompts = (initialized.get("agentCapabilities", {})
+                                  .get("promptCapabilities", {}).get("image") is True)
+            if self.shared_models is not None:
+                self.shared_models.snapshot()
         except BaseException:
             self.client.close()
             raise
@@ -128,45 +163,148 @@ class AcpRuntime:
         return self.client.request(method, params, response_model=self.response_model,
                                    **kwargs).model_dump()
 
-    def new_session(self, mcp_servers=None):
-        return self.request("session/new", {"cwd": self.workspace, "mcpServers": mcp_servers or []})["sessionId"]
+    def _remember_models(self, session_id, options):
+        self.__dict__.setdefault('_session_model_configs', {})[session_id] = options
+        return options
 
-    def resume(self, session_id, mcp_servers=None):
-        resumed = self.request("session/resume", {
-            "sessionId": session_id, "cwd": self.workspace, "mcpServers": mcp_servers or [],
-        })
-        # Native resume prefers the saved model over the startup fallback.
-        # Apply the deployment's explicit route through ACP, retaining the SID
-        # and all history. This performs no inference and never replays a turn.
-        route = getattr(self, "model_route", None)
+    def new_session(self, mcp_servers=None):
+        result = self.request('session/new', {'cwd': self.workspace, 'mcpServers': mcp_servers or []})
+        self._remember_models(result['sessionId'], result.get('configOptions', []))
+        return result['sessionId']
+
+    def _set_native_model(self, session_id, value):
+        uncertain = self.__dict__.setdefault('_uncertain_model_sessions', set())
+        uncertain.add(session_id)
+        expected = validate_model_route(json.loads(value))
+        options = self.request('session/set_config_option', {
+            'sessionId': session_id, 'configId': 'model', 'value': value,
+        }).get('configOptions', [])
+        view = model_view(options)
+        if (view['current']['provider'], view['current']['model']) != expected:
+            raise RuntimeError('DSH model switch was not confirmed')
+        self._remember_models(session_id, options)
+        uncertain.discard(session_id)
+        return options
+
+    def _apply_model_route(self, session_id, options, route):
         if not route:
-            return
-        option = next((item for item in resumed.get("configOptions", [])
-                       if item.get("id") == "model"), None)
+            return options
+        option = next((item for item in options if item.get('id') == 'model'), None)
         if option is None:
-            raise RuntimeError("DSH did not expose the deployment model configuration")
+            raise RuntimeError('DSH did not expose the deployment model configuration')
         def matches(value):
             try:
                 return json.loads(value) == list(route)
             except (TypeError, ValueError):
                 return False
-        if matches(option.get("currentValue")):
-            return
+        if (matches(option.get('currentValue'))
+                and session_id not in self.__dict__.get('_uncertain_model_sessions', set())):
+            return options
         choices = []
-        for entry in option.get("options", []):
-            choices.extend(entry.get("options", []) if "group" in entry else [entry])
-        selected = next((item.get("value") for item in choices if matches(item.get("value"))), None)
+        for entry in option.get('options', []):
+            choices.extend(entry.get('options', []) if 'group' in entry else [entry])
+        selected = next((item.get('value') for item in choices if matches(item.get('value'))), None)
         if selected is None:
-            raise RuntimeError("configured DSH model is not available in the native ACP catalog")
-        updated = self.request("session/set_config_option", {
-            "sessionId": session_id, "configId": "model", "value": selected,
-        })
-        if not any(item.get("id") == "model" and matches(item.get("currentValue"))
-                   for item in updated.get("configOptions", [])):
-            raise RuntimeError("DSH model switch was not confirmed")
+            raise RuntimeError('configured DSH model is not available in the native ACP catalog')
+        updated = self._set_native_model(session_id, selected)
+        if not any(item.get('id') == 'model' and matches(item.get('currentValue')) for item in updated):
+            raise RuntimeError('DSH model switch was not confirmed')
+        return updated
 
-    def run(self, session_id, delta):
-        chunks = []
+    def resume(self, session_id, mcp_servers=None, *, model_route=None):
+        resumed = self.request('session/resume', {
+            'sessionId': session_id, 'cwd': self.workspace, 'mcpServers': mcp_servers or [],
+        })
+        route = model_route if model_route is not None else getattr(self, 'model_route', None)
+        options = self._apply_model_route(session_id, resumed.get('configOptions', []), route)
+        self._remember_models(session_id, options)
+        return {**resumed, 'configOptions': options}
+
+    def model_status(self, session_id, mcp_servers=None, *, model_route=None):
+        configs = self.__dict__.setdefault('_session_model_configs', {})
+        route = model_route if model_route is not None else self.model_route
+        if session_id not in configs:
+            self.resume(session_id, mcp_servers, model_route=model_route)
+        self._refresh_shared_catalog(session_id)
+        # Session/new, resume and set_config_option are the authoritative ACP
+        # config snapshots. Active Sessions cannot be resumed again; reading this
+        # snapshot also avoids resetting explicit reasoning effort with a no-op SET.
+        options = self._apply_model_route(session_id, configs[session_id], route)
+        self._remember_models(session_id, options)
+        view = model_view(options)
+        if getattr(self, 'shared_models', None) is not None:
+            view['current_available'] = any((c['provider'], c['model']) ==
+                                           (view['current']['provider'], view['current']['model'])
+                                           for c in view['choices'])
+        return view
+
+    def _refresh_shared_catalog(self, session_id):
+        shared = getattr(self, 'shared_models', None)
+        if shared is None:
+            return
+        with self._catalog_lock:
+            fingerprint, catalog = shared.snapshot()
+            published = {(row['provider'], model): name
+                         for row in catalog
+                         for model, name in zip(row['models'], row.get('names', row['models']))}
+            deadline = time.monotonic() + 10
+
+            def collect(notification):
+                params = notification.payload or {}
+                sid = params.get('sessionId')
+                existing = self._session_model_configs.get(sid)
+                if existing is None:
+                    return
+                incoming = next((item for item in params.get('update', {}).get('configOptions', [])
+                                 if item.get('id') == 'model'), None)
+                if incoming is not None:
+                    # Topology notifications can predate a later successful SET.
+                    # Refresh choices only; keep confirmed model/reasoning state.
+                    current = next(item for item in existing if item.get('id') == 'model')
+                    current['options'] = copy.deepcopy(incoming.get('options', []))
+
+            while True:
+                self._model_notifications.drain(collect)
+                options = copy.deepcopy(self._session_model_configs[session_id])
+                view = model_view(options)
+                advertised = {(c['provider'], c['model']): c['name'] for c in view['choices']}
+                if all(advertised.get(route) == name for route, name in published.items()):
+                    current = next(item for item in options if item['id'] == 'model')
+                    for group in current.get('options', []):
+                        if 'group' in group:
+                            group['options'] = [entry for entry in group.get('options', [])
+                                                if validate_model_route(json.loads(entry['value'])) in published]
+                    latest_fingerprint, _ = shared.snapshot()
+                    if latest_fingerprint != fingerprint:
+                        return self._refresh_shared_catalog(session_id)
+                    self._remember_models(session_id, options)
+                    return
+                if time.monotonic() >= deadline:
+                    raise RuntimeError('DSH原生模型目录尚未刷新，请稍后重试。')
+                time.sleep(0.025)
+
+    def select_model(self, session_id, provider, model, mcp_servers=None, *, previous_route=None):
+        route = validate_model_route((provider, model))
+        previous = self.model_status(session_id, mcp_servers, model_route=previous_route)
+        if not any((choice['provider'], choice['model']) == route for choice in previous['choices']):
+            raise ValueError('该模型不在DSH当前公开目录中，请先查看/provider list。')
+        selected = next(c['value'] for c in previous['choices'] if (c['provider'], c['model']) == route)
+        return model_view(self._set_native_model(session_id, selected))
+
+    def run(self, session_id, delta, images=None):
+        if getattr(self, "shared_models", None) is not None:
+            self._refresh_shared_catalog(session_id)
+        if images is not None:
+            if not self.image_prompts:
+                raise RuntimeError("pinned DSH ACP connection did not advertise image prompt capability")
+            if not isinstance(images, list) or not images:
+                raise ValueError("ACP image prompt must contain an ordered non-empty image list")
+            prompt = [{"type": "text", "text": delta}, *copy.deepcopy(images)]
+        else:
+            prompt = [{"type": "text", "text": delta}]
+        final_message_id = None
+        final_chunks = []
+        protocol_errors = []
         trace = CURRENT_TRACE.get()
         tool_starts = {}
         token = {"requested": False, "dispatched": False, "trace": trace}
@@ -175,10 +313,12 @@ class AcpRuntime:
                 raise RuntimeError("DSH session already has an active prompt")
             self._active_prompts[session_id] = token
         def collect(notification):
+            nonlocal final_message_id
             if notification.method != "session/update" or notification.payload.get("sessionId") != session_id:
                 return
             update = notification.payload.get("update", {})
             content = update.get("content", {})
+            update_type = update.get("sessionUpdate")
             if trace and update.get("sessionUpdate") in {"tool_call", "tool_call_update"}:
                 raw_id = update.get("toolCallId")
                 if isinstance(raw_id, str):
@@ -190,11 +330,29 @@ class AcpRuntime:
                         before = tool_starts.pop(raw_id, None)
                         trace.emit("tool/end", call_id=call_id(raw_id), status=update.get("status"),
                                    **({"elapsed_ms": (time.monotonic() - before) * 1000} if before else {}))
-            if update.get("sessionUpdate") == "agent_message_chunk" and content.get("type") == "text":
-                chunks.append(content["text"])
+            if update_type == "tool_call":
+                # Any text before a tool call describes that step, not the final reply.
+                final_message_id = None
+                final_chunks.clear()
+                return
+            if update_type in {"agent_message_chunk", "agent_thought_chunk"}:
+                message_id = update.get("messageId")
+                if not isinstance(message_id, str) or not message_id.strip():
+                    # The SDK may contain callback exceptions; report malformed upstream
+                    # updates only after request() has returned to its caller.
+                    protocol_errors.append("assistant update has no valid messageId")
+                    final_message_id = None
+                    final_chunks.clear()
+                    return
+                if message_id != final_message_id:
+                    final_message_id = message_id
+                    final_chunks.clear()
+                if (update_type == "agent_message_chunk" and content.get("type") == "text"
+                        and isinstance(content.get("text"), str)):
+                    final_chunks.append(content["text"])
         try:
             result = self.request("session/prompt", {
-                "sessionId": session_id, "prompt": [{"type": "text", "text": delta}],
+                "sessionId": session_id, "prompt": prompt,
             }, on_notification=collect, notification_filter=lambda n:
                n.method == "session/update" and n.payload.get("sessionId") == session_id)
         except BaseException as error:
@@ -213,7 +371,9 @@ class AcpRuntime:
             trace.emit("dsh/stop", stop_reason=result.get("stopReason"))
         if result.get("stopReason") != "end_turn":
             raise RuntimeError(f"DSH turn did not complete: {result.get('stopReason')}")
-        text = "".join(chunks).strip()
+        if protocol_errors:
+            raise RuntimeError("DSH ACP protocol error: " + "; ".join(protocol_errors))
+        text = "".join(final_chunks).strip()
         if not text:
             raise RuntimeError("DSH completed without a text reply")
         return text
@@ -235,6 +395,8 @@ class AcpRuntime:
 
     def close_session(self, session_id):
         self.request("session/close", {"sessionId": session_id})
+        self.__dict__.get('_session_model_configs', {}).pop(session_id, None)
+        self.__dict__.get('_uncertain_model_sessions', set()).discard(session_id)
 
     def transport_alive(self):
         # The pinned SDK has no non-generating public ping. Check its actual
@@ -245,11 +407,53 @@ class AcpRuntime:
                     and reader is not None and reader.is_alive())
 
     def close(self):
+        subscription = getattr(self, '_model_notifications', None)
+        if subscription is not None:
+            subscription.close()
         self.client.close()
 
 
 class DshTurnCancelled(RuntimeError):
     """The pinned ACP runtime confirmed that the active turn was cancelled."""
+
+
+class DshTurnFailure(RuntimeError):
+    """A bounded terminal classification backed by a native turn receipt."""
+
+    def __init__(self, kind, code="UNKNOWN", *, tools_started=(), tools_finished=(), unfinished_tools=()):
+        if kind not in {"model", "infrastructure", "unknown"}:
+            kind = "unknown"
+        self.kind = kind
+        self.code = code if isinstance(code, str) and re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", code) else "UNKNOWN"
+        self.tools_started = tuple(tools_started) if isinstance(tools_started, (list, tuple)) else ()
+        self.tools_finished = tuple(tools_finished) if isinstance(tools_finished, (list, tuple)) else ()
+        self.unfinished_tools = tuple(unfinished_tools) if isinstance(unfinished_tools, (list, tuple)) else ()
+        self.fault_details = {
+            "confirmed_tools": list(self.tools_finished)[:30],
+            "unknown_tools": list(self.unfinished_tools)[:30],
+        }
+        super().__init__(f"DSH turn failed ({self.kind}:{self.code})")
+
+
+class DshModelTurnFailure(DshTurnFailure):
+    """Native model failure with every requested tool conclusively settled."""
+
+    def __init__(self, code="UNKNOWN", **evidence):
+        super().__init__("model", code, **evidence)
+
+
+class DshInfrastructureFailure(DshTurnFailure):
+    """The DSH runtime or transport could not complete the turn reliably."""
+
+    def __init__(self, code="UNKNOWN", **evidence):
+        super().__init__("infrastructure", code, **evidence)
+
+
+class DshTurnOutcomeUnknown(DshTurnFailure):
+    """The available evidence cannot establish whether side effects completed."""
+
+    def __init__(self, code="UNKNOWN", **evidence):
+        super().__init__("unknown", code, **evidence)
 
 
 def _prepare_owner_directory(path: Path) -> None:
@@ -271,7 +475,9 @@ class DshClient:
                  patch: Path, instructions: Path, provider: str | None = None,
                  model: str | None = None, harness_factory: Any = None,
                  enable_authorization: bool = False, execution_profile: str | None = None,
-                 owner_shell_env: dict | None = None, group_runtime: dict | None = None):
+                 owner_shell_env: dict | None = None, group_runtime: dict | None = None,
+                 background_callback_url: str | None = None,
+                 background_callback_token: str | None = None):
         self.settings = {"dsh_bin": Path(dsh_bin).resolve(), "dsh_home": Path(dsh_home).resolve(),
                          "workspace": Path(workspace).resolve(), "patch": Path(patch).resolve(),
                          "instructions": Path(instructions).resolve()}
@@ -283,6 +489,15 @@ class DshClient:
             self.settings["owner_shell_env"] = dict(owner_shell_env)
         if group_runtime is not None:
             self.settings["group_runtime"] = dict(group_runtime)
+        if background_callback_url is not None or background_callback_token is not None:
+            if (not isinstance(background_callback_url, str) or
+                    not background_callback_url.startswith("http://127.0.0.1:") or
+                    not background_callback_url.endswith("/background/events") or
+                    not isinstance(background_callback_token, str) or
+                    len(background_callback_token) < 32):
+                raise ValueError("background callback endpoint and token must be configured together")
+            self.settings.update(background_callback_url=background_callback_url,
+                                 background_callback_token=background_callback_token)
         for name, value in (("provider", provider), ("model", model)):
             value = value if value is not None else os.environ.get("V2_DSH_" + name.upper())
             if not isinstance(value, str) or not value or value != value.strip() or any(ord(c) < 32 for c in value):
@@ -330,6 +545,7 @@ class DshClient:
         self._session_locks = {}
         self._sessions = set()
         self._session_servers = {}
+        self._confirmed_model_routes = {}
         self._quarantined_sessions = {}
         self._closed = False
         self._runtime_stopped = False
@@ -380,9 +596,39 @@ class DshClient:
         with self._lock:
             self._sessions.add(session_id)
             self._session_servers[session_id] = servers
+            self._confirmed_model_routes[session_id] = (self.settings['provider'], self.settings['model'])
         return session_id
 
-    def run(self, session_id, journal_delta, mcp_servers=None, trusted_source=None):
+    def model_status(self, session_id, mcp_servers=None, *, model_route=None):
+        return self._model_control(session_id, mcp_servers, model_route=model_route)
+
+    def select_model(self, session_id, provider, model, mcp_servers=None, *, previous_route=None):
+        return self._model_control(session_id, mcp_servers, selection=(provider, model), model_route=previous_route)
+
+    def _model_control(self, session_id, mcp_servers, *, selection=None, model_route=None):
+        servers = copy.deepcopy(mcp_servers or [])
+        with self._session_lock(session_id):
+            with self._lock:
+                if session_id in self._quarantined_sessions:
+                    raise RuntimeError('DSH session is quarantined')
+                if session_id in self._sessions and self._session_servers[session_id] != servers:
+                    raise ValueError('MCP binding changed for an active DSH session')
+            try:
+                if selection is None:
+                    result = self.runtime.model_status(session_id, servers or None, model_route=model_route)
+                else:
+                    result = self.runtime.select_model(session_id, *selection, servers or None, previous_route=model_route)
+            except BaseException:
+                with self._lock:
+                    self._confirmed_model_routes.pop(session_id, None)
+                raise
+            with self._lock:
+                self._sessions.add(session_id)
+                self._session_servers[session_id] = servers
+                self._confirmed_model_routes[session_id] = (result['current']['provider'], result['current']['model'])
+            return result
+
+    def run(self, session_id, journal_delta, mcp_servers=None, trusted_source=None, *, images=None, model_route=None):
         if not session_id or not journal_delta:
             raise ValueError("session ID and journal delta are required")
         if self.enable_authorization and trusted_source is None:
@@ -397,24 +643,73 @@ class DshClient:
                         "DSH session is quarantined after an undrained turn; runtime shutdown is required"
                     ) from self._quarantined_sessions[session_id]
                 ready = session_id in self._sessions
+                transport_alive = getattr(self.runtime, "transport_alive", None)
+                if callable(transport_alive) and not transport_alive():
+                    raise DshInfrastructureFailure("RUNTIME_UNAVAILABLE")
                 if ready and self._session_servers[session_id] != servers:
                     raise ValueError("MCP binding changed for an active DSH session")
+            if model_route is not None:
+                model_route = validate_model_route(model_route)
             if not ready:
                 # Failure affects only this session; never replace its saved ID
                 # or close the shared process used by other conversations.
+                options = {'model_route': model_route} if model_route is not None else {}
                 if servers:
-                    self.runtime.resume(session_id, servers)
+                    self.runtime.resume(session_id, servers, **options)
                 else:
-                    self.runtime.resume(session_id)
+                    self.runtime.resume(session_id, **options)
                 with self._lock:
                     self._sessions.add(session_id)
                     self._session_servers[session_id] = servers
+                    self._confirmed_model_routes[session_id] = model_route or (self.settings['provider'], self.settings['model'])
+            else:
+                desired = model_route or (self.settings['provider'], self.settings['model'])
+                with self._lock:
+                    confirmed = self._confirmed_model_routes.get(session_id)
+                if confirmed != desired:
+                    self.runtime.model_status(session_id, servers or None, model_route=model_route)
+                    with self._lock:
+                        self._confirmed_model_routes[session_id] = desired
             if not self.enable_authorization:
-                return self.runtime.run(session_id, journal_delta)
-            nonce = self.turn_sources.publish(session_id, trusted_source, journal_delta)
+                if images is None:
+                    return self.runtime.run(session_id, journal_delta)
+                return self.runtime.run(session_id, journal_delta, images=images)
+            nonce = self.turn_sources.publish(session_id, trusted_source, journal_delta, images=images)
             try:
-                result = self.runtime.run(session_id, journal_delta)
-            except BaseException:
+                if images is None:
+                    result = self.runtime.run(session_id, journal_delta)
+                else:
+                    result = self.runtime.run(session_id, journal_delta, images=images)
+            except BaseException as failure:
+                receipt = None
+                if self.turn_sources is not None:
+                    try:
+                        receipt = self.turn_sources.terminal_evidence(session_id, nonce)
+                    except Exception:
+                        receipt = None
+                classified = None
+                if isinstance(failure, DshTurnCancelled):
+                    classified = failure
+                elif isinstance(receipt, dict) and receipt.get("terminal") is True:
+                    kind = receipt.get("kind")
+                    code = receipt.get("code", "UNKNOWN")
+                    started = receipt.get("tools_started", [])
+                    finished = receipt.get("tools_finished", [])
+                    unfinished = receipt.get("unfinished_tools", [])
+                    if kind == "infrastructure" and not started and not unfinished:
+                        classified = DshInfrastructureFailure(code)
+                    elif kind == "infrastructure":
+                        classified = DshTurnOutcomeUnknown(
+                            code, tools_started=started, tools_finished=finished,
+                            unfinished_tools=unfinished,
+                        )
+                    elif kind == "model" and not unfinished and Counter(started) == Counter(finished):
+                        classified = DshModelTurnFailure(code, tools_started=started, tools_finished=finished)
+                    else:
+                        classified = DshTurnOutcomeUnknown(
+                            code, tools_started=started, tools_finished=finished,
+                            unfinished_tools=unfinished,
+                        )
                 # A transport timeout only abandons the Python waiter. The ACP
                 # session must be closed to cancel and drain its Agent before
                 # the trusted source can disappear.
@@ -423,13 +718,14 @@ class DshClient:
                 except BaseException as drain_error:
                     with self._lock:
                         self._quarantined_sessions[session_id] = drain_error
-                    raise RuntimeError(
-                        "DSH turn failed and native session drain failed; trusted source retained "
-                        "and session quarantined until runtime shutdown"
-                    ) from drain_error
+                    raise DshInfrastructureFailure("SESSION_DRAIN_FAILED",
+                        tools_started=(receipt or {}).get("tools_started", []),
+                        tools_finished=(receipt or {}).get("tools_finished", []),
+                        unfinished_tools=(receipt or {}).get("unfinished_tools", [])) from drain_error
                 with self._lock:
                     self._sessions.discard(session_id)
                     self._session_servers.pop(session_id, None)
+                    self._confirmed_model_routes.pop(session_id, None)
                 try:
                     if not self.turn_sources.cleanup(session_id, nonce):
                         raise RuntimeError("trusted source nonce or file did not match during cleanup")
@@ -440,7 +736,9 @@ class DshClient:
                         "DSH turn failed and trusted source cleanup failed; session quarantined "
                         "until runtime shutdown"
                     ) from cleanup_error
-                raise
+                if classified is not None:
+                    raise classified from failure
+                raise DshTurnOutcomeUnknown("NO_TERMINAL_RECEIPT") from failure
             else:
                 try:
                     if not self.turn_sources.cleanup(session_id, nonce):
@@ -500,6 +798,7 @@ class DshClient:
             with self._lock:
                 self._sessions.discard(session_id)
                 self._session_servers.pop(session_id, None)
+                self._confirmed_model_routes.pop(session_id, None)
 
     def drain_session(self, session_id, mcp_servers=None):
         """Resume and close one persisted Session without running a prompt."""
@@ -535,6 +834,7 @@ class DshClient:
             with self._lock:
                 self._sessions.discard(session_id)
                 self._session_servers.pop(session_id, None)
+                self._confirmed_model_routes.pop(session_id, None)
 
     def close(self):
         # Router shutdown drains admitted turns before calling this lifecycle
@@ -554,6 +854,7 @@ class DshClient:
                     with self._lock:
                         self._sessions.discard(session_id)
                         self._session_servers.pop(session_id, None)
+                        self._confirmed_model_routes.pop(session_id, None)
             if not runtime_stopped:
                 try:
                     self.runtime.close()
@@ -564,6 +865,7 @@ class DshClient:
                         self._runtime_stopped = True
                         self._sessions.clear()
                         self._session_servers.clear()
+                        self._confirmed_model_routes.clear()
             with self._lock:
                 runtime_stopped = self._runtime_stopped
             if runtime_stopped and self.turn_sources is not None and not self._sources_closed:

@@ -8,8 +8,12 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def test_route_notifies_failed_cancelled_and_pending_turns_once(tmp_path):
     worker = r'''
-import asyncio, logging
+import asyncio, logging, os
+from pathlib import Path
 from types import SimpleNamespace as NS
+import data.plugins
+if os.environ.get('V2_PROFILE_TEST_PLUGIN_ROOT'):
+    data.plugins.__path__ = [os.environ['V2_PROFILE_TEST_PLUGIN_ROOT'], *data.plugins.__path__]
 import data.plugins.v2_dsh_router.main as m
 
 async def main():
@@ -21,8 +25,15 @@ async def main():
     router.allowed_conversations = {'private:42'}
     router.owners = frozenset()
     router.logger = logging.getLogger('turn-notice-test')
+    router._file_transfer = lambda *_args: None  # This fixture tests notices, not attachment I/O.
+    router.onebot_audit = NS(bind=lambda *_args: None)
+    router.mcp = NS(journal=None)
+    router.runtime_root = Path('/tmp/turn-notice-fixture')
+    router.context = None
+    m.MemeLibrary = lambda *_args: None
+    m.PluginCapabilities = lambda *_args: None
     notices = []
-    async def notify(event, conversation, owners, kind, logger):
+    async def notify(event, conversation, owners, kind, logger, **_details):
         notices.append((conversation.key, kind))
     m.notify_turn_error = notify
     class State:
@@ -50,6 +61,14 @@ async def main():
     await router.route_chat(event(4))
     await router.route_chat(event(5, malformed=True))
     assert notices == [('private:42','failed'), ('private:42','pending'), ('private:42','cancelled')], notices
+    service.exc = m.ModelTurnError('INVALID_REQUEST')
+    await router.route_chat(event(6))
+    assert notices[-1] == ('private:42', 'model')
+    async def unavailable(_message): raise OSError('SECRET_RUNTIME_BOOT_PATH')
+    router._service_for = unavailable
+    await router.route_chat(event(7))
+    assert notices[-1] == ('private:42', 'infrastructure')
+    assert 'SECRET' not in repr(notices)
 asyncio.run(main())
 '''
     runtime = ROOT / ".runtime/astrbot"

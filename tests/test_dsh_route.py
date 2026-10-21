@@ -81,14 +81,13 @@ def test_only_real_bare_bot_mentions_are_added_to_no_text_routing():
     assert module.should_route(Event(), message)
     assert not module.should_route(Event(handled=True), message)
     for extra in (
-        {"type": "image", "data": {"file": "image.png"}},
         {"type": "face", "data": {"id": "1"}},
         {"type": "at", "data": {"qq": "all"}},
         {"type": "at", "data": {"qq": "900004"}},
         {"type": "reply", "data": {"id": "prior"}},
-        {"type": "text", "data": {"text": None}},
     ):
-        assert not module.should_route(Event(), {**message, "message": [*message["message"], extra]})
+        assert module.should_route(Event(), {**message, "message": [*message["message"], extra]})
+    assert not module.should_route(Event(), raw(" ", mention=False))
     assert not module.should_route(Event(), raw(" ", message_type="private"))
     assert not module.should_route(Event(), {**message, "message": []})
 
@@ -116,3 +115,36 @@ def test_reply_trigger_requires_platform_resolved_bot_sender_and_matching_id():
     assert not module.should_route(Event(components=[reply]), message)
     reply.sender_id, reply.id = "900001", "different-message"
     assert not module.should_route(Event(components=[reply]), message)
+
+
+def test_pure_attachments_route_only_when_addressed_in_groups():
+    for kind in ('file', 'image', 'record', 'video'):
+        attachment = {'type': kind, 'data': {'file_id': 'resource-id'}}
+        private = raw('', message_type='private', mention=False)
+        private['message'] = [attachment]
+        assert module.should_route(Event(), private)
+        group = raw('', mention=False)
+        group['message'] = [attachment]
+        assert not module.should_route(Event(), group)
+        group['message'].insert(0, {'type': 'at', 'data': {'qq': group['self_id']}})
+        assert module.should_route(Event(), group)
+    assert not module.should_route(Event(), {'post_type': 'notice', 'notice_type': 'group_upload'})
+
+
+def test_empty_bot_reply_wakes_with_or_without_qq_automatic_mention():
+    reply = SimpleNamespace(type="Reply", id="prior-bot-message", sender_id="900001")
+    event = Event(components=[reply])
+    for automatic_mention in (False, True):
+        message = raw(" \n ", mention=automatic_mention)
+        message["message"].insert(0, {"type": "reply", "data": {"id": reply.id}})
+        assert module.should_route(event, message)
+        assert not module.should_route(Event(components=[reply], stopped=True), message)
+        assert not module.should_route(Event(components=[reply], handled=True), message)
+    assert module.should_route(event, {**message, "message": [{"type": "reply", "data": {"id": reply.id}}]})
+    # A raw sender assertion cannot turn a member's quote into a Bot quote.
+    member_reply = SimpleNamespace(type="Reply", id=reply.id, sender_id="900004")
+    message = raw("", mention=False)
+    message["message"].insert(0, {"type":"reply", "data":{"id":reply.id,"sender_id":"900001"}})
+    assert not module.should_route(Event(components=[member_reply]), message)
+    assert not module.should_route(Event(), message)
+    assert not module.should_route(Event(components=[SimpleNamespace(type="Reply",id="other",sender_id="900001")]), message)

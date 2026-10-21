@@ -15,6 +15,7 @@ Before changing code, read:
 ## Working rules
 
 - 本仓库编写的模型指南：行为决策、人格、群聊互动优先使用中文；工具名称、API 参数和技术标识保留原始英文；技术型 Skill 使用最清楚、易维护的中文或英文。保留上游技术说明原文，不为统一语言修改上游 core。
+- 编写或修改模型指南时，优先用简洁的正向职责说明应该如何行动；常驻原则、工具/Skill 使用说明、系统安全边界与 Persona 按职责分层，具体条件放在对应能力说明中。
 - Be concise by default.
 - Answer the actual task immediately.
 - Verify before assuming.

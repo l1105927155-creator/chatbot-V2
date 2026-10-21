@@ -25,6 +25,9 @@ def test_pinned_builtin_observers_and_probe_do_not_block_or_duplicate_dsh(tmp_pa
         from astrbot.core.star.star_manager import PluginManager
         from astrbot.core.star.star import star_map
         from astrbot.api import star
+        import data.plugins
+        if os.environ.get('V2_PROFILE_TEST_PLUGIN_ROOT'):
+            data.plugins.__path__ = [os.environ['V2_PROFILE_TEST_PLUGIN_ROOT'], *data.plugins.__path__]
         import data.plugins.v2_dsh_router.main as router_module
 
         async def main():
@@ -67,7 +70,7 @@ def test_pinned_builtin_observers_and_probe_do_not_block_or_duplicate_dsh(tmp_pa
                 conversation_manager=object()
                 def get_config(self,**_kwargs):return config
             class Dsh:
-                def __init__(self,**_kwargs):pass
+                def __init__(self,**_kwargs):self.settings=_kwargs
                 def close(self):pass
             async def start_client(**kwargs):return Dsh(**kwargs)
             router_module.start_client=start_client
@@ -98,6 +101,8 @@ def test_pinned_builtin_observers_and_probe_do_not_block_or_duplicate_dsh(tmp_pa
                 class Service:
                     def __init__(self,domain,profile):
                         self.domain=domain;self.profile=profile;self.execution_profile=profile
+                        from types import SimpleNamespace
+                        self.dsh=SimpleNamespace(settings={'workspace':Path(temp)/'test-files'})
                     async def handle(self,conversation,message_id,send,**kwargs):
                         calls.append((self.domain,message_id));await send('fake DSH reply')
                     async def select_profile(self,conversation,kind,value,send,**kwargs):
@@ -108,6 +113,8 @@ def test_pinned_builtin_observers_and_probe_do_not_block_or_duplicate_dsh(tmp_pa
                     async def cancel(self,conversation):
                         cancellations.append((self.domain,conversation.key))
                         return self.domain == 'owner'
+                    async def close_background(self):
+                        pass
                     async def resolve_pending(self,conversation,expected_pending,**kwargs):
                         from types import SimpleNamespace
                         recoveries.append((self.domain,conversation.key,expected_pending))
@@ -165,7 +172,7 @@ def test_pinned_builtin_observers_and_probe_do_not_block_or_duplicate_dsh(tmp_pa
                 await drive(event('/v2agent status','owner-status','900003'))
                 assert sent[-1]=='Agent：空闲；人格：analyst；场景：research；模式：Owner 主机执行。'
                 await drive(event('/v2agent status','owner-group-status','900003',group='1055300305'))
-                assert sent[-1]=='Agent：空闲；人格：analyst；场景：research；模式：群聊隔离执行。'
+                assert sent[-1]=='Agent：空闲；人格：本群 persona.md；场景：research；模式：群聊隔离执行。'
                 await drive(event('/v2agent persona list','owner-list','900003'))
                 assert sent[-1]=='可用人格：analyst、companion、default、developer'
                 await drive(event('/v2agent status','nonowner-status'))

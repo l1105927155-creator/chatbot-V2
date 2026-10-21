@@ -15,6 +15,7 @@ from mcp.client.streamable_http import streamablehttp_client
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "astrbot-plugins/v2_dsh_router"))
 
 
 def load(name, path):
@@ -55,6 +56,47 @@ async def connect(url, headers):
     client = await stack.enter_async_context(ClientSession(read, write))
     await client.initialize()
     return stack, client
+
+
+@pytest.mark.asyncio
+async def test_business_tools_require_bound_capabilities_and_lifetime_lease(tmp_path):
+    from types import SimpleNamespace
+    service = mcp_module.McpServer(journal.JournalStore(tmp_path / "journal.sqlite3"))
+    await service.start(0)
+    origin = journal.Conversation("qq-test", "10", "group:30")
+    calls = []
+    async def invoke(operation):
+        calls.append("lease-enter")
+        try:
+            return await operation()
+        finally:
+            calls.append("lease-exit")
+    async def subscribe(uid):
+        calls.append(uid)
+        return {"ok": True, "uid": uid}
+    try:
+        async with service.turn(origin, lambda _: None) as declarations:
+            headers = {i['name']: i['value'] for i in declarations[0]['headers']}
+            stack, client = await connect(service.url, headers)
+            try:
+                assert (await client.call_tool("bili_subscribe", {"uid": 12})).isError
+            finally:
+                await stack.aclose()
+        async with service.turn(origin, lambda _: None,
+                                plugins=SimpleNamespace(bili_subscribe=subscribe), invoke=invoke) as declarations:
+            headers = {i['name']: i['value'] for i in declarations[0]['headers']}
+            stack, client = await connect(service.url, headers)
+            try:
+                assert (await client.call_tool("bili_subscribe", {"uid": True})).isError
+                assert calls == []
+                # Pinned FastMCP drops unknown arguments; the adapter only
+                # receives the UID and never a model-selected destination.
+                assert not (await client.call_tool("bili_subscribe", {"uid": 12, "umo": "other"})).isError
+                assert calls == ["lease-enter", 12, "lease-exit"]
+            finally:
+                await stack.aclose()
+    finally:
+        await service.close()
 
 
 @pytest.mark.asyncio
@@ -114,18 +156,18 @@ async def test_history_search_tools_and_send_are_scoped_to_active_origin(tmp_pat
                 listed = await client.list_tools()
                 assert {tool.name for tool in listed.tools} == {
                     "history_recent", "history_before", "history_search",
-                    "current_group_info", "qq_send_origin",
+                    "history_read_image",
+                    "current_group_info", "current_group_members", "qq_prepare_reply",
+                    "qq_send_origin", "qq_file_receive", "qq_file_send",
+                    'meme_list', 'meme_send', 'plugin_status', 'bili_dynamics', 'bili_subscribe', 'bili_subscriptions', 'bili_unsubscribe', 'twitter_subscribe', 'twitter_subscriptions', 'twitter_unsubscribe',
                 }
                 send_tool = next(tool for tool in listed.tools if tool.name == "qq_send_origin")
-                assert set(send_tool.inputSchema["properties"]) == {"text"}
-                assert "预计操作会让用户等待数秒以上时" in send_tool.description
-                assert "逐个工具播报" in send_tool.description
+                assert set(send_tool.inputSchema["properties"]) == {"text", "mention_user_ids", "reply_to_journal_id"}
+                assert "原生@和引用" in send_tool.description
                 assert "不自动重发" in send_tool.description
-                assert "按自然段落或编号主题分组" in send_tool.description
-                assert "本工具只发送最终回复以外的独立消息" in send_tool.description
-                assert "不要用本工具回答当前问题" not in send_tool.description
-                assert "text 是发往 QQ 的纯文本" in send_tool.description
-                assert "行内代码标记" in send_tool.description
+                prepare_tool = next(tool for tool in listed.tools if tool.name == "qq_prepare_reply")
+                assert "不发送消息" in prepare_tool.description
+                assert set(prepare_tool.inputSchema["properties"]) == {"mention_user_ids", "reply_to_journal_id"}
                 group_tool = next(tool for tool in listed.tools if tool.name == "current_group_info")
                 assert group_tool.inputSchema["properties"] == {}
                 schemas = {tool.name: tool.outputSchema for tool in listed.tools}
@@ -177,12 +219,130 @@ async def test_history_search_tools_and_send_are_scoped_to_active_origin(tmp_pat
         await service.close()
 
 
+@pytest.mark.asyncio
+async def test_new_session_history_floor_applies_to_all_history_tools(tmp_path):
+    store = journal.JournalStore(tmp_path / "journal.sqlite3")
+    origin = journal.Conversation("qq-test", "10", "private:20")
+    old = append(store, origin, "old", "needle from the old conversation")
+    reset = append(store, origin, "reset", "/new")
+    fresh = append(store, origin, "fresh", "new conversation context")
+    service = mcp_module.McpServer(store)
+    await service.start(0)
+    try:
+        async with service.turn(origin, _noop, history_after=reset.journal_id) as declarations:
+            headers = {item["name"].lower(): item["value"] for item in declarations[0]["headers"]}
+            stack, client = await connect(service.url, headers)
+            try:
+                schemas = {tool.name: tool.inputSchema for tool in (await client.list_tools()).tools}
+                assert "history_after" not in schemas["history_recent"]["properties"]
+                assert "history_after" not in schemas["history_before"]["properties"]
+                assert "history_after" not in schemas["history_search"]["properties"]
+                attempted_lowering = await client.call_tool("history_recent", {
+                    "limit": 20, "history_after": 0,
+                })
+                assert not attempted_lowering.isError
+                assert all(row["journal_id"] > reset.journal_id
+                           for row in attempted_lowering.structuredContent["entries"])
+                recent = await client.call_tool("history_recent", {"limit": 20})
+                before = await client.call_tool("history_before", {
+                    "before_id": fresh.journal_id + 1, "limit": 20,
+                })
+                searched = await client.call_tool("history_search", {"query": "needle"})
+                assert [row["journal_id"] for row in recent.structuredContent["entries"]] == [fresh.journal_id]
+                assert [row["journal_id"] for row in before.structuredContent["entries"]] == [fresh.journal_id]
+                assert searched.structuredContent["entries"] == []
+                assert all(row["journal_id"] > reset.journal_id
+                           for result in (recent, before)
+                           for row in result.structuredContent["entries"])
+            finally:
+                await stack.aclose()
+        with pytest.raises(ValueError, match="history_after"):
+            async with service.turn(origin, _noop, history_after=-1):
+                pass
+    finally:
+        await service.close()
+
+
 async def _append(sent, text):
     sent.append(text)
 
 
 async def _group_info():
     return {"id": "999999", "name": "Test group", "member_count": None}
+
+
+def _append_image(store, conv, message_id, *, reply_to=None):
+    group = conv.key.startswith("group:")
+    segments = []
+    if reply_to is not None:
+        segments.append({"type": "reply", "data": {"id": reply_to}})
+    segments.append({"type": "image", "data": {"file": "opaque-image-ref", "file_name": "photo.png"}})
+    raw = {
+        "post_type": "message", "message_type": "group" if group else "private",
+        "self_id": int(conv.bot_id), "user_id": 20,
+        "group_id": int(conv.key.split(":", 1)[1]) if group else None,
+        "message_id": message_id, "message": segments,
+    }
+    return store.append(journal.message_from_onebot(conv.platform_id, raw))[0]
+
+
+@pytest.mark.asyncio
+async def test_history_read_image_returns_mcp_image_and_enforces_turn_window(tmp_path):
+    import base64
+    from types import SimpleNamespace
+
+    store = journal.JournalStore(tmp_path / "journal.sqlite3")
+    origin = journal.Conversation("qq-test", "10", "group:30")
+    other = journal.Conversation("qq-test", "10", "private:20")
+    floor = append(store, origin, "floor", "/new")
+    image_row = _append_image(store, origin, "image")
+    after = append(store, origin, "after", "wake")
+    cross = _append_image(store, other, "cross")
+    expected = b"validated-image-bytes"
+    calls = []
+
+    class Vision:
+        async def prepare(self, rows, visible_ids, *, selected_segments=None):
+            calls.append((rows, visible_ids, selected_segments))
+            return {"images": [{"type": "image", "mimeType": "image/png",
+                                 "data": base64.b64encode(expected).decode()}],
+                    "references": [], "errors": [], "omitted": []}
+
+    service = mcp_module.McpServer(store)
+    await service.start(0)
+    try:
+        async with service.turn(origin, _noop, history_after=floor.journal_id, vision=Vision()) as declarations:
+            service.set_history_through(origin, after.journal_id)
+            headers = {item["name"].lower(): item["value"] for item in declarations[0]["headers"]}
+            stack, client = await connect(service.url, headers)
+            try:
+                tool = next(tool for tool in (await client.list_tools()).tools
+                            if tool.name == "history_read_image")
+                assert set(tool.inputSchema["properties"]) == {"journal_id", "segment_index"}
+                read = await client.call_tool("history_read_image", {
+                    "journal_id": image_row.journal_id, "segment_index": 0,
+                })
+                assert not read.isError
+                assert len(read.content) == 1 and read.content[0].type == "image"
+                assert read.content[0].mimeType == "image/png"
+                assert base64.b64decode(read.content[0].data) == expected
+                assert calls[0][1] == {image_row.journal_id}
+                assert calls[0][2] == {(image_row.journal_id, 0)}
+                below_floor = await client.call_tool("history_read_image", {
+                    "journal_id": floor.journal_id, "segment_index": 0,
+                })
+                beyond_wake = await client.call_tool("history_read_image", {
+                    "journal_id": cross.journal_id, "segment_index": 0,
+                })
+                bad_segment = await client.call_tool("history_read_image", {
+                    "journal_id": image_row.journal_id, "segment_index": 1,
+                })
+                assert below_floor.isError and beyond_wake.isError and bad_segment.isError
+                assert len(calls) == 1
+            finally:
+                await stack.aclose()
+    finally:
+        await service.close()
 
 
 @pytest.mark.asyncio
@@ -193,7 +353,10 @@ async def test_authentication_turn_expiry_private_group_and_tool_errors(tmp_path
     service = mcp_module.McpServer(store)
     await service.start(0)
     try:
-        async with service.turn(private, lambda text: _append(sent, text)) as declarations:
+        send_state = {"callback": lambda text: _append(sent, text)}
+        async def send(text):
+            return await send_state["callback"](text)
+        async with service.turn(private, send) as declarations:
             headers = {item["name"].lower(): item["value"] for item in declarations[0]["headers"]}
             async with httpx.AsyncClient() as http:
                 response = await http.post(service.url, json={}, headers={})
@@ -217,7 +380,7 @@ async def test_authentication_turn_expiry_private_group_and_tool_errors(tmp_path
                 async def fail(_text):
                     raise OSError("adapter unavailable")
                 # Replace the active callback only in this isolated test turn.
-                service._active_tokens[next(iter(service._active_tokens))].send = fail
+                send_state["callback"] = fail
                 failed_send = await client.call_tool("qq_send_origin", {"text": "test"})
                 assert failed_send.isError
                 assert sent == []
@@ -304,3 +467,145 @@ def test_journal_search_treats_wildcards_literally_and_scopes_bot_identity(tmp_p
 
 async def _noop(_text):
     return None
+
+
+@pytest.mark.asyncio
+async def test_http_messaging_capability_is_turn_scoped_and_sends_native_metadata(tmp_path):
+    import json
+    import sys
+    from types import SimpleNamespace as NS
+
+    sys.path.insert(0, str(ROOT / ".runtime/astrbot"))
+    sys.path.insert(0, str(ROOT / "astrbot-plugins/v2_dsh_router"))
+    from astrbot.api.message_components import At, Plain, Reply
+    from messaging import QQMessaging
+
+    store = journal.JournalStore(tmp_path / "journal.sqlite3")
+    origin = journal.Conversation("aiocqhttp", "10", "group:30")
+    source = append(store, origin, "source-message", "A asked something")
+    sent = []
+    group_lookups = []
+    group_api_fails = False
+
+    class Event:
+        def get_platform_name(self):
+            return "aiocqhttp"
+
+        def get_group_id(self):
+            return "30"
+
+        async def get_group(self):
+            group_lookups.append(True)
+            if group_api_fails:
+                raise RuntimeError("group member API unavailable")
+            return NS(group_id="30", members=[
+                NS(user_id="20", nickname="A"), NS(user_id="21", nickname="B"),
+            ])
+
+        async def send(self, chain):
+            sent.append(chain)
+            return chain
+
+    event = Event()
+    messaging = QQMessaging(event, store, origin)
+
+    def tool_data(result):
+        if result.structuredContent is not None:
+            return result.structuredContent
+        return json.loads(result.content[0].text)
+
+    async def send(text, **metadata):
+        return await messaging.send_origin(text, **metadata)
+
+    service = mcp_module.McpServer(store)
+    await service.start(0)
+    token_headers = None
+    try:
+        async with service.turn(origin, send, messaging=messaging) as declarations:
+            token_headers = {
+                item["name"].lower(): item["value"]
+                for item in declarations[0]["headers"]
+            }
+            stack, client = await connect(service.url, token_headers)
+            try:
+                members = await client.call_tool("current_group_members", {
+                    "query": "B", "limit": 5,
+                })
+                assert not members.isError
+                assert tool_data(members) == {
+                    "members": [{"user_id": "21", "nickname": "B"}],
+                    "truncated": False,
+                }
+
+                prepared = await client.call_tool("qq_prepare_reply", {
+                    "mention_user_ids": ["21"],
+                    "reply_to_journal_id": source.journal_id,
+                })
+                assert not prepared.isError
+                assert tool_data(prepared) == {"prepared": True, "sent": False}
+
+                direct = await client.call_tool("qq_send_origin", {
+                    "text": "B, A在找你。",
+                    "mention_user_ids": ["21"],
+                    "reply_to_journal_id": source.journal_id,
+                })
+                assert not direct.isError
+                assert tool_data(direct) == {
+                    "submitted": True, "platform_confirmed": False,
+                }
+
+                for name, arguments in (
+                    ("qq_prepare_reply", {"reply_to_journal_id": True}),
+                    ("qq_send_origin", {"text": "invalid", "reply_to_journal_id": True}),
+                    ("current_group_members", {"limit": True}),
+                ):
+                    invalid = await client.call_tool(name, arguments)
+                    assert invalid.isError, name
+
+                await messaging.send_final("最终回复")
+                assert len(sent) == 2
+                for chain in sent:
+                    assert isinstance(chain.chain[0], Reply)
+                    assert chain.chain[0].id == "source-message"
+                    assert isinstance(chain.chain[1], At)
+                    assert str(chain.chain[1].qq) == "21"
+                    assert isinstance(chain.chain[2], Plain)
+                assert sent[0].chain[2].text == "B, A在找你。"
+                assert sent[1].chain[2].text == "最终回复"
+
+                cleared = await client.call_tool("qq_prepare_reply", {})
+                assert not cleared.isError
+                assert tool_data(cleared) == {"prepared": True, "sent": False}
+                calls_before_plain_send = len(group_lookups)
+                group_api_fails = True
+                await messaging.send_final("不带选项的普通回复")
+                assert len(group_lookups) == calls_before_plain_send
+                assert [type(item) for item in sent[2].chain] == [Plain]
+                assert sent[2].chain[0].text == "不带选项的普通回复"
+            finally:
+                await stack.aclose()
+
+        # A bearer that belonged to the completed turn cannot be reused.
+        async with httpx.AsyncClient(trust_env=False) as http:
+            assert (await http.post(service.url, json={}, headers=token_headers)).status_code == 401
+
+        # The same tools reject metadata operations when a turn has no capability.
+        no_capability = journal.Conversation("aiocqhttp", "10", "group:31")
+        async with service.turn(no_capability, _noop) as declarations:
+            headers = {
+                item["name"].lower(): item["value"]
+                for item in declarations[0]["headers"]
+            }
+            stack, client = await connect(service.url, headers)
+            try:
+                for name, arguments in (
+                    ("current_group_members", {}),
+                    ("qq_prepare_reply", {"mention_user_ids": ["21"]}),
+                    ("qq_send_origin", {"text": "x", "mention_user_ids": ["21"]}),
+                ):
+                    result = await client.call_tool(name, arguments)
+                    assert result.isError, name
+            finally:
+                await stack.aclose()
+    finally:
+        await service.close()

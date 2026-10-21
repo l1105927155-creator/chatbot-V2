@@ -23,6 +23,25 @@
     mode: read-only
     workspaceRoot: !!js process.cwd()
 - insert:
+    - id: v2-turn-lifecycle
+      name: ../plugins/agent-profile/turn-lifecycle.mjs
+    - id: v2-shared-model-credentials
+      name: '@deepseek-ai/dsh-credentials-local'
+      disabled: !!js Boolean(!process.env.V2_SHARED_MODELS_PROFILE)
+      config:
+        path: !!js process.env.V2_SHARED_MODELS_CREDENTIALS
+    - id: llm-pi-ai
+      name: '@deepseek-ai/dsh-llm-pi-ai'
+      disabled: !!js Boolean(!process.env.V2_SHARED_MODELS_PROFILE)
+      config:
+        providers: {}
+    - id: v2-model-config-sync
+      name: ../plugins/agent-profile/model-config-sync.mjs
+      disabled: !!js Boolean(!process.env.V2_SHARED_MODELS_PROFILE)
+    - id: attachment-local
+      name: '@deepseek-ai/dsh-attachment-local'
+      config:
+        dshHome: !!js process.env.V2_DSH_HOME
     - id: token-meter
       name: '@deepseek-ai/dsh-token-meter'
     - id: skill
@@ -58,6 +77,27 @@
         fetchMaxOutputChars: 32000
     - id: tool-call-timeout-policy
       name: '@deepseek-ai/dsh-tool-call-timeout-policy'
+    - id: jobs
+      name: '@deepseek-ai/dsh-jobs-local'
+      disabled: !!js Boolean(!process.env.V2_BACKGROUND_CALLBACK_URL || !process.env.V2_BACKGROUND_CALLBACK_TOKEN)
+      config:
+        maxConcurrentJobsPerOwner: 3
+    - id: subagents
+      name: '@deepseek-ai/dsh-subagent'
+      disabled: !!js Boolean(!process.env.V2_BACKGROUND_CALLBACK_URL || !process.env.V2_BACKGROUND_CALLBACK_TOKEN)
+    - id: v2-subagent-spawn
+      name: '@deepseek-ai/dsh-subagent-spawn-in-process'
+      disabled: !!js Boolean(!process.env.V2_BACKGROUND_CALLBACK_URL || !process.env.V2_BACKGROUND_CALLBACK_TOKEN)
+    - id: v2-background-research
+      name: ../plugins/agent-profile/background-research.mjs
+      inject: [tools, jobs, subagents]
+      disabled: !!js Boolean(!process.env.V2_BACKGROUND_CALLBACK_URL || !process.env.V2_BACKGROUND_CALLBACK_TOKEN)
+      config:
+        sourceRoot: !!js process.env.V2_TURN_SOURCE_DIR
+        epoch: !!js process.env.V2_TURN_SOURCE_EPOCH
+        callbackUrl: !!js process.env.V2_BACKGROUND_CALLBACK_URL
+        callbackToken: !!js process.env.V2_BACKGROUND_CALLBACK_TOKEN
+        executionProfile: safe-chat
     - id: compaction-basic
       name: '@deepseek-ai/dsh-compaction-basic'
       config:
