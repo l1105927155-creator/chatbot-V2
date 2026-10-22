@@ -42,7 +42,7 @@ try {
   assert.equal(toolGuard({
     agent, name: 'read', arguments: { file_path: '/etc/hostname' }, signal: new AbortController().signal,
   }), undefined, 'verified Owner may call native host file tools')
-  for (const name of ['mcp__astrbot__qq_prepare_reply', 'mcp__astrbot__current_group_members', 'mcp__astrbot__qq_file_receive', 'mcp__astrbot__qq_file_send']) {
+  for (const name of ['mcp__astrbot__qq_prepare_reply', 'mcp__astrbot__current_group_members', 'mcp__astrbot__qq_file_receive', 'mcp__astrbot__qq_file_send', 'mcp__astrbot__meme_categories', 'mcp__astrbot__meme_list', 'mcp__astrbot__meme_send']) {
     assert.equal(toolGuard({agent, name, token: name, arguments: {}, signal: new AbortController().signal}),
       undefined, `verified Owner may call ${name}`)
   }

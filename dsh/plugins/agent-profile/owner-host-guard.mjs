@@ -17,7 +17,7 @@ const allowedTools = new Set([
   'mcp__astrbot__history_recent', 'mcp__astrbot__history_before',
   'mcp__astrbot__history_search', 'mcp__astrbot__history_read_image', 'mcp__astrbot__current_group_info',
   'mcp__astrbot__current_group_members', 'mcp__astrbot__qq_prepare_reply', 'mcp__astrbot__qq_send_origin', 'mcp__astrbot__qq_file_receive',
-  'mcp__astrbot__qq_file_send', 'mcp__astrbot__meme_list', 'mcp__astrbot__meme_send', 'mcp__astrbot__plugin_status', 'mcp__astrbot__bili_dynamics', 'mcp__astrbot__bili_subscribe', 'mcp__astrbot__bili_subscriptions', 'mcp__astrbot__bili_unsubscribe', 'mcp__astrbot__twitter_subscribe', 'mcp__astrbot__twitter_subscriptions', 'mcp__astrbot__twitter_unsubscribe',
+  'mcp__astrbot__qq_file_send', 'mcp__astrbot__meme_categories', 'mcp__astrbot__meme_list', 'mcp__astrbot__meme_send', 'mcp__astrbot__plugin_status', 'mcp__astrbot__bili_dynamics', 'mcp__astrbot__bili_subscribe', 'mcp__astrbot__bili_subscriptions', 'mcp__astrbot__bili_unsubscribe', 'mcp__astrbot__twitter_subscribe', 'mcp__astrbot__twitter_subscriptions', 'mcp__astrbot__twitter_unsubscribe',
   'background_research',
 ])
 

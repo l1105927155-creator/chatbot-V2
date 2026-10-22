@@ -159,7 +159,7 @@ async def test_history_search_tools_and_send_are_scoped_to_active_origin(tmp_pat
                     "history_read_image",
                     "current_group_info", "current_group_members", "qq_prepare_reply",
                     "qq_send_origin", "qq_file_receive", "qq_file_send",
-                    'meme_list', 'meme_send', 'plugin_status', 'bili_dynamics', 'bili_subscribe', 'bili_subscriptions', 'bili_unsubscribe', 'twitter_subscribe', 'twitter_subscriptions', 'twitter_unsubscribe',
+                    'meme_categories', 'meme_list', 'meme_send', 'plugin_status', 'bili_dynamics', 'bili_subscribe', 'bili_subscriptions', 'bili_unsubscribe', 'twitter_subscribe', 'twitter_subscriptions', 'twitter_unsubscribe',
                 }
                 send_tool = next(tool for tool in listed.tools if tool.name == "qq_send_origin")
                 assert set(send_tool.inputSchema["properties"]) == {"text", "mention_user_ids", "reply_to_journal_id"}
@@ -605,6 +605,98 @@ async def test_http_messaging_capability_is_turn_scoped_and_sends_native_metadat
                 ):
                     result = await client.call_tool(name, arguments)
                     assert result.isError, name
+            finally:
+                await stack.aclose()
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_meme_directory_browse_pagination_and_send_over_native_mcp(tmp_path):
+    import importlib
+    import io
+    import json
+    from types import ModuleType
+    from PIL import Image
+
+    package_name = "v2_meme_protocol_package"
+    package = ModuleType(package_name)
+    package.__path__ = [str(ROOT / "astrbot-plugins/v2_dsh_router")]
+    sys.modules[package_name] = package
+    MemeLibrary = importlib.import_module(package_name + ".meme_library").MemeLibrary
+    bank = tmp_path / "meme"
+    (bank / "开心").mkdir(parents=True)
+    (bank / "轻松 接话").mkdir()
+    buf = io.BytesIO()
+    Image.new("RGB", (3, 3), (1, 2, 3)).save(buf, "PNG")
+    body = buf.getvalue()
+    (bank / "开心/01.png").write_bytes(body)
+    for index in range(55):
+        (bank / "轻松 接话" / f"image-{index:02}.png").write_bytes(body)
+    captured = []
+    leases = []
+
+    async def send(path):
+        captured.append((path, path.read_bytes()))
+
+    async def invoke(operation):
+        leases.append("enter")
+        try:
+            return await operation()
+        finally:
+            leases.append("exit")
+
+    service = mcp_module.McpServer(journal.JournalStore(tmp_path / "journal.sqlite3"))
+    await service.start(0)
+    try:
+        origin = journal.Conversation("qq", "10", "group:30")
+        async with service.turn(origin, _noop, memes=MemeLibrary(bank, send), invoke=invoke) as declarations:
+            headers = {item["name"].lower(): item["value"] for item in declarations[0]["headers"]}
+            stack, client = await connect(service.url, headers)
+            try:
+                tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+                schema = tools["meme_list"].inputSchema
+                assert set(schema["properties"]) == {"category", "limit", "offset"}
+                assert schema["required"] == ["category"]
+                assert schema["properties"]["limit"]["minimum"] == 1
+                assert schema["properties"]["limit"]["maximum"] == 50
+                assert schema["properties"]["offset"]["minimum"] == 0
+                assert tools["meme_categories"].inputSchema["properties"] == {}
+
+                async def call(name, arguments):
+                    result = await client.call_tool(name, arguments)
+                    assert not result.isError, result
+                    return json.loads(result.content[0].text)
+
+                catalog = await call("meme_categories", {})
+                assert catalog["total_images"] == 56
+                assert {entry["name"]: entry["count"] for entry in catalog["categories"]} == {
+                    "开心": 1, "轻松 接话": 55}
+                seen = []
+                offset = 0
+                while True:
+                    page = await call("meme_list", {"category": "轻松 接话", "limit": 20, "offset": offset})
+                    assert page["total"] == 55
+                    assert all(item["category"] == "轻松 接话" for item in page["items"])
+                    seen.extend(item["id"] for item in page["items"])
+                    if not page["has_more"]:
+                        assert page["next_offset"] is None
+                        break
+                    assert page["next_offset"] > offset
+                    offset = page["next_offset"]
+                assert len(set(seen)) == len(seen) == 55
+                result = await call("meme_send", {"resource_id": seen[-1]})
+                assert result == {"sent": True, "mime_type": "image/png"}
+                assert captured[0][1] == body and not captured[0][0].exists()
+                unknown = await client.call_tool("meme_list", {"category": "轻松"})
+                assert unknown.isError
+                assert "meme_categories" in unknown.content[0].text
+                before = len(leases)
+                for arguments in ({"query": "开心"}, {"category": "开心", "limit": 100},
+                                  {"category": "开心", "offset": -1}, {"category": "开心", "limit": True}):
+                    assert (await client.call_tool("meme_list", arguments)).isError
+                assert len(leases) == before
+                assert leases == [value for _ in range(len(leases) // 2) for value in ("enter", "exit")]
             finally:
                 await stack.aclose()
     finally:

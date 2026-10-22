@@ -97,7 +97,7 @@ try {
     return JSON.stringify({code: result.status, out: result.stdout, err: result.stderr})
   }))
   ctx.tools.register(defineTool('unknown', () => { executions++; return 'bad' }))
-  for (const name of ['mcp__astrbot__qq_prepare_reply', 'mcp__astrbot__current_group_members', 'mcp__astrbot__qq_file_receive', 'mcp__astrbot__qq_file_send']) {
+  for (const name of ['mcp__astrbot__qq_prepare_reply', 'mcp__astrbot__current_group_members', 'mcp__astrbot__qq_file_receive', 'mcp__astrbot__qq_file_send', 'mcp__astrbot__meme_categories', 'mcp__astrbot__meme_list', 'mcp__astrbot__meme_send']) {
     ctx.tools.register(defineTool(name, () => { fileExecutions++; return name + ' ok' }))
   }
   assert.match(output(await dispatch('bash', {command:'echo never'})), /authorization denied/)
@@ -115,10 +115,10 @@ try {
   unlinkSync(sourcePath)
   publish(first)
   bind(first)
-  for (const name of ['mcp__astrbot__qq_prepare_reply', 'mcp__astrbot__current_group_members', 'mcp__astrbot__qq_file_receive', 'mcp__astrbot__qq_file_send']) {
+  for (const name of ['mcp__astrbot__qq_prepare_reply', 'mcp__astrbot__current_group_members', 'mcp__astrbot__qq_file_receive', 'mcp__astrbot__qq_file_send', 'mcp__astrbot__meme_categories', 'mcp__astrbot__meme_list', 'mcp__astrbot__meme_send']) {
     assert.match(output(await dispatch(name)), new RegExp(name + ' ok'), `${name} is allowed in a valid Owner turn`)
   }
-  assert.equal(fileExecutions, 4)
+  assert.equal(fileExecutions, 7)
   assert.match(output(await dispatch('mcp__astrbot__qq_file_open_any_path')), /unavailable tool/,
     'the guard does not allow arbitrary file-like tools')
   let result = JSON.parse(output(await dispatch('bash', {
@@ -189,7 +189,7 @@ try {
   bind(mismatch, 'wrong prompt')
   assert.match(output(await dispatch('bash', {command:'true'})), /authorization denied/)
   assert.equal(executions, 6)
-  assert.equal(fileExecutions, 4, 'denied or stale file calls never reach the tool implementation')
+  assert.equal(fileExecutions, 7, 'denied or stale file calls never reach the tool implementation')
   console.log(JSON.stringify({
     ownerPrivateOnly:true, promptAndNonceBound:true, executionGuard:true,
     workspaceWrite:true, subdirWorkdir:true, outsideReadWriteDenied:true,

@@ -17,7 +17,6 @@ MAX_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_CATEGORIES = 64
 MAX_IMAGES = 2000
 MAX_RESULTS = 50
-MAX_QUERY = 160
 _IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 
 
@@ -142,16 +141,37 @@ class MemeLibrary:
         finally:
             os.close(root_fd)
 
-    async def list(self, query: str = "", limit: int = 20) -> dict:
-        if not isinstance(query, str) or len(query) > MAX_QUERY:
-            raise MemeLibraryError("搜索词过长或格式无效")
+    async def categories(self) -> dict:
+        """Return exact category names containing at least one valid image."""
+        rows = await asyncio.to_thread(self._scan)
+        counts: dict[str, int] = {}
+        for row in rows:
+            name = row["category"]
+            counts[name] = counts.get(name, 0) + 1
+        categories = [{"name": name, "count": counts[name]} for name in sorted(counts)]
+        return {"categories": categories, "total_categories": len(categories), "total_images": len(rows)}
+
+    async def list(self, category: str, limit: int = 20, offset: int = 0) -> dict:
+        if not isinstance(category, str) or not category:
+            raise MemeLibraryError("分类名称无效；请先调用 meme_categories 获取可用分类")
         if type(limit) is not int or not 1 <= limit <= MAX_RESULTS:
             raise MemeLibraryError(f"limit 必须在 1 到 {MAX_RESULTS} 之间")
+        if type(offset) is not int or not 0 <= offset <= MAX_IMAGES:
+            raise MemeLibraryError(f"offset 必须在 0 到 {MAX_IMAGES} 之间")
         rows = await asyncio.to_thread(self._scan)
-        terms = query.casefold().split()
-        selected = [r for r in rows if all(t in (r["category"] + " " + r["name"]).casefold() for t in terms)]
-        return {"items": [{k: r[k] for k in ("id", "category", "name", "mime_type")} for r in selected[:limit]],
-                "total": len(selected)}
+        selected = [row for row in rows if row["category"] == category]
+        if not selected:
+            raise MemeLibraryError("未知分类；请先调用 meme_categories 获取可用分类")
+        page = selected[offset:offset + limit]
+        next_offset = offset + len(page) if offset + len(page) < len(selected) else None
+        return {
+            "category": category,
+            "items": [{k: r[k] for k in ("id", "category", "name", "mime_type")} for r in page],
+            "total": len(selected),
+            "offset": offset,
+            "has_more": next_offset is not None,
+            "next_offset": next_offset,
+        }
 
     def _snapshot(self, resource_id: str) -> tuple[Path, str] | None:
         if not isinstance(resource_id, str) or not re.fullmatch(r"[0-9a-f]{32}", resource_id):

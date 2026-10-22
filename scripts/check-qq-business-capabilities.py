@@ -14,6 +14,10 @@ class Check(wake.Check):
    source=next(p for p in (ROOT/'meme').rglob('*') if p.suffix.lower() in {'.jpg','.png','.gif'})
    target=bank/('开心-测试'+source.suffix);shutil.copy2(source,target)
    self.resource=hashlib.sha256(('开心/'+target.name).encode()+b'\0'+target.read_bytes()).hexdigest()[:32]
+   # Force a real second page; the existing target sorts after these filenames.
+   for index in range(55):shutil.copy2(source,bank/(f'image-{index:03}'+source.suffix))
+   alternate=stage/'meme'/'轻松 接话';alternate.mkdir()
+   shutil.copy2(source,alternate/('one'+source.suffix))
    # Installed author plugins are copied with empty isolated plugin_data/config;
    # neither old subscriptions nor credentials are imported into this test.
    fixture=Path(d['astrbot_root'])/'data/plugins/business_plugin_fixture'
@@ -40,11 +44,13 @@ class Check(wake.Check):
      event=self.wake('group:91000','从共享表情包库里挑一张开心的表情包发给我。',sender='90001');out=self.complete(event)
      assert any(s['type']=='image' for r in out for s in r['event']['message']),out
      names={r.get('tool') for r in self.trace(event) if r['event']=='tool/start'}
-     assert {'mcp__astrbot__meme_list','mcp__astrbot__meme_send'} <= names,names
+     assert {'mcp__astrbot__meme_categories','mcp__astrbot__meme_list','mcp__astrbot__meme_send'} <= names,names
      return {'model_selected':True,'native_image':True,'canonical':True}
     self.case('live-flash-selects-shared-meme',live_meme)
    else:
-    self.case('shared-meme-list',lambda:{'replies':len(self.tool('meme_list',{'query':'开心'}))})
+    self.case('shared-meme-categories',lambda:{'replies':len(self.tool('meme_categories',{}))})
+    self.case('shared-meme-list-by-category',lambda:{'replies':len(self.tool('meme_list',{'category':'开心','limit':20,'offset':0}))})
+    self.case('shared-meme-category-next-page',lambda:{'replies':len(self.tool('meme_list',{'category':'开心','limit':50,'offset':50}))})
     def image():
      out=self.tool('meme_send',{'resource_id':self.resource})
      images=[r for r in out if any(s['type']=='image' for s in r['event']['message'])]

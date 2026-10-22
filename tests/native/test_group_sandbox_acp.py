@@ -192,7 +192,7 @@ try:
               "mcp__astrbot__history_search", "mcp__astrbot__history_read_image", "mcp__astrbot__current_group_info",
               "mcp__astrbot__qq_send_origin", "mcp__astrbot__qq_file_receive", "mcp__astrbot__qq_file_send",
               "mcp__astrbot__current_group_members", "mcp__astrbot__qq_prepare_reply",
-              "mcp__astrbot__meme_list", "mcp__astrbot__meme_send", "mcp__astrbot__plugin_status",
+              "mcp__astrbot__meme_categories", "mcp__astrbot__meme_list", "mcp__astrbot__meme_send", "mcp__astrbot__plugin_status",
               "mcp__astrbot__bili_dynamics", "mcp__astrbot__bili_subscribe",
               "mcp__astrbot__bili_subscriptions", "mcp__astrbot__bili_unsubscribe",
               "mcp__astrbot__twitter_subscribe", "mcp__astrbot__twitter_subscriptions",
@@ -202,6 +202,13 @@ try:
   assert set(schemas) == expected
   assert {"file_path", "path"}.isdisjoint(schemas["web_fetch"]["parameters"].get("properties", {}))
   assert "name" in schemas["skill"]["parameters"]["properties"]
+  meme_schema = schemas["mcp__astrbot__meme_list"]["parameters"]
+  assert "category" in meme_schema["required"]
+  assert "query" not in meme_schema["properties"]
+  assert meme_schema["properties"]["limit"]["maximum"] == 50
+  assert meme_schema["properties"]["offset"]["minimum"] == 0
+  assert schemas["mcp__astrbot__meme_categories"]["parameters"]["properties"] == {}
+
   # SDK resource tools are loaded by the pinned client, but must fail closed
   # under the group guard even when an MCP server exposes resources.
   denied_resources = []

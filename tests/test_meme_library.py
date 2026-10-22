@@ -61,6 +61,12 @@ async def test_list_and_send_uses_verified_snapshot_with_native_callback_lifetim
         image_path.write_bytes(png_bytes((100, 0, 0)))
 
     library = MemeLibrary(root, send, spool_dir=tmp_path / "spool")
+    categories = await library.categories()
+    assert categories == {
+        "categories": [{"name": "开心", "count": 1}],
+        "total_categories": 1,
+        "total_images": 1,
+    }
     listing = await library.list("开心")
     assert listing["total"] == 1
     assert listing["items"][0]["category"] == "开心"
@@ -85,15 +91,19 @@ async def test_rejects_links_unsupported_images_and_invalid_ids(tmp_path):
     except OSError:
         pytest.skip("filesystem does not support test links")
     library = MemeLibrary(root, lambda path: None)
-    listing = await library.list(limit=10)
+    listing = await library.list("安全", limit=10)
     assert [item["name"] for item in listing["items"]] == ["ok"]
     for bad in ("../../outside.png", "g" * 32, ""):
         with pytest.raises(MemeLibraryError):
             await library.send_meme(bad)
     with pytest.raises(MemeLibraryError):
-        await library.list(limit=0)
+        await library.list("安全", limit=0)
     with pytest.raises(MemeLibraryError):
-        await library.list("x" * 161)
+        await library.list("安全", offset=-1)
+    with pytest.raises(MemeLibraryError):
+        await library.list("安全", offset=True)
+    with pytest.raises(MemeLibraryError, match="meme_categories"):
+        await library.list("../outside")
 
 
 @pytest.mark.asyncio
@@ -111,7 +121,7 @@ async def test_unknown_resource_and_native_send_failure_are_bounded(tmp_path):
     library = MemeLibrary(root, failed_send, spool_dir=tmp_path / "spool")
     with pytest.raises(MemeLibraryError, match="未找到"):
         await library.send_meme("0" * 32)
-    resource_id = (await library.list())["items"][0]["id"]
+    resource_id = (await library.list("空"))["items"][0]["id"]
     with pytest.raises(MemeLibraryError, match="发送失败") as exc:
         await library.send_meme(resource_id)
     assert str(captured["path"]) not in str(exc.value)
@@ -163,7 +173,76 @@ async def test_root_regular_files_do_not_count_as_categories(tmp_path):
     (root / "开心").mkdir()
     (root / "开心" / "one.png").write_bytes(png_bytes())
     library = MemeLibrary(root, lambda path: None)
-    assert (await library.list())["total"] == 1
+    assert (await library.categories()) == {
+        "categories": [{"name": "开心", "count": 1}],
+        "total_categories": 1,
+        "total_images": 1,
+    }
+    assert (await library.list("开心"))["total"] == 1
+
+
+@pytest.mark.asyncio
+async def test_categories_count_only_verified_images_and_exact_category_names(tmp_path):
+    root = tmp_path / "meme"
+    for name in ("开心", "开心聊天", "日常 开心"):
+        (root / name).mkdir(parents=True)
+    (root / "开心" / "ok.png").write_bytes(png_bytes())
+    (root / "开心" / "broken.png").write_bytes(b"not a png")
+    (root / "开心聊天" / "ok.png").write_bytes(png_bytes((3, 4, 5)))
+    (root / "日常 开心" / "ok.png").write_bytes(png_bytes((9, 8, 7)))
+    (root / "空分类").mkdir()
+
+    library = MemeLibrary(root, lambda path: None)
+    assert await library.categories() == {
+        "categories": [
+            {"name": "开心", "count": 1},
+            {"name": "开心聊天", "count": 1},
+            {"name": "日常 开心", "count": 1},
+        ],
+        "total_categories": 3,
+        "total_images": 3,
+    }
+    for category, expected_name in (("开心", "ok"), ("开心聊天", "ok"), ("日常 开心", "ok")):
+        result = await library.list(category)
+        assert result["category"] == category
+        assert [item["name"] for item in result["items"]] == [expected_name]
+        assert result["total"] == 1
+    with pytest.raises(MemeLibraryError, match="meme_categories"):
+        await library.list("开心 聊天")
+    with pytest.raises(MemeLibraryError, match="meme_categories"):
+        await library.list("空分类")
+
+
+@pytest.mark.asyncio
+async def test_category_pagination_reaches_all_images_with_terminal_page(tmp_path):
+    root = tmp_path / "meme"
+    folder = root / "分页分类"
+    folder.mkdir(parents=True)
+    for index in range(57):
+        (folder / f"{index:03}.png").write_bytes(png_bytes((index % 255, 2, 3)))
+    library = MemeLibrary(root, lambda path: None)
+
+    first = await library.list("分页分类", limit=50)
+    assert first["total"] == 57
+    assert len(first["items"]) == 50
+    assert first["offset"] == 0
+    assert first["has_more"] is True
+    assert first["next_offset"] == 50
+    second = await library.list("分页分类", limit=50, offset=first["next_offset"])
+    assert len(second["items"]) == 7
+    assert second["offset"] == 50
+    assert second["has_more"] is False
+    assert second["next_offset"] is None
+    assert len({item["id"] for item in first["items"] + second["items"]}) == 57
+
+    past_end = await library.list("分页分类", offset=2000)
+    assert past_end["items"] == []
+    assert past_end["has_more"] is False
+    assert past_end["next_offset"] is None
+    with pytest.raises(MemeLibraryError):
+        await library.list("分页分类", limit=True)
+    with pytest.raises(MemeLibraryError):
+        await library.list("分页分类", offset=2001)
 
 
 def test_explicit_category_only_import_preserves_hash_source_and_license(tmp_path):

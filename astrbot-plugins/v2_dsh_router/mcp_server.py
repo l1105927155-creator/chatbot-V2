@@ -14,13 +14,13 @@ import hmac
 import ipaddress
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any, AsyncIterator, Awaitable, Callable, TypedDict
+from typing import Annotated, Any, AsyncIterator, Awaitable, Callable, TypedDict
 
 import uvicorn
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from mcp.server.fastmcp.utilities.types import Image as McpImage
-from pydantic import StrictInt
+from pydantic import Field, StrictInt
 
 try:
     from .background import InvalidBackgroundEvent, validate_event
@@ -522,9 +522,19 @@ class McpServer:
                 raise ToolError(f"能力调用失败：{reason}；结果未确认时先核对状态。") from exc
 
         @server.tool(structured_output=False)
-        async def meme_list(query: str = "", limit: StrictInt = 20, ctx: Context | None = None) -> dict:
-            """按情绪、画面或文字查找共享表情包，获得资源ID；按当前交流场景选择。"""
-            return await capability(ctx, "memes", "list", query, limit)
+        async def meme_categories(ctx: Context | None = None) -> dict:
+            """先获取共享表情包的分类目录和各分类可用图片数，再选择适合当前场合的分类。"""
+            return await capability(ctx, "memes", "categories")
+
+        @server.tool(structured_output=False)
+        async def meme_list(
+            category: Annotated[str, Field(min_length=1, description="meme_categories返回的完整分类名，精确匹配；不是搜索关键词")],
+            limit: Annotated[StrictInt, Field(ge=1, le=50)] = 20,
+            offset: Annotated[StrictInt, Field(ge=0, le=2000)] = 0,
+            ctx: Context | None = None,
+        ) -> dict:
+            """浏览指定分类内的图片及资源ID。先调用meme_categories；用next_offset继续翻页，不按关键词搜索图片。"""
+            return await capability(ctx, "memes", "list", category, limit, offset)
 
         @server.tool(structured_output=False)
         async def meme_send(resource_id: str, ctx: Context | None = None) -> dict:
