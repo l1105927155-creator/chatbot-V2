@@ -2,6 +2,7 @@
 import importlib.util
 import threading
 import sys
+from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import pytest
@@ -64,6 +65,27 @@ def test_failed_resume_does_not_replace_id_or_close_shared_runtime(tmp_path):
     assert not client.runtime.closed and client.runtime.counter==0
     assert client.run('saved','delta')=='saved'
     client.close()
+
+
+def test_background_terminal_lookup_uses_private_runtime_control(tmp_path):
+    client = module.DshClient(**settings(tmp_path))
+    expected = {"event": "settled", "parent_session_id": "sid", "task_id": "task"}
+    client.runtime.background_terminal = lambda sid, task_id: (
+        expected if (sid, task_id) == ("sid", "task") else None)
+    assert client.background_terminal("sid", "task") == expected
+    client.close()
+
+
+def test_reader_failure_does_not_claim_the_dsh_child_process_exited():
+    class Process:
+        def poll(self): return None
+    class Reader:
+        def is_alive(self): return False
+    runtime = object.__new__(module.AcpRuntime)
+    runtime.client = SimpleNamespace(_proc=Process(), _reader_thread=Reader())
+
+    assert runtime.process_alive() is True
+    assert runtime.transport_alive() is False
 
 
 def test_slow_resume_does_not_block_other_session_and_close_attempts_all(tmp_path):

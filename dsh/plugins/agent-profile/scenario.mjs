@@ -270,6 +270,13 @@ export async function apply(ctx, config) {
             const localCandidates = (Array.isArray(workspaceObservation) ? workspaceObservation : workspaceObservation.candidates)
               .map(item => ({ ...item, provider: 'v2-scenario-files' }))
             const localNames = new Set(localCandidates.map(item => item.name))
+            // Optional observers receive routing provenance, never Skill bodies.
+            // No observer changes the catalog or grants execution authority.
+            ctx.emit('v2/skill-catalog-observed', { sessionId: agent.session.id,
+              entries: localCandidates.map(item => ({ name: item.name,
+                shadowed: globalCandidates.filter(global => global.name === item.name)
+                  .map(global => ({ origin: 'global', name: global.name,
+                    description_sha256: createHash('sha256').update(global.description ?? '').digest('hex') })) })) })
             const visible = skillsForScene(readScene(root, agent.session.id).scene, ownerSkills)
             const filter = candidates => {
               const winners = new Map()

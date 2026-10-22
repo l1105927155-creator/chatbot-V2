@@ -1,0 +1,12 @@
+{
+  "schema":"v2-behavior-evaluation/1",
+  "evaluator_version":"1.0",
+  "suite_id":"behavior-suite",
+  "mode":"live",
+  "model":{"provider":"fixture-provider","name":"fixture-model"},
+  "lock":{"version":"v2","upstream_lock_sha256":"fixture-upstream","mode":"live"},
+  "scenarios":[
+    {"id":"tool-and-skill-success","conversation_key":"private:42","session_id":"sid-42","native_turn_id":"turn-good","required_metrics":["tool_calls","task_success","unauthorized_attempts","skill_calls","token_usage","latency_ms"],"expect":{"tool_calls":{"min":2,"max":2},"task_success":true,"unauthorized_attempts":{"min":1,"max":1},"skill_calls":{"min":1,"max":1},"token_usage":{"max":1000},"latency_ms":{"max":500}}},
+    {"id":"no-tool-needed","conversation_key":"private:42","session_id":"sid-42","native_turn_id":"turn-no-tool","required_metrics":["tool_calls","task_success","skill_calls"],"expect":{"tool_calls":{"min":0,"max":0},"task_success":true,"skill_calls":{"min":0,"max":0}}}
+  ]
+}

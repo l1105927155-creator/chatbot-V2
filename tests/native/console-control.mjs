@@ -59,6 +59,8 @@ assert.deepEqual(await request({ action: 'compact', session_id: 'loaded-session'
   { ok: true, compacted: true })
 assert.equal(compactCalls, 3)
 assert.equal(promptCalls, 0)
+assert.deepEqual(await request({ action: 'background_terminal', session_id: 'loaded-session',
+  task_id: 'unknown-task', token }), { ok: true, event: null })
 await handlers.get('dispose')?.()
 console.log(JSON.stringify({ unauthorized: true, unloadedRejected: true, busyFailure: true,
   noOpAndCompacted: true, nativeCompactCalls: compactCalls, chatPrompts: promptCalls }))

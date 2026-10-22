@@ -1,5 +1,7 @@
 # 当前实施入口（QQ 交流表达阶段）
 
+当前追加：[二期功能审计复核与整改](docs/phases/functional-audit-remediation-2026-10-22.md)。在现有沙箱补分层请求/Skill 来源/工具与版本观测、固定行为回归门槛，并修复已复现的后台终态丢失及运行时中断状态残留；保持已确认的单步超时和群 Skill 继承/覆盖，不新增通用 Agent 编排或上游 core patch。实现及隔离验证见[验证记录](docs/functional-audit-validation-2026-10-22.md)，生产尚未发布。
+
 已部署：[群应用业务操作与单步超时](docs/phases/group-app-operations-step-timeouts-2026-10-22.md)。工作区编辑按请求者白名单，group_app按应用声明维护独立data，两群好感已接入；普通成员真实Flash聊天自主get/record保存+1。移除ACP180秒和后台10分钟总倒计时，保留单步超时/取消/容量与原生后台进度、自检和获授权维护。181.5秒真实ACP、权限边界、完整QQ模拟和模型样本通过，停写备份上线；状态库与成员记录、代码、人格/根指南保留，QQ健康，见[验证及上线](docs/group-app-timeouts-validation-2026-10-22.md)。
 
 已部署：[V2 统一控制台](docs/phases/bot-console-2026-10-21.md)。AstrBot 插件主入口、一套创建时复制的默认设置、多套 workspace 模板、仅 Owner 私聊、后台群修改白名单、Owner 独占模型切换、仅停 Agent 的会话启停、会话限定远程编辑器、添加群一次同步两层准入，以及固定 systemd 整体重启已接通。630 项 Python 回归、原生 ACP/权限与浏览器分组、9 个完整隔离场景通过；停写备份后上线，生产页面/真实群工作区/QQ 连接与控制台实际重启已核对，7 个状态库会话/游标/pending/模型原样保留，独立 DSH Web 未重启。工作区始终保留；普通成员只读但保留附件收件，群应用业务操作现按独立数据边界逐项开放。默认模型/启用状态由 Owner 初次配置，既有编辑名单由 Owner 后台手动维护，恢复范围由程序统一管理并持续回放校准，不新增设置或重复待确认提示；机制上线不等于压缩信息损失或模型判断力已解决。见[验证与部署](docs/bot-console-validation-2026-10-21.md)、[使用说明](docs/bot-console.md)。

@@ -3,9 +3,11 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash, randomUUID } from 'node:crypto'
 import { LlmAdapter } from '../dsh/node_modules/@deepseek-ai/dsh-llm/lib/index.js'
+import { renderPrompt, renderContextSections } from '../dsh/node_modules/@deepseek-ai/dsh-system-prompt/lib/index.js'
+import { describe, toolSnapshot, catalogSnapshot, effectiveCatalog, requestSettings, saveArtifact } from './request-snapshot.mjs'
 
 export const name = 'v2-sandbox-native-probe'
-export const inject = ['llm', 'web']
+export const inject = ['llm', 'web', 'skills']
 
 const MAX_DELAY_MS = 120_000
 const MAX_INPUT_CHARS = 32_768
@@ -169,6 +171,12 @@ class NativeProbe {
     const controlUrl = String(config.controlUrl ?? process.env.V2_SANDBOX_CONTROL_URL ?? '').replace(/\/$/, '')
     const token = String(config.token ?? process.env.V2_SANDBOX_CONTROL_TOKEN ?? '')
     this.mode = config.mode ?? process.env.V2_SANDBOX_PROBE_MODE ?? 'live'
+    this.snapshotMode = config.snapshotMode ?? 'off'
+    if (!['off', 'hash', 'text'].includes(this.snapshotMode)) throw new Error('invalid sandbox snapshot mode')
+    this.snapshotMetadata = config.snapshotMetadata ?? {}
+    this.artifactDirectory = config.artifactDirectory
+    this.assemblies = new Map()
+    this.catalogProvenance = new Map()
     if (!['live', 'scripted'].includes(this.mode)) throw new Error('sandbox native probe mode must be live or scripted')
     const parsed = new URL(controlUrl)
     if (!['http:', 'https:'].includes(parsed.protocol) || !['127.0.0.1', '::1', 'localhost'].includes(parsed.hostname)) {
@@ -261,18 +269,83 @@ class NativeProbe {
 
   modelStart({ sessionId, turnId, callId, options, provider, model }) {
     const serialized = JSON.stringify(options.messages ?? [])
+    let snapshot
+    if (this.snapshotMode !== 'off') {
+      const assembly = this.assemblies.get(sessionId)
+      snapshot = { version: 1, ...this.snapshotMetadata, mode: this.mode, provider, model,
+        capture: this.snapshotMode, assembly_observed: assembly?.observed === true,
+        ...assembly?.report, ...effectiveCatalog(options.messages),
+        skill_tool_available: (options.tools ?? []).some(tool => tool.name === 'skill'),
+        tools: toolSnapshot(options.tools), messages: describe(serialized),
+        input: describe({ messages: options.messages ?? [], system: options.system }),
+        settings: describe(requestSettings(options)), tool_history: describe(options.toolHistory),
+        observation_boundary: 'dsh-llm-stream-before-adapter-projection',
+        system_prompt: describe((options.messages ?? []).filter(item => item.source?.kind === 'system-prompt')) }
+      if (this.snapshotMode === 'text') {
+        try {
+          snapshot.artifact = saveArtifact(this.artifactDirectory, {
+            metadata: snapshot, assembly: assembly?.text, messages: options.messages,
+            system: options.system, settings: requestSettings(options),
+            tools: options.tools, toolHistory: options.toolHistory })
+        } catch (error) {
+          snapshot.artifact = { saved: false, reason: 'artifact-write-error', error_type: error.name }
+        }
+      }
+    }
     return this.event({ event: 'model/start', session_id: sessionId, turn_id: turnId, call_id: callId,
       status: 'running', provider, model, message_count: options.messages?.length ?? 0,
       input_bytes: Buffer.byteLength(serialized), input_sha256: createHash('sha256').update(serialized).digest('hex'),
-      ...boundedMessages(options.messages), tools: (options.tools ?? []).map(item => item.name).slice(0, 64) })
+      ...(this.snapshotMode === 'hash' ? { input_projection: 'hash-only', input_truncated: false }
+        : boundedMessages(options.messages)), snapshot,
+      tools: (options.tools ?? []).map(item => item.name).slice(0, 64),
+      tools_truncated: (options.tools?.length ?? 0) > 64 })
   }
 
-  async modelEnd({ sessionId, turnId, callId, status, error }) {
+  async modelEnd({ sessionId, turnId, callId, status, error, usage, duration_ms }) {
     await this.event({ event: status === 'error' ? 'model/error' : 'model/end', session_id: sessionId,
-      turn_id: turnId, call_id: callId, status, error_type: error?.name })
+      turn_id: turnId, call_id: callId, status, error_type: error?.name, usage, duration_ms })
   }
 
   observe() {
+    if (this.snapshotMode !== 'off') {
+      this.ctx.on('v2/skill-catalog-observed', ({ sessionId, entries }) => {
+        this.catalogProvenance.set(String(sessionId), entries)
+      })
+      // Run outside the existing assembly transforms and observe their returned
+      // value. This never adds text to the model request or the Session.
+      this.ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
+        const assembly = await next()
+        const agent = context.agent
+        if (!agent) return assembly
+        const sessionId = String(agent.session.id)
+        try {
+          const resolved = { ...assembly, sections: await Promise.all(assembly.sections.map(async item =>
+            ({ ...item, text: await item.text }))) }
+          const section = item => ({ name: item.name, ...describe(renderPrompt({ ...resolved, sections: [item] })) })
+          const catalog = await this.ctx.skills.snapshot({ scope: agent,
+            cwd: agent.session.header.cwd, signal: context.signal })
+          this.assemblies.set(sessionId, { observed: true, report: {
+            sections: resolved.sections.map(section),
+            contexts: renderContextSections(resolved).map(item => ({ name: item.name, ...describe(item.text) })),
+            registry_catalog: catalogSnapshot(catalog.skills, this.catalogProvenance.get(sessionId)),
+            assembly_stage: 'post-waterfall-before-native-finalization',
+            catalog_complete: catalog.complete,
+            diagnostics: resolved.sections.filter(item => describe(item.text).token_estimate > 4000)
+              .map(item => ({ code: 'large-standing-section', section: item.name,
+                recommendation: 'review-related-skill-extraction', measured: describe(item.text) })),
+          }, text: this.snapshotMode === 'text' ? resolved : undefined })
+        } catch (error) {
+          // Observation failure is explicit and must not change Agent behavior.
+          this.assemblies.set(sessionId, { observed: false,
+            report: { observation_error: error.name, catalog_complete: false } })
+        }
+        return assembly
+      }, { global: true, prepend: true })
+      this.ctx.on('agent/disposed', ({ agent }) => {
+        this.assemblies.delete(String(agent.session.id))
+        this.catalogProvenance.delete(String(agent.session.id))
+      })
+    }
     this.ctx.on('session/event', (session, event) => {
       const sessionId = String(session.id)
       if (event.type === 'turn/start') this.turns.set(sessionId, event.data.turn)
@@ -291,11 +364,14 @@ class NativeProbe {
       const turnId = this.currentTurn(sessionId)
       const callId = String(exec.callId)
       await this.event({ event: 'tool/start', session_id: sessionId, turn_id: turnId, native_turn_id: turnId,
-        call_id: callId, tool: exec.name, status: 'running' })
+        call_id: callId, tool: exec.name, status: 'running',
+        arguments_sha256: describe(exec.arguments).sha256,
+        ...(this.snapshotMode === 'text' ? { arguments: exec.arguments } : {}) })
       try {
         const result = await activeTool.run({ sessionId, turnId, callId, tool: exec.name, signal: exec.signal }, next)
         await this.event({ event: 'tool/end', session_id: sessionId, turn_id: turnId, native_turn_id: turnId,
           call_id: callId, tool: exec.name, status: result?.isError ? 'error' : 'ok',
+          result_sha256: describe(result).sha256, result_bytes: describe(result).bytes,
           error_type: result?.error?.name })
         return result
       } catch (error) {
@@ -360,6 +436,9 @@ class NativeProbe {
       const callId = `model-${randomUUID()}`
       const invocation = { sessionId, turnId, callId }
       return (async function* () {
+        const started = performance.now()
+        let usage
+        const observeChunk = chunk => { if (chunk.type === 'usage') usage = chunk.usage }
         await probe.modelStart({ sessionId, turnId, callId, options, provider: options.provider, model: options.model })
         let status = 'ok'
         let reported = false
@@ -373,9 +452,9 @@ class NativeProbe {
           let chunks = []
           const downstream = inModelContext(next(), invocation)
           if (bufferForAfter) {
-            for await (const chunk of downstream) chunks.push(chunk)
+            for await (const chunk of downstream) { observeChunk(chunk); chunks.push(chunk) }
           } else {
-            for await (const chunk of downstream) yield chunk
+            for await (const chunk of downstream) { observeChunk(chunk); yield chunk }
           }
           const after = scripted ? { fault: null } : await probe.claim({ target: 'model', session_id: sessionId,
             turn_id: turnId, native_turn_id: turnId, call_id: callId, phase: 'after' })
@@ -394,11 +473,13 @@ class NativeProbe {
           if (bufferForAfter) for (const chunk of chunks) yield chunk
         } catch (error) {
           status = 'error'
-          await probe.modelEnd({ sessionId, turnId, callId, status, error })
+          await probe.modelEnd({ sessionId, turnId, callId, status, error, usage,
+            duration_ms: performance.now() - started })
           reported = true
           throw error
         } finally {
           if (!reported) await probe.modelEnd({ sessionId, turnId, callId,
+            usage, duration_ms: performance.now() - started,
             status: options.signal?.aborted ? 'cancelled' : status })
         }
       })()

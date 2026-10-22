@@ -216,6 +216,14 @@ def test_staged_owner_profile_uses_production_profile_and_only_inserts_sandbox_p
     (fake_root / "dsh/skills").mkdir()
     (fake_root / "sandbox").mkdir()
     (fake_root / "sandbox/probe.mjs").write_text("// probe\n")
+    (fake_root / "sandbox/request-snapshot.mjs").write_text("// snapshot\n")
+    (fake_root / "upstream.lock.json").write_text("{}")
+    original_check_output = runtime.subprocess.check_output
+    def metadata_git(command, **kwargs):
+        if kwargs.get("cwd") == fake_root:
+            return "fixture-revision" if kwargs.get("text") else b""
+        return original_check_output(command, **kwargs)
+    monkeypatch.setattr(runtime.subprocess, "check_output", metadata_git)
     (fake_root / ".runtime/dsh-runtime/node_modules").mkdir(parents=True)
     monkeypatch.setattr(runtime, "ROOT", fake_root)
     data = tmp_path / "data"

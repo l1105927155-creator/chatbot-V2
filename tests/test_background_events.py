@@ -69,6 +69,9 @@ class Dsh:
     def close_session(self, sid):
         self.closed.append(sid)
 
+    def health(self):
+        return {"ready": True}
+
 
 def setup_service(*, fail=False):
     conversation = SimpleNamespace(platform_id="qq", bot_id="bot", key="group:30")
@@ -101,6 +104,64 @@ async def test_completion_callback_returns_while_foreground_holds_chat_lock_and_
             break
         await asyncio.sleep(.005)
     assert messaging.sent == [("核对完成。", ["1105927155"], None)]
+    await service.close_background()
+
+
+@pytest.mark.asyncio
+async def test_dead_dsh_transport_interrupts_and_reclaims_background_task():
+    service, conversation, _state, messaging, dsh = setup_service()
+    assert await service.handle_background_event(event())
+    dsh.health = lambda: {"ready": False, "process_alive": False}
+
+    status = await service.status(conversation)
+    assert status["background_running"] == 0
+    assert not service.active_background(conversation)
+    for _ in range(20):
+        if messaging.sent:
+            break
+        await asyncio.sleep(.005)
+    assert messaging.sent == [("后台任务因 DSH 运行时退出而中断，未能确认完成。",
+                              ["1105927155"], None)]
+    terminal = service._background_tasks[("session-1", "research-1")].terminal_event
+    assert terminal["status"] == "failed"
+    await service.close_background()
+
+
+@pytest.mark.asyncio
+async def test_dead_reader_with_live_dsh_process_remains_unverifiable_not_failed():
+    service, conversation, _state, messaging, dsh = setup_service()
+    assert await service.handle_background_event(event())
+    dsh.health = lambda: {"ready": False, "process_alive": True}
+    dsh.background_terminal = lambda *_: None
+
+    status = await service.status(conversation)
+    assert status["background_running"] == 1
+    assert status["background_unverifiable"] is True
+    assert service.active_background(conversation)
+    assert not messaging.sent
+    assert service._background_tasks[("session-1", "research-1")].status == "running"
+    await service.close_background()
+
+
+@pytest.mark.asyncio
+async def test_private_native_terminal_reconciliation_reuses_callback_deduplication():
+    service, conversation, _state, messaging, dsh = setup_service()
+    assert await service.handle_background_event(event())
+    settled = event("settled")
+    calls = []
+    dsh.background_terminal = lambda sid, task_id: calls.append((sid, task_id)) or settled
+
+    status = await service.status(conversation)
+    assert status["background_running"] == 0
+    assert calls == [("session-1", "research-1")]
+    for _ in range(20):
+        if messaging.sent:
+            break
+        await asyncio.sleep(.005)
+    assert messaging.sent == [("核对完成。", ["1105927155"], None)]
+    assert service._background_tasks[("session-1", "research-1")].terminal_event == settled
+    await service.handle_background_event(settled)
+    assert len(messaging.sent) == 1
     await service.close_background()
 
 

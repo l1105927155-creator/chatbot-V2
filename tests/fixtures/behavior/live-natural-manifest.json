@@ -1,0 +1,26 @@
+{
+  "schema": "v2-behavior-evaluation/1",
+  "evaluator_version": "1.0",
+  "suite_id": "deepseek-live-self-directed-tool-choice",
+  "experiment_label": "self-directed-tool-choice",
+  "dataset_id": "deepseek-live-self-directed-tool-choice-v1",
+  "mode": "live",
+  "model": {"provider": "deepseek-official", "name": "deepseek-v4-flash"},
+  "lock": {"version": 1, "upstream_lock_sha256": "fbd26b467b01fe5fc31fe8bb5a92397fb4d72af0d240edb5f801f0d73b81944c"},
+  "samples": [
+    {"id": "research-base-url-1", "sample_kind": "positive", "prompt": "请帮我核实 DeepSeek 官方 API 文档记载的 API Base URL，并依据官方资料回答，附上来源链接。"},
+    {"id": "research-chat-path-2", "sample_kind": "positive", "prompt": "请查证 DeepSeek 官方 API 文档中 Chat Completions 的请求路径是什么，并附上官方来源链接。"},
+    {"id": "research-model-field-3", "sample_kind": "positive", "prompt": "请核实 DeepSeek 官方 API 文档使用哪个 JSON 字段选择模型，并举出官方示例中的一个模型名，附来源链接。"},
+    {"id": "casual-chat-1", "sample_kind": "negative", "prompt": "我今天终于把房间整理好了，周末准备躺着看电影。你最近会想看什么类型？"},
+    {"id": "casual-chat-2", "sample_kind": "negative", "prompt": "今天好累，决定晚上点碗面早点休息。你觉得这样安排怎么样？"},
+    {"id": "casual-chat-3", "sample_kind": "negative", "prompt": "我刚买了一个蓝色杯子，颜色挺好看的，打算放在办公桌上。"}
+  ],
+  "scenarios": [
+    {"id": "research-base-url-1", "conversation_key": "private:90009", "sample_kind": "positive", "expect": {"tool_calls": {"min": 2, "max": 8}, "tool_names": {"skill": {"min": 1, "max": 2}, "web_search": {"min": 1, "max": 4}}, "skill_calls": {"min": 1, "max": 2}, "tool_chain_success": true}},
+    {"id": "research-chat-path-2", "conversation_key": "private:90009", "sample_kind": "positive", "expect": {"tool_calls": {"min": 2, "max": 8}, "tool_names": {"skill": {"min": 1, "max": 2}, "web_search": {"min": 1, "max": 4}}, "skill_calls": {"min": 1, "max": 2}, "tool_chain_success": true}},
+    {"id": "research-model-field-3", "conversation_key": "private:90009", "sample_kind": "positive", "expect": {"tool_calls": {"min": 2, "max": 8}, "tool_names": {"skill": {"min": 1, "max": 2}, "web_search": {"min": 1, "max": 4}}, "skill_calls": {"min": 1, "max": 2}, "tool_chain_success": true}},
+    {"id": "casual-chat-1", "conversation_key": "private:90009", "sample_kind": "negative", "expect": {"tool_calls": {"min": 0, "max": 0}, "tool_names": {"skill": {"min": 0, "max": 0}, "web_search": {"min": 0, "max": 0}}, "skill_calls": {"min": 0, "max": 0}, "tool_chain_success": true}},
+    {"id": "casual-chat-2", "conversation_key": "private:90009", "sample_kind": "negative", "expect": {"tool_calls": {"min": 0, "max": 0}, "tool_names": {"skill": {"min": 0, "max": 0}, "web_search": {"min": 0, "max": 0}}, "skill_calls": {"min": 0, "max": 0}, "tool_chain_success": true}},
+    {"id": "casual-chat-3", "conversation_key": "private:90009", "sample_kind": "negative", "expect": {"tool_calls": {"min": 0, "max": 0}, "tool_names": {"skill": {"min": 0, "max": 0}, "web_search": {"min": 0, "max": 0}}, "skill_calls": {"min": 0, "max": 0}, "tool_chain_success": true}}
+  ]
+}

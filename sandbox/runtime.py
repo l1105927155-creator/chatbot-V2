@@ -6,6 +6,7 @@ the sandbox OneBot server. It never reads the production AstrBot config/data.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import os
@@ -146,7 +147,8 @@ def _assert_owner_unchanged(previous: dict, owner: dict[str, str] | None) -> Non
         raise RuntimeError("Sandbox owner identity is immutable; use a fresh data directory to change it")
 
 
-def _stage_dsh_repo(staged_repo: Path, data_dir: Path, dsh_mode: str) -> None:
+def _stage_dsh_repo(staged_repo: Path, data_dir: Path, dsh_mode: str,
+                    snapshot_mode: str = "off") -> None:
     """Stage production profiles as real files and add the sandbox-only probe."""
     source = ROOT / "dsh"
     target = staged_repo / "dsh"
@@ -174,6 +176,24 @@ def _stage_dsh_repo(staged_repo: Path, data_dir: Path, dsh_mode: str) -> None:
         staged_probe = probe_dir / "probe.mjs"
         shutil.copy2(probe_source, staged_probe)
         staged_probe.chmod(0o600)
+        shutil.copy2(ROOT / "sandbox/request-snapshot.mjs", probe_dir / "request-snapshot.mjs")
+        # Bind observations to the actual working tree, including uncommitted
+        # integration changes. No diff or credentials are included in metadata.
+        revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+        paths = subprocess.check_output(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], cwd=ROOT).split(b"\0")
+        source_hash = hashlib.sha256()
+        for raw in sorted(set(paths)):
+            if not raw:
+                continue
+            name = os.fsdecode(raw)
+            path = ROOT / name
+            if name.startswith(("sandbox/", "dsh/", "astrbot-plugins/")) or name == "upstream.lock.json":
+                if path.is_file() and not path.is_symlink():
+                    source_hash.update(raw + b"\0" + hashlib.sha256(path.read_bytes()).digest())
+        metadata = {"revision": revision, "source_sha256": source_hash.hexdigest(),
+                    "dirty": bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT)),
+                    "upstream_lock_sha256": hashlib.sha256((ROOT / "upstream.lock.json").read_bytes()).hexdigest(),
+                    "scenario": data_dir.name}
         for profile_name in ("v2-agent-group.patch.yml", "v2-agent-owner.patch.yml",
                              "v2-agent-group-sandbox.patch.yml"):
             if not (profiles / profile_name).exists():
@@ -188,6 +208,9 @@ def _stage_dsh_repo(staged_repo: Path, data_dir: Path, dsh_mode: str) -> None:
                     "        controlUrl: !!js process.env.SANDBOX_CONTROL_URL\n"
                     "        token: !!js process.env.SANDBOX_CONTROL_TOKEN\n"
                     "        mode: !!js process.env.SANDBOX_DSH_MODE\n"
+                    f"        snapshotMode: {snapshot_mode}\n"
+                    f"        snapshotMetadata: {json.dumps({**metadata, 'profile': profile_name})}\n"
+                    f"        artifactDirectory: {json.dumps(str(data_dir / 'request-snapshots'))}\n"
                 )
     runtime_dir = staged_repo / ".runtime"
     _mkdir_private(runtime_dir)
@@ -217,10 +240,13 @@ def _stage_dsh_repo(staged_repo: Path, data_dir: Path, dsh_mode: str) -> None:
 
 
 def prepare(data_dir: Path, astrbot_source: Path, ports: dict[str, int], dsh_mode: str,
-            owner_id: str | int | None = None) -> dict:
+            owner_id: str | int | None = None, *, snapshot_mode: str | None = None) -> dict:
     data_dir = Path(os.path.abspath(data_dir.expanduser()))
     if dsh_mode not in {"live", "scripted", "disabled"}:
         raise ValueError("invalid sandbox DSH mode")
+    snapshot_mode = snapshot_mode or ("text" if dsh_mode == "scripted" else "hash")
+    if snapshot_mode not in {"off", "hash", "text"}:
+        raise ValueError("invalid sandbox snapshot mode")
     owner = _owner_identity(owner_id)
     if owner is not None and dsh_mode == "disabled":
         raise ValueError("--owner-id requires an enabled DSH runtime")
@@ -396,7 +422,7 @@ p.chmod(0o600)
     elif dsh_mode in {"live", "scripted"}:
         raise RuntimeError(f"Pinned DSH runtime is missing: {dsh_runtime}")
 
-    _stage_dsh_repo(staged_repo, data_dir, dsh_mode)
+    _stage_dsh_repo(staged_repo, data_dir, dsh_mode, snapshot_mode)
 
     onebot_dir = data_dir / "onebot"
     _mkdir_private(onebot_dir)
@@ -450,6 +476,8 @@ def _parser() -> argparse.ArgumentParser:
                         help="Deprecated compatibility option; Owner now uses host execution, groups always have 1024 MiB")
     parser.add_argument("--no-dsh", action="store_true", help="Disable free-form DSH replies")
     parser.add_argument("--dsh-mode", choices=("live", "scripted", "disabled"), default=None)
+    parser.add_argument("--snapshot-mode", choices=("off", "hash", "text"), default=None,
+                        help="Request observations: live defaults to hashes; scripted to synthetic text artifacts")
     return parser
 
 
@@ -472,7 +500,8 @@ def main(argv: list[str] | None = None) -> int:
         os.environ.setdefault("V2_DSH_MODEL", "scripted")
     ports = {"onebot": args.onebot_port, "ui": args.ui_port, "mcp": args.mcp_port}
     _assert_ports_free(ports)
-    details = prepare(args.data_dir, args.astrbot_dir, ports, mode, args.owner_id)
+    details = prepare(args.data_dir, args.astrbot_dir, ports, mode, args.owner_id,
+                      snapshot_mode=args.snapshot_mode)
     print(f"Sandbox prepared at {details['data_dir']} (DSH: {mode}).")
     if args.prepare_only:
         return 0

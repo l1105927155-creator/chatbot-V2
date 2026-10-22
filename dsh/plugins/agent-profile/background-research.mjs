@@ -18,6 +18,14 @@ const BY_PARENT = new Map()
 const PENDING_CHILD = new Map()
 const PARENT_START_LOCKS = new Map()
 
+// Read-only bridge for the host's private control socket. Keep the original
+// callback payload so reconciliation cannot change a task's terminal result.
+export function terminalEvents(parentSessionId) {
+  return [...TASKS.values()]
+    .filter(task => task.parent.session.id === parentSessionId && task.terminalEvent)
+    .map(task => ({...task.terminalEvent}))
+}
+
 const isText = value => typeof value === 'string' && value.length > 0
   && value.trim() === value && !/[\x00-\x1f\x7f]/.test(value)
 const output = { schema: { type: 'object', additionalProperties: false,
@@ -315,21 +323,32 @@ export function apply(ctx, config = {}) {
                 })
                 const result = await run.result
                 const resultText = safeText(textOf(result.output))
-                const status = controller.signal.aborted || result.stopReason === 'aborted'
+                let status = controller.signal.aborted || result.stopReason === 'aborted'
                   ? 'cancelled' : result.stopReason === 'completed' ? 'completed' : 'failed'
-                await postCallback(callback, {
+                record.terminalEvent = {
                   event:'settled', parent_session_id: owner, task_id: taskId,
                   requester_id: binding.source.requester_id, status,
                   ...(resultText ? {text: resultText} : {}), label: record.label,
-                })
+                }
+                if (status === 'completed' && !resultText) {
+                  status = 'failed'
+                  record.terminalEvent = {...record.terminalEvent, status, text:'后台研究无法完成。'}
+                }
+                record.terminal = {status: record.terminalEvent.status,
+                  label: record.terminalEvent.label, detail: result.stopReason}
+                try { await postCallback(callback, record.terminalEvent) }
+                catch (notifyError) { ctx.logger?.warn?.('background callback settlement failed: ' + String(notifyError)) }
                 return {status: status === 'cancelled' ? 'killed' : status === 'completed' ? 'completed' : 'failed',
                   detail: result.stopReason, result: resultText}
               } catch (error) {
                 const status = controller.signal.aborted ? 'cancelled' : 'failed'
+                record.terminalEvent ??= {event:'settled', parent_session_id: owner,
+                  task_id: taskId, requester_id: binding.source.requester_id, status,
+                  text: status === 'cancelled' ? '后台研究已停止。' : '后台研究无法完成。', label: record.label}
+                record.terminal = {status: record.terminalEvent.status,
+                  label: record.terminalEvent.label, detail: 'research failed'}
                 try {
-                  await postCallback(callback, {event:'settled', parent_session_id: owner,
-                    task_id: taskId, requester_id: binding.source.requester_id, status,
-                    text:'后台研究无法完成。', label: record.label})
+                  await postCallback(callback, record.terminalEvent)
                 } catch (notifyError) { ctx.logger?.warn?.('background callback settlement failed: ' + String(notifyError)) }
                 return {status: status === 'cancelled' ? 'killed' : 'failed',
                   detail: controller.signal.aborted ? 'cancelled' : 'research failed'}
@@ -398,6 +417,10 @@ export function apply(ctx, config = {}) {
         throw new Error('research task unavailable in this conversation')
       }
       if (args.action === 'status') {
+        if (record.terminalEvent) {
+          try { await postCallback(callback, record.terminalEvent) }
+          catch (notifyError) { ctx.logger?.warn?.('background callback reconciliation failed: ' + String(notifyError)) }
+        }
         if (record.terminal) return {task_id:taskId, status:record.terminal.status,
           label:record.terminal.label ?? record.label,
           ...(record.terminal.detail ? {detail:record.terminal.detail} : {})}

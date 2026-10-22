@@ -1,0 +1,17 @@
+{
+  "runtime_mode": {"known": true, "dsh_mode": "live", "scripted": false},
+  "lifecycle": [
+    {"event":"turn/completed","conversation_key":"private:42","native_turn_id":"turn-good","session_id":"sid-42","status":"completed"},
+    {"event":"authorization/denied","conversation_key":"private:42","native_turn_id":"turn-good","session_id":"sid-42"},
+    {"event":"turn/completed","conversation_key":"private:42","native_turn_id":"turn-no-tool","session_id":"sid-42","status":"completed"},
+    {"event":"model/start","source":"native-probe","conversation_keys":["private:42"],"native_turn_id":"turn-good","session_id":"sid-42","call_id":"model-good","provider":"fixture-provider","model":"fixture-model","snapshot":{"version":"v2","revision":"r7","source_sha256":"fixture-source","upstream_lock_sha256":"fixture-upstream","dirty":false,"profile":"qq","scenario":"behavior-suite","mode":"live"}},
+    {"event":"tool/start","source":"native-probe","conversation_keys":["private:42"],"native_turn_id":"turn-good","session_id":"sid-42","call_id":"call-1","tool":"web_search"},
+    {"event":"tool/end","source":"native-probe","conversation_keys":["private:42"],"native_turn_id":"turn-good","session_id":"sid-42","call_id":"call-1","tool":"web_search","status":"ok","is_error":false},
+    {"event":"tool/start","source":"native-probe","conversation_keys":["private:42"],"native_turn_id":"turn-good","session_id":"sid-42","call_id":"call-2","tool":"skill"},
+    {"event":"tool/end","source":"native-probe","conversation_keys":["private:42"],"native_turn_id":"turn-good","session_id":"sid-42","call_id":"call-2","tool":"skill","status":"ok","is_error":false},
+    {"event":"skill/use","source":"native-probe","conversation_keys":["private:42"],"native_turn_id":"turn-good","session_id":"sid-42","call_id":"call-2","skill":"research"},
+    {"event":"model/end","source":"native-probe","conversation_keys":["private:42"],"native_turn_id":"turn-good","session_id":"sid-42","call_id":"model-good","duration_ms":125,"usage":{"inputTokens":80,"outputTokens":20}},
+    {"event":"model/start","source":"native-probe","conversation_keys":["private:42"],"native_turn_id":"turn-no-tool","session_id":"sid-42","call_id":"model-no-tool","provider":"fixture-provider","model":"fixture-model","snapshot":{"version":"v2","revision":"r7","source_sha256":"fixture-source","upstream_lock_sha256":"fixture-upstream","dirty":false,"profile":"qq","scenario":"behavior-suite","mode":"live"}},
+    {"event":"model/end","source":"native-probe","conversation_keys":["private:42"],"native_turn_id":"turn-no-tool","session_id":"sid-42","call_id":"model-no-tool","duration_ms":40,"usage":{"inputTokens":15,"outputTokens":5}}
+  ]
+}

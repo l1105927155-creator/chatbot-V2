@@ -4,18 +4,20 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
+import pytest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PYTHON = ROOT / ".runtime" / "astrbot" / ".venv" / "bin" / "python"
 
 
-def test_sandbox_native_probe_uses_dsh_lifecycle_and_tools():
+@pytest.mark.parametrize("snapshot_mode", ["text", "hash", "text-unwritable"])
+def test_sandbox_native_probe_uses_dsh_lifecycle_and_tools(snapshot_mode):
     truncation = subprocess.run(["node", str(ROOT / "tests/native/sandbox-probe-test.mjs")], cwd=ROOT,
                                 text=True, capture_output=True, check=False)
     assert truncation.returncode == 0, truncation.stdout + truncation.stderr
     worker = r'''
-import asyncio, json, os, signal, sys
+import asyncio, hashlib, json, os, signal, sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from aiohttp import web
@@ -76,6 +78,9 @@ async def main():
         home.mkdir(mode=0o700); workspace.mkdir(mode=0o700)
         persona = home / "personas"; scene = home / "scenes"; skills = base / "skills"
         persona.mkdir(mode=0o700); scene.mkdir(mode=0o700); skills.mkdir(mode=0o700)
+        (skills / "chat-history.md").write_text("---\nname: chat-history\ndescription: " + "D" * 600 +
+            "\n---\nUNLOADED_SKILL_BODY_MARKER\n")
+        (skills / "web-research.md").write_text("---\nname: web-research\ndescription: Hidden model fixture\ndisable-model-invocation: true\n---\nHIDDEN_BODY_MARKER\n")
         web_patch = base / "web.patch.yml"
         web_patch.write_text("- id: web\n  config:\n    searchProvider: fault-search\n    fetchProvider: fault-fetch\n", encoding="utf-8")
         plugin_patch = base / "probe.patch.yml"
@@ -85,7 +90,9 @@ async def main():
             "\n    - id: v2-sandbox-native-probe\n      name: " +
             str(Path(os.environ["V2_REPO_ROOT"]) / "sandbox/probe.mjs") +
             "\n      config:\n        controlUrl: http://127.0.0.1:" + str(port) +
-            "\n        token: native-test-token\n        mode: live\n        searchProvider: fault-search\n        fetchProvider: fault-fetch\n", encoding="utf-8")
+            "\n        token: native-test-token\n        mode: live\n        snapshotMode: " + os.environ["SNAPSHOT_MODE"].split("-")[0] +
+            "\n        artifactDirectory: " + ("/dev/null/snapshot" if os.environ["SNAPSHOT_MODE"] == "text-unwritable" else str(base / "request-snapshots")) +
+            "\n        snapshotMetadata: {revision: test-revision, profile: native-test, scenario: synthetic}\n        searchProvider: fault-search\n        fetchProvider: fault-fetch\n", encoding="utf-8")
         cfg = HarnessConfig(
             dsh_bin=str(Path(os.environ["V2_REPO_ROOT"]) / ".runtime/dsh-runtime/node_modules/.bin/dsh"),
             dsh_home=str(home), cwd=str(workspace), profile="sdk-minimal",
@@ -129,7 +136,42 @@ async def main():
         assert any(row.get("event") == "turn/end" for row in event_rows), event_rows
         model_starts = [row for row in event_rows if row.get("event") == "model/start"]
         assert len(model_starts) >= 4, model_starts
+        assert all(row["snapshot"]["assembly_observed"] for row in model_starts), model_starts
+        assert all(row["snapshot"]["sections"] and row["snapshot"]["tools"] for row in model_starts)
+        assert all(row["snapshot"]["messages"]["sha256"] == row["input_sha256"] for row in model_starts)
+        assert all(row["snapshot"]["revision"] == "test-revision" for row in model_starts)
+        assert all(row["snapshot"]["catalog_complete"] for row in model_starts)
+        assert all({s["name"] for s in row["snapshot"]["registry_catalog"]} == {"chat-history", "web-research"}
+                   for row in model_starts)
+        assert all([s["name"] for s in row["snapshot"]["catalog"]] == ["chat-history"] for row in model_starts)
+        assert all(row["snapshot"]["catalog"][0]["description"]["chars"] <= 500 for row in model_starts)
+        model_ends = [row for row in event_rows if row.get("event") == "model/end"]
+        assert all(row["duration_ms"] >= 0 for row in model_ends)
+        if os.environ["SNAPSHOT_MODE"] == "hash":
+            assert all("input" not in row and row["input_projection"] == "hash-only" for row in model_starts)
+            assert not (base / "request-snapshots").exists()
+            print(json.dumps({"hidden_bash_executed":False,"hash_only":True}))
+            await runner.cleanup()
+            return
+        if os.environ["SNAPSHOT_MODE"] == "text-unwritable":
+            assert all(row["snapshot"]["artifact"] == {"saved":False,"reason":"artifact-write-error","error_type":"Error"}
+                       for row in model_starts)
+            print(json.dumps({"hidden_bash_executed":False,"artifact_failure_nonblocking":True}))
+            await runner.cleanup()
+            return
         assert all(row.get("input") and len(row["input"]) <= 32769 for row in model_starts), model_starts
+        for row in model_starts:
+            artifact = row["snapshot"]["artifact"]
+            path = base / "request-snapshots" / artifact["filename"]
+            raw = path.read_bytes()
+            assert artifact["saved"] and not artifact["truncated"]
+            assert hashlib.sha256(raw).hexdigest() == artifact["sha256"]
+            assert path.stat().st_mode & 0o077 == 0
+            value = json.loads(raw)
+            assert "UNLOADED_SKILL_BODY_MARKER" not in json.dumps(value["messages"])
+            assert "HIDDEN_BODY_MARKER" not in json.dumps(value["messages"])
+        assert any(b"TAIL_MARKER" in (base / "request-snapshots" / row["snapshot"]["artifact"]["filename"]).read_bytes()
+                   for row in model_starts if row.get("input_truncated"))
         model_call_ids = {row.get("call_id") for row in model_starts}
         model_claims = [row for row in rows if row.get("kind") == "claim" and row.get("target") == "model"
                         and row.get("phase") == "before"]
@@ -161,7 +203,7 @@ async def main():
 
 asyncio.run(main())
 '''
-    env = {**os.environ, "V2_REPO_ROOT": str(ROOT)}
+    env = {**os.environ, "V2_REPO_ROOT": str(ROOT), "SNAPSHOT_MODE": snapshot_mode}
     process = subprocess.Popen([str(PYTHON), "-c", worker], cwd=ROOT, env=env,
                                text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
     try:

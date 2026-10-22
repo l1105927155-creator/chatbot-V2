@@ -339,7 +339,7 @@ class ExpressionCheck:
         runtime = _runtime_module()
         details = runtime.prepare(self.directory, ASTRBOT,
                                   {"onebot": self.check.onebot, "ui": self.check.ui, "mcp": self.check.mcp},
-                                  "live", OWNER)
+                                  "live", OWNER, snapshot_mode="text")
         self.stage_manifest = stage_candidate(details, self.candidate)
         workspace = self.workspace
         workspace.mkdir(mode=0o700, parents=True, exist_ok=True)

@@ -86,7 +86,7 @@ class AcpRuntime:
                "V2_DSH_PROVIDER": provider, "V2_DSH_MODEL": model,
                "V2_DSH_HOME": str(Path(dsh_home).resolve())}
         self._console_control_dir = None
-        if os.environ.get("V2_CONSOLE_STATE_FILE"):
+        if os.environ.get("V2_CONSOLE_STATE_FILE") or background_callback_url is not None:
             self._console_control_dir = tempfile.TemporaryDirectory(prefix="v2-control-")
             self._console_control_path = str(Path(self._console_control_dir.name) / "control.sock")
             self._console_control_token = secrets.token_hex(32)
@@ -441,13 +441,15 @@ class AcpRuntime:
         self.__dict__.get('_session_model_configs', {}).pop(session_id, None)
         self.__dict__.get('_uncertain_model_sessions', set()).discard(session_id)
 
-    def transport_alive(self):
-        # The pinned SDK has no non-generating public ping. Check its actual
-        # process and reader thread; provider availability requires a real turn.
+    def process_alive(self):
         process = self.client._proc
+        return bool(process is not None and process.poll() is None)
+
+    def transport_alive(self):
+        # A dead reader makes requests unusable, but does not prove that the
+        # child process or its native jobs have stopped.
         reader = self.client._reader_thread
-        return bool(process is not None and process.poll() is None
-                    and reader is not None and reader.is_alive())
+        return self.process_alive() and reader is not None and reader.is_alive()
 
     def close(self):
         subscription = getattr(self, '_model_notifications', None)
@@ -477,6 +479,27 @@ class AcpRuntime:
             if receipt.get("ok") is not True:
                 raise RuntimeError("DSH manual compaction did not complete")
             return {"compacted": receipt["compacted"]}
+
+    def background_terminal(self, session_id, task_id):
+        path = getattr(self, "_console_control_path", None)
+        if not path:
+            raise RuntimeError("DSH background control is not enabled")
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(5)
+            connection.connect(path)
+            connection.sendall((json.dumps({"action": "background_terminal", "session_id": session_id,
+                                           "task_id": task_id,
+                                           "token": self._console_control_token}) + "\n").encode())
+            response = b""
+            while b"\n" not in response:
+                chunk = connection.recv(128 * 1024)
+                if not chunk or len(response) + len(chunk) > 128 * 1024:
+                    raise RuntimeError("DSH background terminal receipt was lost")
+                response += chunk
+            receipt = json.loads(response.split(b"\n", 1)[0])
+            if receipt.get("ok") is not True:
+                raise RuntimeError("DSH background terminal lookup failed")
+            return receipt.get("event")
 
 
 class DshTurnCancelled(RuntimeError):
@@ -932,8 +955,17 @@ class DshClient:
         with self._lock:
             closed = self._closed or self._runtime_stopped
             quarantined = len(self._quarantined_sessions)
+        process_alive = getattr(self.runtime, "process_alive", None)
+        process_alive = process_alive() if callable(process_alive) else None
         return {"ready": not closed and self.runtime.transport_alive(),
+                "process_alive": process_alive,
                 "quarantined_sessions": quarantined}
+
+    def background_terminal(self, session_id, task_id):
+        lookup = getattr(self.runtime, "background_terminal", None)
+        if not callable(lookup):
+            raise RuntimeError("DSH background terminal lookup is unavailable")
+        return lookup(session_id, task_id)
 
     def select_persona(self, session_id: str, persona: str) -> dict:
         """Set the next-turn persona without changing the DSH session or tool set."""

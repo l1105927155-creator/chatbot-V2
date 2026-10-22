@@ -61,6 +61,12 @@ V2_DSH_PROVIDER=deepseek-official V2_DSH_MODEL=deepseek-v4-flash \
 
 模拟端的消息与 API 记录是测试夹具、传输证据和界面数据；Bot 的会话事实仍以该实例的 canonical Journal 为准。尤其在丢失 `message_sent` 反馈时，窗口显示已经模拟发送，不能据此声称 Journal 已确认出站。
 
+### 分层请求观测与行为回归
+
+二期新增 `--snapshot-mode hash|text|off`：live 默认 hash（新请求不留输入原文），scripted 默认 text（合成夹具可复现）。text 将完整请求另存实例的 `request-snapshots/`，事件里的输入仍是有界摘要；off 关闭新增快照并保留旧 probe 文本行为。导出证据仍可能含 Journal/审计中的测试内容，不因 hash 模式自动脱敏全部事实源。
+
+快照包含调用设置、具名 section、原生估算 Token、registry 目录及实际模型发布目录、Skill 来源覆盖链、工具描述/schema 哈希和 provider usage。未观测、未保存和截断均显式标明。使用 `scripts/check-audit-behavior.py` 运行固定 scripted 行为集，`scripts/check-behavior-regression.py` 离线评分与比较，`scripts/compare-request-snapshots.mjs` 定位请求层变化。合同、边界与命令见[二期阶段](phases/functional-audit-remediation-2026-10-22.md)及[验证记录](functional-audit-validation-2026-10-22.md)。
+
 ## 真实性边界
 
 - 使用 OneBot v11 的 array 消息段及 API 信封，包括匹配 `echo` 的响应；引用通过 `get_msg` 解析，成员信息和文件 URL 由模拟端提供。

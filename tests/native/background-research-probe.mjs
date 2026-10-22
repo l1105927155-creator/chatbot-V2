@@ -4,7 +4,7 @@ import { createServer } from 'node:http'
 import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { apply } from '../../dsh/plugins/agent-profile/background-research.mjs'
+import { apply, terminalEvents } from '../../dsh/plugins/agent-profile/background-research.mjs'
 import { researchDelegation } from '../../dsh/plugins/agent-profile/background-authority.mjs'
 
 const temp = mkdtempSync(join(tmpdir(), 'v2-background-research-'))
@@ -36,6 +36,7 @@ const jobRuns = new Map()
 let jobSequence = 0
 let rejectNextStartedCallback = false
 let disconnectNextStartedResponse = false
+let rejectNextSettledCallback = false
 const removedJobs = new Set()
 const listeners = new Map()
 let definition
@@ -53,6 +54,12 @@ const server = createServer(async (request, response) => {
   }
   if (payload.event === 'started' && rejectNextStartedCallback) {
     rejectNextStartedCallback = false
+    response.writeHead(503)
+    response.end('unavailable')
+    return
+  }
+  if (payload.event === 'settled' && rejectNextSettledCallback) {
+    rejectNextSettledCallback = false
     response.writeHead(503)
     response.end('unavailable')
     return
@@ -180,6 +187,8 @@ try {
   assert.equal(outcome.status, 'completed')
   assert.equal(calls.at(-1).event, 'settled')
   assert.equal(calls.at(-1).text, 'Verified result with source.')
+  assert.deepEqual(terminalEvents(parentId), [calls.at(-1)],
+    'the native read-only cache retains the immutable terminal callback payload')
   assert.ok(registered)
   const terminalStatus = await definition.execute({action:'status', task_id:started.task_id},
     {agent:parent, signal:new AbortController().signal})
@@ -274,6 +283,7 @@ try {
   }))
 
   rejectNextSpawn = true
+  rejectNextSettledCallback = true
   const childCountBeforeQueueTest = children.length
   const queuedStarts = await Promise.all([
     definition.execute({action:'start', prompt:'spawn failure releases queue'},
@@ -291,6 +301,9 @@ try {
     await new Promise(resolve => setTimeout(resolve, 5))
   }
   assert.ok(queueFailure, 'a failed child creation settles its task')
+  const cachedFailure = terminalEvents(parentId).find(item => item.task_id === queueFailure.task_id)
+  assert.deepEqual(cachedFailure, queueFailure,
+    'callback failure keeps the original terminal payload available for host reconciliation')
   assert.equal(children.length, childCountBeforeQueueTest + 1,
     'a later start in the same-parent queue proceeds after child creation throws')
   const queueSuccess = queuedStarts.find(task => task.task_id !== queueFailure.task_id)

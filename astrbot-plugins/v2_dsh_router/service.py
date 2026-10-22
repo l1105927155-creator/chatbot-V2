@@ -149,6 +149,11 @@ class ChatService:
         if event["event"] == "started":
             if task is not None:
                 return task.requester_id == event["requester_id"]
+            existing = next((item for item in self._background_tasks.values()
+                             if item.parent_session_id == event["parent_session_id"] and
+                             item.status == "running"), None)
+            if existing is not None:
+                await self._reconcile_background(existing.identity, event["parent_session_id"])
             self._prune_background_tasks()
             active_count = sum(item.status == "running" for item in self._background_tasks.values())
             if (active_count >= self.BACKGROUND_ACTIVE_LIMIT or
@@ -213,6 +218,42 @@ class ChatService:
         identity = (str(conversation.platform_id), str(conversation.bot_id), str(conversation.key))
         return any(task.identity == identity and task.status == "running"
                    for task in self._background_tasks.values())
+
+    async def _reconcile_background(self, identity, session_id):
+        matching = [task for task in self._background_tasks.values()
+                    if task.identity == tuple(map(str, identity)) and
+                    task.parent_session_id == session_id and task.status == "running"]
+        if not matching:
+            return False
+        health = getattr(self.dsh, "health", None)
+        unverifiable = False
+        if callable(health):
+            try:
+                runtime_health = health()
+            except Exception:
+                runtime_health = None
+            if isinstance(runtime_health, dict) and runtime_health.get("process_alive") is False:
+                for task in matching:
+                    await self.handle_background_event({
+                        "event": "settled", "parent_session_id": task.parent_session_id,
+                        "task_id": task.task_id, "requester_id": task.requester_id,
+                        "status": "failed",
+                        "text": "后台任务因 DSH 运行时退出而中断，未能确认完成。",
+                    })
+                return
+            unverifiable = (isinstance(runtime_health, dict) and
+                            runtime_health.get("ready") is False and
+                            runtime_health.get("process_alive") is True)
+        lookup = getattr(self.dsh, "background_terminal", None)
+        if callable(lookup):
+            for task in matching:
+                try:
+                    event = await asyncio.to_thread(lookup, session_id, task.task_id)
+                except Exception:
+                    continue
+                if isinstance(event, dict):
+                    await self.handle_background_event(event)
+        return unverifiable and any(task.status == "running" for task in matching)
 
     def _discard_background_session(self, identity, session_id):
         for key, task in tuple(self._background_tasks.items()):
@@ -408,6 +449,7 @@ class ChatService:
                     "last_seen_journal_id": 0, "pending_upper_cursor": None,
                     "background_running": 0, "pending_fault_kind": None,
                     "pending_fault_code": None}
+        background_unverifiable = await self._reconcile_background(identity, state.session_id)
         background_running = sum(
             1 for task in self._background_tasks.values()
             if task.identity == tuple(map(str, identity)) and
@@ -437,7 +479,8 @@ class ChatService:
                 "pending_fault_kind": state.pending_fault_kind,
                 "pending_fault_code": state.pending_fault_code,
                 "pending_fault_details": state.pending_fault_details,
-                "background_running": background_running}
+                "background_running": background_running,
+                "background_unverifiable": background_unverifiable}
 
     async def cancel(self, conversation) -> bool:
         """Stop a prompt or drain background work owned by this conversation."""

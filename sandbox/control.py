@@ -181,7 +181,7 @@ class SandboxControl:
     def record_probe(self, data, *, conversation_key=None):
         if "native_turn_id" not in data and "turn_id" in data:
             data = {**data, "native_turn_id": data["turn_id"]}
-        allowed = {"event", "session_id", "native_turn_id", "call_id", "tool", "status", "fault_id", "mode", "input", "input_truncated", "input_projection", "input_sha256", "input_bytes", "message_count", "tools", "provider", "model", "error_type"}
+        allowed = {"event", "session_id", "native_turn_id", "call_id", "tool", "status", "fault_id", "mode", "input", "input_truncated", "input_projection", "input_sha256", "input_bytes", "message_count", "tools", "provider", "model", "error_type", "snapshot", "tools_truncated", "duration_ms", "usage", "arguments", "arguments_sha256", "result_sha256", "result_bytes"}
         record = {key: value for key, value in data.items() if key in allowed}
         if not isinstance(record.get("event"), str) or len(record["event"]) > 80:
             raise ValueError("native event name required")

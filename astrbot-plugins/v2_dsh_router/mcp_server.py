@@ -210,7 +210,7 @@ def _unique_json_object(pairs):
 class McpServer:
     """A loopback Streamable HTTP endpoint with turn-scoped authority."""
 
-    BACKGROUND_BODY_LIMIT = 64 * 1024
+    BACKGROUND_BODY_LIMIT = 128 * 1024
 
     def __init__(self, journal: Any, logger: logging.Logger | None = None, *, health=None) -> None:
         self.journal = journal

@@ -27,6 +27,7 @@ class LiveOwner(expansion.Expansion):
 
     def start(self):
         cmd=[str(ROOT/'scripts/run-sandbox.sh'),'--dsh-mode','live','--owner-id',self.owner,
+             '--snapshot-mode','text',  # This runner creates synthetic fixtures and inspects prompt text.
              '--owner-volume-mib','32','--data-dir',str(self.directory),
              '--onebot-port',str(self.onebot),'--ui-port',str(self.ui),'--mcp-port',str(self.mcp)]
         prepared=subprocess.run([*cmd,'--prepare-only'],cwd=ROOT,capture_output=True,text=True)

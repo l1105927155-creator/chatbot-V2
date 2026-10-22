@@ -1,0 +1,16 @@
+{
+  "schema":"v2-behavior-evaluation/1",
+  "evaluator_version":"1.0",
+  "suite_id":"sandbox-behavior-regression",
+  "dataset_id":"sandbox-behavior-fixture-v1",
+  "mode":"scripted",
+  "model":{"provider":"sandbox-scripted","name":"scripted"},
+  "lock":{"version":1,"upstream_lock_sha256":"fbd26b467b01fe5fc31fe8bb5a92397fb4d72af0d240edb5f801f0d73b81944c"},
+  "scenarios":[
+    {"id":"group-a-skill-positive","conversation_key":"group:91000","expect":{"tool_calls":{"min":1,"max":1},"task_success":true,"skill_calls":{"min":1,"max":1}}},
+    {"id":"group-b-skill-positive","conversation_key":"group:91001","expect":{"tool_calls":{"min":1,"max":1},"task_success":true,"skill_calls":{"min":1,"max":1}}},
+    {"id":"group-a-skill-negative","conversation_key":"group:91000","expect":{"tool_calls":{"min":0,"max":0},"task_success":true,"skill_calls":{"min":0,"max":0}}},
+    {"id":"group-a-tool-failure","conversation_key":"group:91000","expect":{"tool_calls":{"min":1,"max":1},"task_success":false,"skill_calls":{"min":1,"max":1}}},
+    {"id":"group-a-recovery","conversation_key":"group:91000","expect":{"tool_calls":{"min":0,"max":0},"task_success":true,"skill_calls":{"min":0,"max":0}}}
+  ]
+}

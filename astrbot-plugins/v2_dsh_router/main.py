@@ -738,6 +738,8 @@ class V2DshRouter(star.Star):
                             + "；模式：" + ("Owner 主机执行" if service.execution_profile == "owner-host"
                                            else "群聊隔离执行" if service.execution_profile == "group-sandbox"
                                            else "安全聊天")
+                            + ("；后台任务仍未终结，当前运行通道暂无法核对"
+                               if status.get("background_unverifiable") else "")
                             + ("；待核对 Journal：" + str(status["pending_upper_cursor"])
                                + fault_detail + "。核对已发生的执行和发送结果后，可用 /v2agent recover "
                                + str(status["pending_upper_cursor"]) + " 跳过该轮并解除暂停，系统不会重试旧输入。"

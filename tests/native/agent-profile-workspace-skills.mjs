@@ -117,6 +117,8 @@ async function boot(groupName) {
   const workspace = join(root, groupName)
   mkdirSync(join(workspace, 'skills'), { recursive: true })
   const ctx = new Context()
+  const provenance = []
+  ctx.on('v2/skill-catalog-observed', value => provenance.push(value))
   const roots = []
   for (const plugin of [SystemPrompt, ToolRuntime, SkillRegistry, AgentRegistry, ToolSkill]) {
     const fiber = ctx.plugin(plugin)
@@ -138,7 +140,7 @@ async function boot(groupName) {
   const step = async () => ctx.waterfall('agent/pre-step', {
     agent: created.agent, messages: [], turn: 1, step: 1, signal: new AbortController().signal,
   }, async () => ({ kind: 'enter', messages: [] }))
-  return { ctx, roots, workspace, names, load, step, dispose: async () => {
+  return { ctx, roots, workspace, names, load, step, provenance, dispose: async () => {
     await created.registration()
     await created.scope.dispose()
     for (const fiber of roots.reverse()) await fiber.dispose()
@@ -154,6 +156,8 @@ try {
   await b.step()
   assert.deepEqual(await a.names(), ['chat-history', 'community-tools', 'private-a', 'skill-authoring', 'web-research'])
   assert.deepEqual(await b.names(), ['chat-history', 'community-tools', 'skill-authoring', 'web-research'])
+  assert.equal(a.provenance.at(-1).entries.find(item => item.name === 'web-research').shadowed[0].origin, 'global')
+  assert.deepEqual(b.provenance.at(-1).entries, [])
   const local = await a.load('web-research', 'workspace-local-shadow')
   const global = await b.load('web-research', 'workspace-global-fallback')
   assert.match(JSON.stringify(local.content), /group A override/)
@@ -174,6 +178,7 @@ try {
   rmSync(join(a.workspace, 'skills', 'web-research'), { recursive: true })
   await a.step()
   assert.match(JSON.stringify((await a.load('web-research', 'workspace-global-after-delete')).content), /global version/)
+  assert.ok(!a.provenance.at(-1).entries.some(item => item.name === 'web-research'))
 
   // Symlinked entries are metadata-only and never become native Skill candidates.
   const outside = join(root, 'outside')

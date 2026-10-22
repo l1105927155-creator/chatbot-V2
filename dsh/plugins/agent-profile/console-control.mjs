@@ -1,8 +1,9 @@
-/** Private host control adapter for native manual compaction. No model-facing tool. */
+/** Private host control adapter for compaction and read-only task receipts. */
 import { createServer } from 'node:net'
 import { chmodSync, lstatSync, unlinkSync } from 'node:fs'
 import { dirname, isAbsolute } from 'node:path'
 import { timingSafeEqual } from 'node:crypto'
+import { terminalEvents } from './background-research.mjs'
 
 export const name = 'v2-console-control'
 export const inject = ['agents', 'compaction']
@@ -39,6 +40,12 @@ export async function apply(ctx, config = {}) {
         const expected = Buffer.from(token)
         if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
           socket.end(JSON.stringify({ok: false, code: 'UNAUTHORIZED'}) + '\n'); return
+        }
+        if (request.action === 'background_terminal'
+            && typeof request.session_id === 'string' && typeof request.task_id === 'string') {
+          const event = terminalEvents(request.session_id)
+            .find(item => item.task_id === request.task_id)
+          socket.end(JSON.stringify({ok: true, event: event ?? null}) + '\n'); return
         }
         if (request.action !== 'compact' || typeof request.session_id !== 'string') {
           socket.end(JSON.stringify({ok: false, code: 'INVALID_REQUEST'}) + '\n'); return

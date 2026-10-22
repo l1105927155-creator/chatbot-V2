@@ -61,6 +61,8 @@ def test_native_background_foreground_update_completion_and_stop(tmp_path, monke
     conv = Conversation('qq','1','group:3' if group_runtime else 'private:2')
     sent = []
     sequence = 0
+    lose_next_settled_callback = False
+    killed_process_for_test = False
 
     def append(text, *, outbound=False):
         nonlocal sequence
@@ -96,9 +98,15 @@ def test_native_background_foreground_update_completion_and_stop(tmp_path, monke
                    for row in probe_rows())
 
     async def scenario():
+        nonlocal lose_next_settled_callback, killed_process_for_test
         server = McpServer(journal)
         service = None
-        async def callback(event): return await service.handle_background_event(event)
+        async def callback(event):
+            nonlocal lose_next_settled_callback
+            if event["event"] == "settled" and lose_next_settled_callback:
+                lose_next_settled_callback = False
+                return False
+            return await service.handle_background_event(event)
         server.configure_background(callback)
         await server.start(0)
         client = await asyncio.to_thread(DshClient,
@@ -137,6 +145,7 @@ def test_native_background_foreground_update_completion_and_stop(tmp_path, monke
             assert 'ADDITIONAL_REQUIREMENT_APPLIED' in completed[0][0]
             assert completed[0][1]['mention_user_ids']==(['2'] if group_runtime else [])
             assert not service.active_background(conv)
+
             # A second detached run is stopped even while its foreground is idle.
             release.unlink()
             await turn('BG_START')
@@ -198,12 +207,84 @@ def test_native_background_foreground_update_completion_and_stop(tmp_path, monke
             assert len(completed_for('D')) == 1
             assert len([value for value,_ in sent if value.startswith('BG_CHILD_C：后台检索已停止。')]) == 1, 'cancellation notice is delivered once'
             assert not service.active_background(conv)
+
+            # Lose the only terminal callback, then recover its long Chinese
+            # result over the existing private DSH control socket.
+            release.unlink()
+            lose_next_settled_callback = True
+            keys_before = set(service._background_tasks)
+            fetches_before = log.read_text().count('fetch-start')
+            fetch_ends_before = log.read_text().count('fetch-end')
+            await turn('BG_START_LONG_RESULT')
+            await wait_for(lambda: log.read_text().count('fetch-start') == fetches_before + 1)
+            new_key = next(key for key in service._background_tasks if key not in keys_before)
+            release.touch()
+            await wait_for(lambda: log.read_text().count('fetch-end') == fetch_ends_before + 1)
+            async def native_terminal():
+                return await asyncio.to_thread(client.background_terminal, new_key[0], new_key[1])
+            for _ in range(200):
+                terminal = await native_terminal()
+                if terminal is not None:
+                    break
+                await asyncio.sleep(.025)
+            assert terminal is not None, 'native DSH retained the lost terminal callback'
+            assert len(json.dumps(terminal, ensure_ascii=False).encode('utf-8')) > 16 * 1024
+            assert len(terminal['text']) == 8000
+            status = await asyncio.wait_for(service.status(conv), 10)
+            assert status['background_running'] == 0
+            assert not status['background_unverifiable']
+            await wait_for(lambda: any('中文结论' in text for text, _ in sent))
+            recovered = [text for text, _ in sent if '中文结论' in text]
+            assert len(recovered) == 1
+            assert len(recovered[0]) >= 8000
+            assert not service.active_background(conv)
+
+            if profile == 'safe-chat':
+                # Prove real transport death using only this isolated test
+                # runtime, after native web_fetch starts and before it ends.
+                release.unlink()
+                keys_before = set(service._background_tasks)
+                fetches_before = log.read_text().count('fetch-start')
+                await turn('BG_START')
+                await wait_for(lambda: log.read_text().count('fetch-start') == fetches_before + 1)
+                dead_process_task = next(key for key in service._background_tasks
+                                         if key not in keys_before)
+                assert service.active_background(conv)
+                sends_before_death = len(sent)
+                process = client.runtime.client._proc
+                assert process is not None and process.poll() is None
+                process.kill()
+                await asyncio.to_thread(process.wait, 5)
+                assert process.poll() is not None
+                killed_process_for_test = True
+
+                interrupted = await asyncio.wait_for(service.status(conv), 10)
+                assert interrupted['background_running'] == 0
+                assert not interrupted['background_unverifiable']
+                assert not service.active_background(conv)
+                await wait_for(lambda: any(
+                    '后台任务因 DSH 运行时退出而中断，未能确认完成。' in text
+                    for text, _ in sent[sends_before_death:]))
+                terminal_sends = sent[sends_before_death:]
+                assert sum('后台任务因 DSH 运行时退出而中断，未能确认完成。' in text
+                           for text, _ in terminal_sends) == 1
+                assert not any('BACKGROUND_COMPLETE' in text for text, _ in terminal_sends)
+                await service.status(conv)
+                await asyncio.sleep(.1)
+                assert len(sent[sends_before_death:]) == 1
+                assert service._background_tasks[dead_process_task].terminal_event['status'] == 'failed'
         finally:
             release.touch()
             lines = list(getattr(client.runtime.client, '_stderr_lines', []))
             (tmp_path/'stderr.txt').write_text('\n'.join(lines))
             await service.close_background()
-            await asyncio.to_thread(client.close)
+            try:
+                await asyncio.to_thread(client.close)
+            except ExceptionGroup as exc:
+                expected_transport_error = any(
+                    type(error).__name__ == 'TransportClosedError' for error in exc.exceptions)
+                if not killed_process_for_test or not expected_transport_error:
+                    raise
             await server.close()
     try:
         asyncio.run(scenario())

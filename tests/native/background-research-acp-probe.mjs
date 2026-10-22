@@ -94,6 +94,8 @@ class Adapter extends LlmAdapter {
           log({kind:'file-verified', tools})
         }
         yield* call('web_fetch', { url: 'https://background.fixture/research' }, 'fetch-' + options.sessionId)
+      } else if (childText.includes('LONG_RESULT')) {
+        yield* text('中文结论'.repeat(2000))
       } else if (parallel) {
         yield* text(`BACKGROUND_COMPLETE_${parallel[1]}`)
       } else {
@@ -124,7 +126,8 @@ class Adapter extends LlmAdapter {
       const taskId = parallel ? findTaskId(options.messages, label) : ids.at(-1)?.[0]
       yield* call('background_research', {
         action, ...(action === 'start' ? { prompt: parallel
-          ? label : 'BG_CHILD: verify the implementation using web tools.' }
+          ? label : 'BG_CHILD: verify the implementation using web tools.' +
+            (source.includes('BG_START_LONG_RESULT') ? ' LONG_RESULT' : '') }
           : { task_id: taskId }),
         ...(action === 'update' ? { prompt: 'ADDITIONAL_REQUIREMENT: focus on group chat.' } : {}),
       }, 'background-' + options.sessionId + '-' + this.seen.size)
