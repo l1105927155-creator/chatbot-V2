@@ -1,0 +1,29 @@
+--- a/affinity.py
++++ b/affinity.py
+@@ -94 +94,6 @@
+-def locked():
++def locked(readonly: bool = False):
++    """加排他锁执行；readonly=True 时允许在不可写目录中退化为无锁只读。
++
++    只读命令（get/list）不修改数据，目录或锁文件不可写时仍应能读出记录；
++    写命令必须拿到锁，拿不到就如实报错，绝不降级。
++    """
+@@ -96,2 +101,10 @@
+-    directory.mkdir(parents=True, exist_ok=True)
+-    fh = open(lock_file(), "a+")
++    fh = None
++    try:
++        directory.mkdir(parents=True, exist_ok=True)
++        fh = open(lock_file(), "a+")
++    except OSError:
++        if not readonly:
++            raise
++    if fh is None:
++        yield
++        return
+@@ -175 +188 @@
+-    with locked():
++    with locked(readonly=True):
+@@ -296 +309 @@
+-    with locked():
++    with locked(readonly=True):
