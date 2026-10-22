@@ -201,6 +201,42 @@ def test_group_acp_launch_uses_private_home_but_session_cwd_is_workspace(tmp_pat
     runtime.close()
 
 
+@pytest.mark.parametrize("profile,patch_name", [
+    ("safe-chat", "v2-agent-group.patch.yml"),
+    ("group-sandbox", "v2-agent-group-sandbox.patch.yml"),
+    ("owner-host", "v2-agent-owner.patch.yml"),
+])
+def test_acp_turn_has_no_v2_wall_clock_timeout_for_any_profile(tmp_path, monkeypatch, profile, patch_name):
+    import deepseek_harness.client as sdk
+    transports = []
+
+    class HarnessConfig:
+        def __init__(self, **kwargs): self.__dict__.update(kwargs)
+
+    class HarnessClient:
+        def __init__(self, config): self.config = config; transports.append(self)
+        def start(self): pass
+        def request(self, method, _params, *, response_model, **_kwargs):
+            assert method == "initialize"
+            return response_model(agentCapabilities={"sessionCapabilities": {"resume": {}}})
+        def close(self): pass
+
+    monkeypatch.setattr(sdk, "HarnessClient", HarnessClient)
+    monkeypatch.setattr(sdk, "HarnessConfig", HarnessConfig)
+    kw = settings(tmp_path)
+    patch = tmp_path / patch_name
+    patch.touch()
+    runtime = module.AcpRuntime(
+        dsh_bin=kw["dsh_bin"], dsh_home=kw["dsh_home"], workspace=kw["workspace"],
+        patch=patch, instructions=kw["instructions"], provider="test-provider", model="test-model",
+        execution_profile=profile,
+    )
+    try:
+        assert transports[0].config.request_timeout_seconds is None
+    finally:
+        runtime.close()
+
+
 def test_native_mcp_bindings_follow_session_create_and_restart_resume(tmp_path):
     runtimes=[]
     class McpRuntime(Runtime):

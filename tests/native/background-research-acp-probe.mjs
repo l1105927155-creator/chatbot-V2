@@ -37,7 +37,7 @@ class Adapter extends LlmAdapter {
   async *stream(options) {
     const users = options.messages.filter(m => m.role === 'user')
     const child = users.some(m => m.content?.some(b => b.type === 'text'
-      && b.text.startsWith('请独立完成以下研究任务')))
+      && b.text.startsWith('请独立完成以下研究、自检')))
     const last = users.findLast(m => m.content?.some(b => b.type === 'text'
       && b.text.includes('"latest_user_journal_id"'))) ?? users.at(-1)
     const raw = last?.content?.find(b => b.type === 'text')?.text ?? ''
@@ -54,15 +54,29 @@ class Adapter extends LlmAdapter {
       const stage = this.children.get(options.sessionId) ?? 0
       this.children.set(options.sessionId, stage + 1)
       const tools = (options.tools ?? []).map(t => t.name)
+      const profile = process.env.V2_EXECUTION_PROFILE
+      log({kind:'child-tools', profile, tools})
       const childText = users.flatMap(m => m.content ?? [])
         .filter(b => b.type === 'text').map(b => b.text).join('\n')
       const parallel = childText.match(/BG_CHILD_([A-D])/)
-      if (tools.some(t => t.startsWith('mcp__') || t === 'background_research'
-        || t === 'write' || t === 'edit')) throw new Error('unexpected child authority')
+      if (tools.some(t => t.startsWith('mcp__') || t === 'background_research')) {
+        throw new Error('unexpected child authority')
+      }
+      if (profile !== 'owner-host' && tools.some(t => t === 'write' || t === 'edit')) {
+        throw new Error('unexpected child write authority')
+      }
+      if (profile === 'owner-host'
+        && !['bash', 'read', 'read_image', 'write', 'edit', 'glob', 'grep', 'web_search', 'web_fetch', 'skill']
+          .every(name => tools.includes(name))) throw new Error('Owner-host self-check tools are unavailable')
+      if (profile === 'group-sandbox' && !tools.includes('group_app')) {
+        throw new Error('group application tool is unavailable to the sandbox child')
+      }
       const fileTool = tools.includes('read') || tools.includes('bash')
       if (stage === 0 && fileTool) {
-        yield* call(tools.includes('read') ? 'read' : 'bash', tools.includes('read')
-          ? { file_path: process.env.V2_BG_PROBE_FILE }
+        yield* call(profile === 'owner-host' || !tools.includes('read') ? 'bash' : 'read',
+          profile === 'owner-host'
+            ? { command: 'printf OWNER_HOST_SELF_CHECK_OK', description: 'Check the owner host runtime' }
+            : tools.includes('read') ? { file_path: process.env.V2_BG_PROBE_FILE }
           : { command: "printf GROUP_READ_OK; if [ -e /home/abasun/chatbot-V2/PLAN.md ]; then exit 9; fi",
               description: 'Read the isolated group workspace' },
         'file-' + options.sessionId)
@@ -73,6 +87,10 @@ class Adapter extends LlmAdapter {
         if (stage === 1) {
           const result = options.messages.at(-1)
           if (result?.isError) throw new Error('delegated file access failed: ' + JSON.stringify(result))
+          if (profile === 'owner-host'
+            && !JSON.stringify(result).includes('OWNER_HOST_SELF_CHECK_OK')) {
+            throw new Error('Owner-host child bash self-check did not complete')
+          }
           log({kind:'file-verified', tools})
         }
         yield* call('web_fetch', { url: 'https://background.fixture/research' }, 'fetch-' + options.sessionId)

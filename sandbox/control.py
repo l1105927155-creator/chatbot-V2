@@ -115,7 +115,7 @@ class SandboxControl:
         if data.get("kind") not in {"reply", "tool"}:
             raise ValueError("script kind must be reply or tool")
         if data["kind"] == "tool" and data.get("name") not in {
-            "bash", "skill", "web_search", "web_fetch",
+            "bash", "group_app", "skill", "web_search", "web_fetch",
             "mcp__astrbot__history_recent", "mcp__astrbot__history_before",
             "mcp__astrbot__history_search", "mcp__astrbot__history_read_image",
             "mcp__astrbot__qq_send_origin", "mcp__astrbot__qq_prepare_reply",

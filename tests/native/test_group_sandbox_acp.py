@@ -175,6 +175,57 @@ try:
   denied_write = run("member write denied", "cat marker.txt >/dev/null && printf altered > revoked-write.txt")
   assert "read-only file system" in denied_write.lower(), denied_write
   assert not (workspace / "revoked-write.txt").exists()
+  # An app's declared business operation can maintain only its own data,
+  # even when an ordinary member cannot edit the shared workspace.
+  app = workspace / "apps" / "native_app"
+  (app / "data").mkdir(parents=True)
+  (workspace / "apps/other_app/data").mkdir(parents=True)
+  (app / "app.json").write_text(json.dumps({"version":1,"entrypoint":"app.py",
+      "operations":["record","probe","slow"]}))
+  (app / "AGENTS.md").write_text("APP_RULES_SENTINEL")
+  (app / "app.py").write_text(
+      "import json,sys\nfrom pathlib import Path\n"
+      "if sys.argv[1]=='record':\n"
+      " (Path(__file__).parent/'data'/'saved.txt').write_text(sys.argv[2])\n"
+      " print('APP_DATA_WRITE_OK')\n"
+      "elif sys.argv[1]=='probe':\n"
+      " denied=[]\n"
+      " for p in ['/workspace/AGENTS.md','/workspace/apps/native_app/AGENTS.md',"
+      "'/workspace/apps/other_app/data/forbidden.txt']:\n"
+      "  try: Path(p).write_text('UNAUTHORIZED')\n"
+      "  except OSError: denied.append(p)\n"
+      " print(json.dumps({'denied':len(denied)}))\n")
+  with (app / "app.py").open("a") as stream:
+    stream.write("elif sys.argv[1]=='slow':\n import time\n time.sleep(3)\n"
+                 " (Path(__file__).parent/'data'/'late.txt').write_text('unexpected')\n")
+  injection = "literal; touch /workspace/injection-should-not-exist"
+  app_result = run("ordinary member app data write", tool_name="group_app",
+      arguments={"app":"native_app","operation":"record","args":[injection]})
+  assert "APP_DATA_WRITE_OK" in app_result, app_result
+  assert (app / "data/saved.txt").read_text() == injection
+  assert not (workspace / "injection-should-not-exist").exists()
+  # All base64url padding lengths must survive the complete native channel.
+  for text in ["a", "aa", "aaa"]:
+    result = run("app payload length " + text, tool_name="group_app",
+        arguments={"app":"native_app","operation":"record","args":[text]})
+    assert "APP_DATA_WRITE_OK" in result, result
+    assert (app / "data/saved.txt").read_text() == text
+  rejected = run("undeclared app operation", tool_name="group_app",
+      arguments={"app":"native_app","operation":"reset","args":[]})
+  assert "group app request rejected" in rejected.lower(), rejected
+  timed = run("single app operation timeout", tool_name="group_app",
+      arguments={"app":"native_app","operation":"slow","args":[],"timeoutMs":500})
+  assert any(word in timed.lower() for word in ["timedout=500ms", "timed out", "timeout", "aborted"]), timed
+  assert not (app / "data/late.txt").exists()
+  # A denied business operation is a tool error, not a broken sandbox/session.
+  app_probe = run("app cannot alter code or other data", tool_name="group_app",
+      arguments={"app":"native_app","operation":"probe","args":[]})
+  assert '"denied": 3' in app_probe, app_probe
+  assert (app / "AGENTS.md").read_text() == "APP_RULES_SENTINEL"
+  assert not (workspace / "apps/other_app/data/forbidden.txt").exists()
+  continued = run("continue after app operation refusal", tool_name="mcp__astrbot__current_group_info",
+      arguments={})
+  assert "isolated test group" in continued, continued
   # A trusted deployed Bot Owner can write even when absent from group editors.
   owner_write = run("trusted owner write", "printf owner > owner-write.txt; printf OWNER_WRITE_OK",
                     requester_id="90000")
@@ -186,7 +237,7 @@ try:
   # including SDK resource tools (visible but denied) and deployed scoped MCP capabilities.
   initial = json.loads(log.read_text().splitlines()[0])
   inventory = set(initial["tools"])
-  expected = {"bash", "skill", "web_search", "web_fetch", "host_probe",
+  expected = {"bash", "group_app", "skill", "web_search", "web_fetch", "host_probe",
               "list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource",
               "mcp__astrbot__history_recent", "mcp__astrbot__history_before",
               "mcp__astrbot__history_search", "mcp__astrbot__history_read_image", "mcp__astrbot__current_group_info",

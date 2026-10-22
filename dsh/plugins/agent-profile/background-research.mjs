@@ -1,4 +1,4 @@
-/** Host-controlled foreground tool for bounded one-shot background research. */
+/** Host-controlled foreground tool for delegated background work. */
 import { createUserMessage } from '../../node_modules/@deepseek-ai/dsh-llm/lib/index.js'
 import { privateSourceRoot, readTurnSource, validateClaimedPrompt,
   validateOwnerSource, parseConfiguredOwners, sameTurnSource } from './trusted-turn-guard.mjs'
@@ -8,7 +8,6 @@ import { bindParentTurn, endParentTurn, currentParentTurn, bindResearchChild,
 export const name = 'v2-background-research'
 export const inject = ['tools', 'jobs', 'subagents']
 
-export const MAX_TASK_MS = 10 * 60 * 1000
 export const MAX_PER_PARENT = 3
 export const MAX_RUNTIME = 3
 const MAX_PROMPT_CHARS = 12000
@@ -69,9 +68,11 @@ function requester(source, expectedProfile) {
 }
 
 function allowedTools(profile) {
-  if (profile === 'owner-host') return ['read', 'read_image', 'glob', 'grep', 'web_search', 'web_fetch', 'skill']
+  if (profile === 'owner-host') return [
+    'bash', 'read', 'read_image', 'write', 'edit', 'glob', 'grep', 'web_search', 'web_fetch', 'skill',
+  ]
   if (profile === 'owner-sandbox') return ['bash', 'web_search', 'web_fetch', 'skill']
-  if (profile === 'group-sandbox') return ['bash', 'web_search', 'web_fetch', 'skill']
+  if (profile === 'group-sandbox') return ['bash', 'group_app', 'web_search', 'web_fetch', 'skill']
   return ['web_search', 'web_fetch', 'skill']
 }
 
@@ -241,7 +242,7 @@ export function apply(ctx, config = {}) {
   } }
   ctx.tools.register({
     name: 'background_research',
-    description: '启动可持续运行的后台文件或网页研究，查询进度、补充研究要求，或取消任务。start 必须使用自足研究目标；返回后可继续正常交流。任务只做研究，不代替当前对话发言。',
+    description: '启动后台研究、自检或请求者已授权的维护任务，也可查询进度、补充要求或取消。start 必须写明自足的任务范围与授权边界。子 Agent 继承原请求者权限，不提权、不直接发送 QQ 消息或代替前台发言；返回后前台可继续交流。',
     parameters,
     output,
     execute: async (args, exec) => {
@@ -276,16 +277,13 @@ export function apply(ctx, config = {}) {
           run(job) {
             record.jobHandle = job
             const done = (async () => {
-              let timer
               let run
               try {
                 await startGate.promise
                 if (controller.signal.aborted) return {status:'killed', detail:'cancelled before launch'}
-                timer = setTimeout(() => controller.abort(new Error('background research time limit reached')), MAX_TASK_MS)
-                timer.unref?.()
                 const childPrompt = [
-                  '请独立完成以下研究任务。只收集和核验信息，整理有依据的结论；不要发送 QQ 消息、调用 QQ 工具、启动子任务或联系用户。',
-                  '原始研究目标：', args.prompt.trim(),
+                  '请独立完成以下研究、自检或请求者授权的维护任务。只使用当前执行域已经开放的工具，不扩大请求者权限；可将耗时步骤留在后台运行并更新真实进度。不要发送 QQ 消息、调用 QQ 工具、启动子任务或联系用户。',
+                  '原始任务：', args.prompt.trim(),
                 ].join('\n\n')
                 await withParentStartLock(owner, async () => {
                   if (controller.signal.aborted) throw new Error('cancelled before child launch')
@@ -336,7 +334,6 @@ export function apply(ctx, config = {}) {
                 return {status: status === 'cancelled' ? 'killed' : 'failed',
                   detail: controller.signal.aborted ? 'cancelled' : 'research failed'}
               } finally {
-                if (timer) clearTimeout(timer)
                 if (run) {
                   if (record.child) revokeResearchChild(record.child, taskId)
                   try { await run.dispose() } catch (error) { ctx.logger?.warn?.('background child disposal failed: ' + String(error)) }

@@ -18,7 +18,7 @@ from pathlib import Path
 
 CURRENT_TRACE = contextvars.ContextVar("v2_audit_trace", default=None)
 CURRENT_SEND = contextvars.ContextVar("v2_audit_send", default=None)
-TOOLS = frozenset({"bash", "skill", "web_search", "web_fetch", *(
+TOOLS = frozenset({"bash", "group_app", "skill", "web_search", "web_fetch", *(
     "mcp__astrbot__" + name for name in
     ("history_recent", "history_before", "history_search", "current_group_info", "current_group_members", "qq_prepare_reply", "qq_send_origin", "qq_file_receive", "qq_file_send", 'meme_categories', 'meme_list', 'meme_send', 'plugin_status', 'bili_dynamics', 'bili_subscribe', 'bili_subscriptions', 'bili_unsubscribe', 'twitter_subscribe', 'twitter_subscriptions', 'twitter_unsubscribe'))})
 EVENTS = frozenset({"turn/queued", "turn/start", "turn/completed", "turn/failed", "turn/duplicate",

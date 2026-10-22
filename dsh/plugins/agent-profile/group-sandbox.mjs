@@ -16,6 +16,7 @@ const safeMcp = new Set(['mcp__astrbot__history_recent', 'mcp__astrbot__history_
   'mcp__astrbot__history_search', 'mcp__astrbot__history_read_image', 'mcp__astrbot__current_group_info', 'mcp__astrbot__current_group_members', 'mcp__astrbot__qq_prepare_reply', 'mcp__astrbot__qq_send_origin',
   'mcp__astrbot__qq_file_receive', 'mcp__astrbot__qq_file_send', 'mcp__astrbot__meme_categories', 'mcp__astrbot__meme_list', 'mcp__astrbot__meme_send', 'mcp__astrbot__plugin_status', 'mcp__astrbot__bili_dynamics', 'mcp__astrbot__bili_subscribe', 'mcp__astrbot__bili_subscriptions', 'mcp__astrbot__bili_unsubscribe', 'mcp__astrbot__twitter_subscribe', 'mcp__astrbot__twitter_subscriptions', 'mcp__astrbot__twitter_unsubscribe'])
 const allowedTools = new Set(['bash', 'skill', 'web_search', 'web_fetch', 'background_research', ...safeMcp])
+allowedTools.add('group_app')
 const text = value => typeof value === 'string' && value.length > 0
   && value.trim() === value && !/[\x00-\x1f\x7f]/.test(value)
 const within = (base, path) => path === base || path.startsWith(base + sep)
@@ -118,7 +119,7 @@ export class GroupSandbox extends SandboxProvider {
       this.captured.delete(exec.token)
       if (!capture) throw new Error('missing group execution source')
       const invoke = () => this.local.run({...capture, execution: exec}, next)
-      return exec.name === 'bash' ? this.gate.run(exec.signal, invoke) : invoke()
+      return exec.name === 'bash' || exec.name === 'group_app' ? this.gate.run(exec.signal, invoke) : invoke()
     })
     ctx.on('tools/result', exec => this.captured.delete(exec.token))
   }
@@ -164,8 +165,9 @@ export class GroupSandbox extends SandboxProvider {
   async confine(argv, policy, signal) {
     if (signal?.aborted) signal.throwIfAborted()
     const active = this.local.getStore()
-    if (!active || active.execution.signal.aborted || active.execution.name !== 'bash') {
-      throw new Error('no authorized group bash execution')
+    if (!active || active.execution.signal.aborted
+        || !['bash', 'group_app'].includes(active.execution.name)) {
+      throw new Error('no authorized group execution')
     }
     const binding = this.binding(active.agent)
     if (binding.turn !== active.turn || binding.source.nonce !== active.nonce) {
@@ -177,6 +179,17 @@ export class GroupSandbox extends SandboxProvider {
     }
     if (!Array.isArray(argv) || argv.length !== 3 || argv[0] !== 'bash' || argv[1] !== '-c'
         || typeof argv[2] !== 'string') throw new Error('unexpected shell argv')
+    if (active.execution.name === 'group_app') {
+      let payload
+      try { payload = JSON.parse(argv[2]) } catch { throw new Error('invalid group app request') }
+      if (JSON.stringify(payload) !== argv[2]) throw new Error('non-canonical group app request')
+      const encoded = Buffer.from(argv[2], 'utf8').toString('base64url')
+      if (encoded.length > 12288) throw new Error('group app request exceeds its size limit')
+      return {argv: ['/usr/bin/python3', '-I', '-S', this.scopeRunner, '--workspace', this.workspace,
+          '--app-payload', encoded], enforcement: 'full',
+        denialSignatures: ['permission denied', 'read-only file system', 'no such file or directory'],
+        runnerFailureRules: [{fatalSignatures: ['bwrap: ', 'V2 group containment unavailable']}]}
+    }
     const workdirArg = active.execution.arguments?.workdir
     const physical = workdirArg === undefined ? this.workspace : resolve(this.workspace, workdirArg)
     if (!within(this.workspace, physical)) throw new Error('workdir outside group workspace')

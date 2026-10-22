@@ -153,9 +153,10 @@ class AcpRuntime:
             dsh_bin=str(dsh_bin), dsh_home=str(dsh_home), cwd=launch_cwd,
             profile="sdk-minimal", patches=(str(patch),),
             env=env,
-            # Owner commands can run up to 600 s in the pinned native Bash.
-            # None lets ACP use its native per-request timeout semantics.
-            request_timeout_seconds=None if execution_profile == "owner-host" else 180,
+            # Bound individual DSH tools and host operations at their native
+            # layer. A whole ACP turn may legitimately contain many steps and
+            # must remain cancellable/drainable without a fixed wall-clock cap.
+            request_timeout_seconds=None,
         ))
         self._model_notifications = (self.client.subscribe_notifications(
             lambda n: n.method == 'session/update' and

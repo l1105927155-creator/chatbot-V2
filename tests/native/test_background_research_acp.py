@@ -36,6 +36,7 @@ def test_native_background_foreground_update_completion_and_stop(tmp_path, monke
     parallel_releases = {tag: tmp_path/f'release-{tag}' for tag in 'ABCD'}
     monkeypatch.setenv('V2_BG_PROBE_LOG', str(log))
     monkeypatch.setenv('V2_BG_PROBE_RELEASE', str(release))
+    monkeypatch.setenv('V2_EXECUTION_PROFILE', profile)
     for tag, path in parallel_releases.items():
         monkeypatch.setenv(f'V2_BG_PROBE_RELEASE_{tag}', str(path))
     (workspace/'research.txt').write_text('LOCAL_RESEARCH_FIXTURE')
@@ -119,6 +120,11 @@ def test_native_background_foreground_update_completion_and_stop(tmp_path, monke
             started = await asyncio.wait_for(turn('BG_START'),20)
             assert 'running' in started, started
             await wait_for(lambda: log.exists() and 'fetch-start' in log.read_text())
+            if profile == 'owner-host':
+                rows = probe_rows()
+                child_tools = next(row['tools'] for row in rows if row.get('kind') == 'child-tools')
+                assert {'bash', 'write', 'edit', 'read', 'read_image', 'glob', 'grep'} <= set(child_tools)
+                assert any(row.get('kind') == 'file-verified' for row in rows), rows
             assert await asyncio.wait_for(turn('ordinary conversation'),5) == 'FOREGROUND_RESPONSIVE'
             assert 'running' in await asyncio.wait_for(turn('BG_STATUS'),5)
             updated = await asyncio.wait_for(turn('BG_UPDATE'),5)

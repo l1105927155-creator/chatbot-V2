@@ -7,6 +7,7 @@ import posixpath
 import re
 import signal
 import ctypes
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -14,6 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from group_volume import verified_group_workspace
 from workspace_lock import workspace_lock
+from group_app_runner import GroupAppRejected, bwrap_app_argv
 
 WORKSPACE_CHECK = """
 import os, sys
@@ -95,6 +97,21 @@ class _ScopeSignal(Exception):
         self.number = number
 
 
+def _decode_app_payload(encoded: str) -> dict:
+    """Decode canonical unpadded base64url JSON for the restricted app path."""
+    import base64
+    if not encoded or any(char not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+                          for char in encoded):
+        raise ValueError("invalid group app payload encoding")
+    raw = base64.b64decode(encoded + "=" * (-len(encoded) % 4), altchars=b"-_", validate=True)
+    if base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=") != encoded:
+        raise ValueError("non-canonical app payload")
+    value = json.loads(raw.decode("utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError("app payload must be an object")
+    return value
+
+
 def arm_parent_death() -> None:
     """The lock holder must die with DSH, as direct bwrap did before wrapping."""
     parent = os.getppid()
@@ -149,8 +166,57 @@ def run_locked(argv: list[str], fd: int, workspace: Path, workspace_mode: str) -
                 signal.signal(number, handler)
 
 
+def run_app_locked(workspace: Path, payload: dict) -> int:
+    """Revalidate app code/data while holding the workspace's exclusive lock."""
+    with workspace_lock(Path(workspace).parent / ".workspace-file.lock"):
+        argv, fds = bwrap_app_argv(workspace, payload)
+        workspace_fd, data_fd = fds
+        process = None
+        previous = {}
+
+        def stop(number, _frame):
+            raise _ScopeSignal(number)
+
+        for number in (signal.SIGTERM, signal.SIGINT):
+            previous[number] = signal.signal(number, stop)
+        try:
+            os.set_inheritable(workspace_fd, True)
+            os.set_inheritable(data_fd, True)
+            process = subprocess.Popen(argv, pass_fds=fds)
+            return process.wait()
+        except _ScopeSignal as stopped:
+            if process is not None and process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+            return 128 + stopped.number
+        finally:
+            if process is not None and process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+            os.close(data_fd)
+            os.close(workspace_fd)
+            for number, handler in previous.items():
+                signal.signal(number, handler)
+
+
 def main() -> int:
     arm_parent_death()
+    if (len(sys.argv) == 5 and sys.argv[1] == "--workspace"
+            and sys.argv[3] == "--app-payload"):
+        try:
+            payload = _decode_app_payload(sys.argv[4])
+        except Exception as exc:
+            raise RuntimeError("invalid group app payload") from exc
+        apply_limits()
+        return run_app_locked(Path(sys.argv[2]), payload)
     if (len(sys.argv) != 9 or sys.argv[1] != "--workspace" or sys.argv[3] != "--workdir"
             or sys.argv[5] != "--workspace-mode" or sys.argv[7] != "--"):
         raise RuntimeError("unexpected group confinement runner")
@@ -171,6 +237,9 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
+    except GroupAppRejected as exc:
+        print("group app request rejected: " + str(exc), file=sys.stderr)
+        raise SystemExit(2)
     except Exception:
         print("V2 group containment unavailable", file=sys.stderr)
         raise SystemExit(125)
