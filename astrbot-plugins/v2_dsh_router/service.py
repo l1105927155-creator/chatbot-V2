@@ -1318,8 +1318,9 @@ class ChatService:
             key = self.console_store.session_key(dict(zip(
                 ("platform_id", "bot_id", "conversation_key"), identity)))
             resume_through = self.console_store.read()["sessions"][key].get("resume_through_journal_id", 0)
-        # TODO(待确认): validate resume-specific message/token budgets by replay;
-        # existing MAX_DELTA_ROWS/MAX_DELTA_BYTES remain the current bounds.
+        # Program-managed recovery uses the existing row/UTF-8 byte bounds.
+        # These bound the new Journal input, not the retained native context;
+        # byte size must not be described as an exact model token count.
         prompt = self._prompt(conversation, rows, wake.journal_id, state.last_seen_journal_id,
                               history_floor=history_floor, resume_through_journal_id=resume_through)
         image_blocks = []

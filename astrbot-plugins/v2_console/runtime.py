@@ -37,10 +37,9 @@ class RuntimeAdapter:
         return router
 
     def todos(self) -> list[str]:
-        return [
-            "TODO(待确认)：既有会话的工作区编辑者名单无法从 Owner.json 安全迁移，已导入会话的 editors 保持空列表。",
-            "TODO(待确认)：启用后的近期背景消息数与 token 预算需通过隔离回放校准；压缩、保留近期原文与按需检索结合使用，压缩造成的信息损失需验证。",
-        ]
+        # Recovery-window calibration is program-managed engineering work,
+        # not an unresolved administrator setting or a recurring UI warning.
+        return []
 
     async def health(self):
         status = await self._router().health()
@@ -95,7 +94,8 @@ class RuntimeAdapter:
                         or any(not isinstance(part, str) or not part for part in route)):
                     raise RuntimeError("既有会话没有可确认的模型设置，未导入控制台。")
                 enabled = identity not in getattr(service, "_disabled_identities", set())
-                # TODO(待确认): existing Owner.json entries are not trusted editor permissions.
+                # Existing Owner.json entries do not grant editor permissions;
+                # the Owner maintains each group list explicitly in the console.
                 store.import_session(
                     *identity,
                     {"model": {"provider": route[0], "model": route[1]},
