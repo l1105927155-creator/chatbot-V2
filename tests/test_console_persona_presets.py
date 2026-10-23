@@ -90,3 +90,75 @@ def test_unregistered_conflicting_preset_files_are_not_overwritten(tmp_path):
         install(store, tpl, REPO)
     assert (folder / "persona.md").read_text() == "私人内容"
     assert store.read()["templates"] == []
+
+
+def _legacy_seed(store, tpl: Path, monkeypatch):
+    """Simulate the v1 console catalog and private installation marker."""
+    tpl.mkdir(mode=0o700)
+    old_entries = (
+        [{"id": key, "name": entry[0]} for key, entry in installer._LEGACY_V1.items()]
+        + [{"id": key, "name": entry[0]} for key, entry in installer._LEGACY_RENAMES.items()]
+    )
+    store.seed_templates(old_entries)
+    for item in old_entries:
+        folder = tpl / item["id"]
+        folder.mkdir(mode=0o700)
+        (folder / "AGENTS.md").write_bytes(b"legacy guide")
+        (folder / "persona.md").write_bytes(b"stock persona")
+    marker = store.root / installer._LEGACY_MARKER
+    marker.write_bytes(b"installed-v1\n")
+    marker.chmod(0o600)
+
+    stock_hash = installer._git_blob(b"stock persona")
+    monkeypatch.setattr(installer, "_LEGACY_GUIDE_BLOB", installer._git_blob(b"legacy guide"))
+    monkeypatch.setattr(installer, "_LEGACY_V1", {
+        key: (entry[0], stock_hash) for key, entry in installer._LEGACY_V1.items()
+    })
+    monkeypatch.setattr(installer, "_LEGACY_RENAMES", {
+        key: (entry[0], entry[1], stock_hash)
+        for key, entry in installer._LEGACY_RENAMES.items()
+    })
+
+
+def test_upgrade_v1_retires_only_untouched_unused_templates(tmp_path, monkeypatch):
+    store = ConsoleStore(tmp_path / "private/state.json")
+    tpl = tmp_path / "templates"
+    _legacy_seed(store, tpl, monkeypatch)
+    legacy = installer._LEGACY_V1
+    stock, referenced, edited, renamed = list(legacy)
+    (tpl / edited / "persona.md").write_text("customized")
+    store.rename_template(renamed, "我的自定义名称",
+                          expected_revision=store.read()["revision"])
+
+    state = store.update_defaults(
+        {"model": {"provider": "p", "model": "m"}, "enabled": True, "editors": []},
+        expected_revision=store.read()["revision"])
+    store.create_session("qq", "bot", "group:15",
+                         expected_revision=state["revision"], template_id=referenced)
+    assert install(store, tpl, REPO) == 4
+    names = {row["id"]: row["name"] for row in store.read()["templates"]}
+    assert stock not in names
+    assert (tpl / stock / "persona.md").read_bytes() == b"stock persona"
+    assert names[referenced] == legacy[referenced][0]
+    assert names[edited] == legacy[edited][0]
+    assert names[renamed] == "我的自定义名称"
+    for template_id, (_old, new, _hash) in installer._LEGACY_RENAMES.items():
+        assert names[template_id] == new
+        assert (tpl / template_id / "persona.md").read_bytes() == b"stock persona"
+    assert len(names) == 9
+    before = store.read()
+    assert install(ConsoleStore(store.path), tpl, REPO) == 0
+    assert store.read() == before
+
+
+def test_upgrade_keeps_old_template_with_custom_guide_or_extra_files(tmp_path, monkeypatch):
+    store = ConsoleStore(tmp_path / "private/state.json")
+    tpl = tmp_path / "templates"
+    _legacy_seed(store, tpl, monkeypatch)
+    keys = list(installer._LEGACY_V1)
+    (tpl / keys[0] / "AGENTS.md").write_text("custom guide")
+    (tpl / keys[1] / "my-notes.txt").write_text("extra content")
+    install(store, tpl, REPO)
+    retained = {row["id"] for row in store.read()["templates"]}
+    assert keys[0] in retained
+    assert keys[1] in retained

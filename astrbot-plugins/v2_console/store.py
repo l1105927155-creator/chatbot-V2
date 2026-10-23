@@ -178,12 +178,34 @@ class ConsoleStore:
             return {"state": state, "template": dict(template)}
 
 
-    def seed_templates(self, presets: list[dict[str, str]]) -> dict[str, Any]:
-        """Register trusted bundled template IDs, without editing existing metadata."""
+    def seed_templates(
+        self, presets: list[dict[str, str]], *,
+        retire: list[dict[str, str]] | None = None,
+        rename: list[dict[str, str]] | None = None,
+        expected_revision: int | None = None,
+    ) -> dict[str, Any]:
+        """Reconcile one trusted bundled generation; preserve customized or used templates."""
         with self._locked():
             state = self._read_locked()
+            if expected_revision is not None:
+                self._expect(state, expected_revision)
             known = {item["id"] for item in state["templates"]}
             changed = False
+            referenced = {row.get("template_id") for row in state["sessions"].values()}
+            retiring = {(item["id"], item["name"]) for item in (retire or [])}
+            kept = [item for item in state["templates"]
+                    if (item["id"], item["name"]) not in retiring or item["id"] in referenced]
+            if len(kept) != len(state["templates"]):
+                state["templates"] = kept
+                known = {item["id"] for item in kept}
+                changed = True
+            names = {(item["id"], item["old_name"]): self._validate_template_name(item["new_name"])
+                     for item in (rename or [])}
+            for item in state["templates"]:
+                replacement = names.get((item["id"], item["name"]))
+                if replacement is not None and replacement != item["name"]:
+                    item["name"] = replacement
+                    changed = True
             for preset in presets:
                 template_id = preset["id"]
                 if (not isinstance(template_id, str)
