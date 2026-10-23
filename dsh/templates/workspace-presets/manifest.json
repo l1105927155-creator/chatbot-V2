@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "presets": [
+    {
+      "id": "5b387989-9f5e-4373-b39a-03e2eac99b1f",
+      "slug": "tsundere",
+      "name": "嘴硬心软 · 傲娇系"
+    },
+    {
+      "id": "877a623b-6139-4367-b4c6-c58ad3ebd613",
+      "slug": "deadpan",
+      "name": "冷面吐槽 · 观察系"
+    },
+    {
+      "id": "6e2ac9e8-a8ec-430a-9b75-7d9d9120c253",
+      "slug": "moodmaker",
+      "name": "元气乐子人 · 气氛系"
+    },
+    {
+      "id": "0fdd9f91-e10a-4466-bdbd-3b178e19f08d",
+      "slug": "dreamer",
+      "name": "电波脑洞 · 幻想系"
+    },
+    {
+      "id": "65eeb7fd-2eb7-4546-b6cc-0152ac38eb25",
+      "slug": "gentle-sly",
+      "name": "温柔腹黑 · 细腻系"
+    },
+    {
+      "id": "a47f91de-aa16-43b6-9b82-bac59c55d0ee",
+      "slug": "otaku-critic",
+      "name": "宅系考据党 · 同好系"
+    }
+  ]
+}

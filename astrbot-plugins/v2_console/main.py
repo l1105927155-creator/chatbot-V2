@@ -10,6 +10,7 @@ from starlette.background import BackgroundTask
 from .controller import ConsoleController
 from .runtime_control import authorize_dashboard
 from .store import ConsoleStore
+from .preset_templates import install_workspace_persona_presets
 
 
 @star.register("v2_console", "chatbot-V2", "V2 会话设置与工作区控制台", "0.1.0")
@@ -21,7 +22,9 @@ class V2Console(star.Star):
         repo = Path(os.environ.get("V2_CONSOLE_REPO_ROOT", Path(__file__).resolve().parents[2])).resolve(strict=True)
         if not (repo / "upstream.lock.json").is_file():
             raise RuntimeError("V2_CONSOLE_REPO_ROOT must identify the trusted V2 deployment")
-        self.controller = ConsoleController(ConsoleStore(root / "state.json"), root / "templates",
+        store = ConsoleStore(root / "state.json")
+        install_workspace_persona_presets(store, root / "templates", repo)
+        self.controller = ConsoleController(store, root / "templates",
                                             RuntimeAdapter(self.context, repo))
         self.context.register_web_api("/v2_console/dispatch", self.dispatch, ["POST"], "V2 Owner 控制台")
         self.context.register_web_api("/v2_console/export", self.export, ["GET"], "导出会话工作区 ZIP")

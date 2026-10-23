@@ -177,6 +177,25 @@ class ConsoleStore:
             state = self._commit(state)
             return {"state": state, "template": dict(template)}
 
+
+    def seed_templates(self, presets: list[dict[str, str]]) -> dict[str, Any]:
+        """Register trusted bundled template IDs, without editing existing metadata."""
+        with self._locked():
+            state = self._read_locked()
+            known = {item["id"] for item in state["templates"]}
+            changed = False
+            for preset in presets:
+                template_id = preset["id"]
+                if (not isinstance(template_id, str)
+                        or str(uuid.UUID(template_id)) != template_id):
+                    raise ValueError("preset template id must be a canonical UUID")
+                name = self._validate_template_name(preset["name"])
+                if template_id not in known:
+                    state["templates"].append({"id": template_id, "name": name})
+                    known.add(template_id)
+                    changed = True
+            return self._commit(state) if changed else state
+
     def rename_template(self, template_id: str, name: str, *, expected_revision: int) -> dict[str, Any]:
         name = self._validate_template_name(name)
         with self._locked():
