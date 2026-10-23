@@ -28,8 +28,9 @@ def test_presets_initialize_each_complete_workspace_and_keep_existing_template(t
     store = ConsoleStore(tmp_path / "private/state.json")
     default = store.create_template("我原来的默认模板", expected_revision=0)["template"]
     tpl = tmp_path / "templates"
+    tpl.mkdir(mode=0o700)
     original = tpl / default["id"]
-    original.mkdir(parents=True, mode=0o700)
+    original.mkdir(mode=0o700)
     (original / "persona.md").write_text("我的原始人格")
 
     before = store.read()["revision"]
@@ -81,8 +82,9 @@ def test_unregistered_conflicting_preset_files_are_not_overwritten(tmp_path):
     store = ConsoleStore(tmp_path / "private/state.json")
     tpl = tmp_path / "templates"
     first_id = "5b387989-9f5e-4373-b39a-03e2eac99b1f"
+    tpl.mkdir(mode=0o700)
     folder = tpl / first_id
-    folder.mkdir(parents=True, mode=0o700)
+    folder.mkdir(mode=0o700)
     (folder / "persona.md").write_text("私人内容", encoding="utf-8")
     with pytest.raises(FileExistsError, match="conflicts"):
         install(store, tpl, REPO)

@@ -109,3 +109,22 @@ def test_template_root_must_be_private_and_owned(tmp_path):
     root.chmod(0o755)
     with pytest.raises(PermissionError):
         TemplateService(root)
+
+
+def test_pristine_framework_guides_can_be_replaced_but_edits_still_conflict(template_service, tmp_path):
+    _, service = template_service
+    template_id = "d1a5cfc0-33e1-4812-9136-34e5cf9c8b90"
+    with _template(service, template_id) as source:
+        source.write("persona.md", b"selected persona", None)
+    target = tmp_path / "workspace"
+    target.mkdir()
+    (target / "persona.md").write_bytes(b"stock persona")
+    result = service.copy_to(template_id, target,
+                             replace_pristine_guides={"persona.md": b"stock persona"})
+    assert result["copied_files"] == 1
+    assert (target / "persona.md").read_bytes() == b"selected persona"
+    (target / "persona.md").write_bytes(b"custom edited persona")
+    with pytest.raises(FileExistsError, match="content differs"):
+        service.copy_to(template_id, target,
+                        replace_pristine_guides={"persona.md": b"stock persona"})
+    assert (target / "persona.md").read_bytes() == b"custom edited persona"

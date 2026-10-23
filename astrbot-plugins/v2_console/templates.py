@@ -50,12 +50,15 @@ class TemplateService:
         template_id = _template_id(template_id)
         return WorkspaceFiles(self.root / template_id)
 
-    def copy_to(self, template_id: str, workspace_root: str | os.PathLike[str]) -> dict[str, Any]:
+    def copy_to(self, template_id: str, workspace_root: str | os.PathLike[str], *,
+                replace_pristine_guides: dict[str, bytes] | None = None) -> dict[str, Any]:
         """Initialize a workspace without replacing any existing file.
 
         Existing directories are reused. Existing regular files are skipped
         only when their bytes match the template; a differing object is a
         conflict. This makes a partially completed initialization retryable.
+        A newly provisioned group may already contain framework-seeded guides;
+        these may be replaced only if bytes still match the trusted stock guides.
         """
         template_id = _template_id(template_id)
         copied = 0
@@ -92,9 +95,15 @@ class TemplateService:
                         continue
                     if current.get("type") != "file":
                         raise FileExistsError(f"template destination conflicts: {relative}")
-                    target_data = target.download(relative)[0]
+                    target_data, metadata = target.download(relative)
                     if target_data != source_data:
-                        raise FileExistsError(f"template destination content differs: {relative}")
-                    skipped += 1
+                        if (replace_pristine_guides is None
+                                or relative not in replace_pristine_guides
+                                or target_data != replace_pristine_guides[relative]):
+                            raise FileExistsError(f"template destination content differs: {relative}")
+                        target.write(relative, source_data, metadata["version"])
+                        copied += 1
+                    else:
+                        skipped += 1
         return {"copied_files": copied, "skipped_files": skipped,
                 "created_directories": created_directories}

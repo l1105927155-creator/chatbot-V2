@@ -242,7 +242,14 @@ class RuntimeAdapter:
             _name, group_runtime = self._group_runtime(router, identity)
 
             from .templates import TemplateService
-            copied = TemplateService(templates_root).copy_to(template_id, group_runtime["workspace"])
+            # Group provisioning seeds the stock guides before template selection.
+            # Replace only unchanged stock files; never erase edited group content.
+            stock_root = self.repo / "dsh/templates/group"
+            stock_guides = {name: (stock_root / name).read_bytes()
+                            for name in ("AGENTS.md", "persona.md")
+                            if (stock_root / name).is_file()}
+            copied = TemplateService(templates_root).copy_to(
+                template_id, group_runtime["workspace"], replace_pristine_guides=stock_guides)
             completed.append("工作区模板已安全初始化")
 
             config = self.context.get_config()

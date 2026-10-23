@@ -435,3 +435,29 @@ def test_failed_restart_restores_only_sessions_disabled_by_quiesce(tmp_path):
     assert identity not in service._disabled_identities
     assert already_disabled in service._disabled_identities
     assert service.enabled_calls[-1] == ("qq", "bot", "private:42", True)
+
+
+def test_add_group_selected_persona_replaces_only_stock_group_guide(tmp_path):
+    adapter, _context, router, store, _config, templates, template_id, revision = prepare_group_add(tmp_path)
+    stock_root = adapter.repo / "dsh/templates/group"
+    stock_root.mkdir(parents=True)
+    (stock_root / "AGENTS.md").write_text("stock agents")
+    (stock_root / "persona.md").write_text("stock persona")
+    (templates / template_id / "persona.md").write_text("selected persona")
+
+    original_ensure = router._ensure_group_service
+
+    async def ensure_with_seed(platform, bot, group):
+        await original_ensure(platform, bot, group)
+        workspace = router._group_runtimes[f"group:{group}"]["workspace"]
+        (workspace / "AGENTS.md").write_text("stock agents")
+        (workspace / "persona.md").write_text("stock persona")
+
+    router._ensure_group_service = ensure_with_seed
+    result = asyncio.run(adapter.add_group({
+        "platform_id": "qq", "bot_id": "bot", "group_id": "123",
+        "template_id": template_id, "expected_revision": revision,
+    }, store, templates))
+    workspace = Path(result["workspace"])
+    assert (workspace / "persona.md").read_text() == "selected persona"
+    assert (workspace / "AGENTS.md").read_text() == "group guide"
