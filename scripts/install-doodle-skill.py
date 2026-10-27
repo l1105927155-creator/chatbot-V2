@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 import shutil
 import sys
@@ -22,8 +23,16 @@ def install(workspace: Path, bundle: Path) -> Path:
     if workspace.name != 'workspace' or workspace.parent.parent.name != 'group-storage':
         raise ValueError('not a V2 group-storage workspace')
     source = REPO / 'dsh/skills/doodle'
+    if not Path('/usr/bin/node').is_file():
+        raise RuntimeError('group sandbox needs Node at /usr/bin/node')
     if bundle.is_symlink() or not bundle.is_file() or bundle.stat().st_size < 10000:
         raise ValueError('expected a local non-symlink Rough.js 4.6.6 CJS bundle')
+    package_file = bundle.parent.parent / 'package.json'
+    if not package_file.is_file():
+        raise ValueError('Rough.js package.json is required to verify the pinned version')
+    package = json.loads(package_file.read_text(encoding='utf-8'))
+    if package.get('name') != 'roughjs' or package.get('version') != '4.6.6':
+        raise ValueError('Rough.js dependency must be version 4.6.6')
     root = workspace / 'skills'
     if root.is_symlink():
         raise ValueError('unsafe skills directory')
