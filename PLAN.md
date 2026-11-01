@@ -1,5 +1,7 @@
 # 当前实施入口（QQ 交流表达阶段）
 
+**当前核心目标：Bot 的聊天表达质量取得稳定、可验证的改善。** 仅有排查、实验完成或工具测试通过不算整改成功。第三阶段执行：[表达质量改善候选与双阶段验收](docs/phases/group-chat-expression-improvement-2026-11-01.md)，先分别验证结果表达选择与已发送／final 承接，再筛选值得实施的最小候选。无正向证据不部署；本会话助理验收代码，用户验收真实群聊效果。
+
 第二轮已执行：[群聊回复相关性：P0 完整任务对照、P1 无关话题归因、P2 发送职责验证](docs/phases/group-chat-reply-relevance-next-round-2026-11-01.md)。取证状态语义已修正，27 格真实模型对照及输入/回执/清理独立核验完成，见[第二轮实施记录](docs/evaluations/group-chat-reply-relevance-next-round-2026-11-01.md)。B 未取得可重复整体优势；本夹具未复现无关旧讨论触发巡查延伸，P2 明确未采用。不增设字数／消息数上限，候选未部署，整体表达整改未完成；远端代码审查与用户真实群验收分别保留。
 
 当前实施：[群聊回复相关性与双阶段验收](docs/phases/group-chat-reply-relevance-2026-11-01.md)。以最新文档为准重新取证，旧假设和实验仅保留为历史线索。本案四条出站已按原生 Session、audit 回执与 Journal 关联；现群指南最小候选、只读取证工具和隔离对照见[本轮实施记录](docs/evaluations/group-chat-reply-relevance-2026-11-01.md)。候选未部署，代码机制检查与用户真实群效果验收分别报告，尚未声称修复。
