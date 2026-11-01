@@ -24,6 +24,11 @@ class QQMessaging:
         self._history_through: int | None = None
         self._mention_user_ids: list[str] = []
         self._reply_to_journal_id: int | None = None
+        try:
+            from .forward_messages import QQForwards
+        except ImportError:  # direct-file contract tests
+            from forward_messages import QQForwards
+        self.forwards = QQForwards(self)
 
     @property
     def history_after(self) -> int:
@@ -86,6 +91,46 @@ class QQMessaging:
         if getattr(self.conversation, "key", None) != f"group:{group_id}":
             raise ValueError(_GROUP_UNAVAILABLE)
         return group_id
+
+    async def member_profiles(self, user_ids: set[str]) -> dict[str, dict]:
+        """Project current group metadata only for participants in this turn."""
+        group_id = self._current_group_id()
+        if group_id is None or not user_ids:
+            return {}
+        try:
+            members = await asyncio.wait_for(
+                self.event.bot.call_action("get_group_member_list", group_id=int(group_id),
+                                           self_id=int(self.conversation.bot_id)),
+                timeout=5,
+            )
+        except Exception:
+            return {}
+        if not isinstance(members, list):
+            return {}
+        profiles = {}
+        for member in members:
+            if not isinstance(member, dict):
+                continue
+            user_id = str(member.get("user_id", ""))
+            if user_id not in user_ids:
+                continue
+            profile = {}
+            role = member.get("role")
+            if isinstance(role, str):
+                group_role = {"owner": "群主", "admin": "管理员", "member": "普通成员"}.get(role)
+                if group_role:
+                    profile["group_role"] = group_role
+            level = member.get("level")
+            if isinstance(level, (str, int)) and not isinstance(level, bool):
+                value = str(level).strip()
+                if len(value) <= 3 and value.isascii() and value.isdigit() and 0 <= int(value) <= 100:
+                    profile["group_level"] = int(value)
+            title = member.get("title")
+            if isinstance(title, str) and title.strip():
+                profile["group_title"] = title.strip()[:128]
+            if profile:
+                profiles[user_id] = profile
+        return profiles
 
     async def _group(self, *, require_members: bool):
         group_id = self._current_group_id()

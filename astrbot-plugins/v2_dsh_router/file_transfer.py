@@ -340,6 +340,40 @@ class FileTransfer:
         return {'submitted': True, 'platform_confirmed': False, 'name': filename,
                 'size': state['size'], 'sha256': state['hash'].hexdigest()}
 
+    async def send_text(self, content: str, name: str | None = None):
+        """Send generated UTF-8 text through the same private snapshot path.
+
+        This creates a delivery artifact only; it never enters the conversation
+        workspace, so read-only group members can request an attachment without
+        gaining persistent workspace write access.
+        """
+        if not isinstance(content, str):
+            raise FileTransferError('text content is required')
+        filename = safe_name(name or 'output.md')
+        if not os.path.splitext(filename)[1]:
+            filename += '.md'
+        payload = content.encode('utf-8')
+        if len(payload) > self.max_bytes:
+            raise FileTransferError('file exceeds configured transfer size limit')
+        self.spool_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
+        meta = self.spool_dir.lstat()
+        if not stat.S_ISDIR(meta.st_mode) or meta.st_uid != os.getuid() or meta.st_mode & 0o077:
+            raise FileScopeError('outgoing file spool must be a private owned directory')
+        state = {'size': 0, 'hash': hashlib.sha256(), 'host_storage': True}
+        temporary = tempfile.TemporaryDirectory(prefix='send-', dir=self.spool_dir)
+        snapshot = Path(temporary.name) / filename
+        try:
+            async with self.storage_lock():
+                with snapshot.open('xb') as target:
+                    self._write(target.fileno(), payload, state)
+                    target.flush()
+                    os.fsync(target.fileno())
+            await self.send(snapshot, filename)
+        finally:
+            temporary.cleanup()
+        return {'submitted': True, 'platform_confirmed': False, 'name': filename,
+                'size': state['size'], 'sha256': state['hash'].hexdigest()}
+
 
 async def resolve_onebot_file(bot, conversation, segment):
     """Ask the existing AstrBot client for each exact attachment's resource."""

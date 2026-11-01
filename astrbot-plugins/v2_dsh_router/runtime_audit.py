@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import contextvars
+import asyncio
 import hashlib
 import json
 import logging
 import math
 import os
 import re
+import random
 import stat
 import threading
 import time
@@ -18,7 +20,9 @@ from pathlib import Path
 
 CURRENT_TRACE = contextvars.ContextVar("v2_audit_trace", default=None)
 CURRENT_SEND = contextvars.ContextVar("v2_audit_send", default=None)
-TOOLS = frozenset({"bash", "group_app", "skill", "web_search", "web_fetch", *(
+TOOLS = frozenset({"bash", "group_app", "skill", "web_search", "web_fetch",
+    "mcp__astrbot__memory_search", "mcp__astrbot__memory_sources",
+    "mcp__astrbot__task_list", "mcp__astrbot__task_manage", *(
     "mcp__astrbot__" + name for name in
     ("history_recent", "history_before", "history_search", "current_group_info", "current_group_members", "qq_prepare_reply", "qq_send_origin", "qq_file_receive", "qq_file_send", 'meme_categories', 'meme_list', 'meme_send', 'plugin_status', 'bili_dynamics', 'bili_subscribe', 'bili_subscriptions', 'bili_unsubscribe', 'twitter_subscribe', 'twitter_subscriptions', 'twitter_unsubscribe'))})
 EVENTS = frozenset({"turn/queued", "turn/start", "turn/completed", "turn/failed", "turn/duplicate",
@@ -30,7 +34,7 @@ NUMBERS = frozenset({"journal_id", "previous_cursor", "pending_cursor", "history
 ENUMS = {"code": {"OUTPUT_CHANNEL_MISMATCH", "other"},"tool": TOOLS | {"other"}, "status": {"in_progress", "completed", "failed", "other"},
     "stop_reason": {"end_turn", "cancelled", "max_tokens", "other"},
     "send_kind": {"final", "mcp", "control"},
-    "control": {"persona", "scene", "status", "cancel", "recover", "metrics", "new", "reset", "stop", "help", "provider", "stats", "set", "unset", "other"},
+    "control": {"persona", "scene", "status", "cancel", "recover", "metrics", "new", "reset", "memory", "stop", "help", "provider", "stats", "set", "unset", "other"},
     "error_type": {"CancelledError", "DshTurnCancelled", "PendingTurnError", "RecoveryError", "FinalReplyDeliveryError", "ActionFailed",
         "TimeoutError", "JsonRpcError", "ConnectionError", "RuntimeError", "ValueError", "KeyError", "other"},
     "action": {"send_msg", "send_group_msg", "send_private_msg", "send_group_forward_msg", "send_private_forward_msg"}}
@@ -229,10 +233,85 @@ class Trace:
                 CURRENT_SEND.reset(token)
 
 
+SEND_ACTIONS = frozenset({*ENUMS['action'], 'upload_group_file', 'upload_private_file'})
+
+
+class SendCooldownError(RuntimeError):
+    """A platform explicitly rejected a send; do not retry during cooldown."""
+    def __init__(self, message):
+        super().__init__(message)
+        # Existing Journal wrappers must know that no delivery is uncertain.
+        self.result = {'status': 'failed', 'wording': message}
+
+
+class SendGuard:
+    """Pace actual sends across conversations on the same OneBot client."""
+    def __init__(self, *, clock=time.monotonic, sleep=asyncio.sleep,
+                 jitter=None, cooldown=300, logger=None):
+        self.clock, self.sleep = clock, sleep
+        self.jitter = jitter or (lambda: random.uniform(1.5, 3.5))
+        self.cooldown = cooldown
+        self.logger = logger or logging.getLogger(__name__)
+        self.lock = asyncio.Lock()
+        self.blocked_until = 0
+
+    @staticmethod
+    def explicit_rejection(result):
+        if not isinstance(result, dict):
+            return False
+        # Successful responses can contain arbitrary user text; never classify it.
+        if result.get('status') != 'failed' and result.get('retcode') in (None, 0, '0'):
+            return False
+        message = ' '.join(str(result.get(k, ''))[:4096]
+                           for k in ('message', 'wording', 'msg')).casefold()
+        return any(word in message for word in (
+            '风控', '风险控制', '发送频繁', '发送过于频繁', '操作过于频繁',
+            '发送消息过于频繁', '账号被封', '帐号被封', '账号冻结', '帐号冻结',
+            '账号被冻结', '帐号被冻结', '账号已冻结', '帐号已冻结',
+            'risk control', 'rate limit', 'too many requests', 'sending too fast',
+        ))
+
+    def check_cooldown(self):
+        if self.clock() < self.blocked_until:
+            raise SendCooldownError('QQ 发送处于平台限制冷却期，请稍后再试。')
+
+    def observe(self, result):
+        if self.explicit_rejection(result):
+            self.blocked_until = self.clock() + self.cooldown
+            # Do not log raw platform messages: they can contain chat content.
+            self.logger.warning('V2 QQ platform send restriction detected; cooling down for %s seconds; no retry',
+                                self.cooldown)
+            return True
+        return False
+
+    async def send(self, original, action, params):
+        dispatched = False
+        try:
+            async with self.lock:
+                self.check_cooldown()
+                await self.sleep(self.jitter())
+                self.check_cooldown()
+                try:
+                    dispatched = True
+                    result = await original(action, **params)
+                except Exception as error:
+                    self.observe(getattr(error, 'result', None))
+                    raise
+                else:
+                    if self.observe(result):
+                        raise SendCooldownError('QQ 平台限制了发送，已进入冷却期；本次消息不自动重试。')
+                    return result
+        except asyncio.CancelledError as error:
+            if not dispatched:
+                error.result = {'status': 'failed'}
+            raise
+
+
 class OneBotAudit:
     """Observe the existing public client call; never originate a send."""
     def __init__(self):
         self._bindings = {}
+        self._send_guards = {}
 
     def bind(self, client):
         if client is None or id(client) in self._bindings:
@@ -240,10 +319,17 @@ class OneBotAudit:
         original = getattr(client, "call_action", None)
         if not callable(original):
             return
+        guard = self._send_guards.setdefault(id(client), SendGuard())
+        state = {'active': True}
 
         async def observed(action, **params):
+            if not state['active']:
+                return await original(action, **params)
             attempt = CURRENT_SEND.get()
-            result = await original(action, **params)
+            if isinstance(action, str) and action in SEND_ACTIONS:
+                result = await guard.send(original, action, params)
+            else:
+                result = await original(action, **params)
             if attempt is not None and isinstance(action, str) and action in ENUMS["action"] and isinstance(result, dict):
                 message_id = result.get("message_id")
                 if (isinstance(message_id, (int, str)) and not isinstance(message_id, bool)
@@ -256,10 +342,13 @@ class OneBotAudit:
             return result
 
         client.call_action = observed
-        self._bindings[id(client)] = (client, original, observed)
+        self._bindings[id(client)] = (client, original, observed, state)
+        guard.logger.info('V2 QQ send guard bound; interval=1.5..3.5 seconds; cooldown=300 seconds')
 
     def close(self):
-        for client, original, observed in self._bindings.values():
+        for client, original, observed, state in self._bindings.values():
+            state['active'] = False
             if client.call_action is observed:
                 client.call_action = original
         self._bindings.clear()
+        self._send_guards.clear()

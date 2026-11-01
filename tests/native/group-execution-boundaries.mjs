@@ -84,7 +84,7 @@ try {
     platformId:'qq', botId:'bot', groupId:'admitted'})
   const agent = {session:{id:sessionId}}
   let executions = 0
-  for (const name of ['mcp__astrbot__qq_prepare_reply', 'mcp__astrbot__current_group_members', 'mcp__astrbot__qq_file_receive', 'mcp__astrbot__qq_file_send',
+  for (const name of ['mcp__astrbot__history_read_forward', 'mcp__astrbot__history_read_forward_image', 'mcp__astrbot__qq_send_forward', 'mcp__astrbot__qq_prepare_reply', 'mcp__astrbot__current_group_members', 'mcp__astrbot__qq_file_receive', 'mcp__astrbot__qq_file_send',
     'mcp__astrbot__qq_file_open_any_path']) {
     ctx.tools.register({name, description:name, parameters:{type:'object', properties:{}},
       output:{schema:{type:'string'}, render:(_args, value) => [{type:'text', text:value}]},
@@ -94,24 +94,24 @@ try {
     callId:ToolCallId('group-file-' + executions + '-' + name), name, arguments:{}, agent})
   ctx.emit('agent/inbox/claimed', {agent, turn:1,
     message:{content:[{type:'text', text:prompt}]}})
-  for (const name of ['mcp__astrbot__qq_prepare_reply', 'mcp__astrbot__current_group_members', 'mcp__astrbot__qq_file_receive', 'mcp__astrbot__qq_file_send']) {
+  for (const name of ['mcp__astrbot__history_read_forward', 'mcp__astrbot__history_read_forward_image', 'mcp__astrbot__qq_send_forward', 'mcp__astrbot__qq_prepare_reply', 'mcp__astrbot__current_group_members', 'mcp__astrbot__qq_file_receive', 'mcp__astrbot__qq_file_send']) {
     const result = await dispatch(name)
     assert.match(result.content[0].text, new RegExp(name + ' ran'), `${name} is allowed in a valid group turn`)
   }
-  assert.equal(executions, 4)
+  assert.equal(executions, 7)
   assert.match((await dispatch('mcp__astrbot__qq_file_open_any_path')).content[0].text, /unavailable tool/,
     'file-like names outside the explicit allowlist remain denied')
-  assert.equal(executions, 4)
+  assert.equal(executions, 7)
   publish('two')
   assert.match((await dispatch('mcp__astrbot__qq_file_send')).content[0].text, /source expired/,
     'file tools reject an expired turn source')
-  assert.equal(executions, 4)
+  assert.equal(executions, 7)
   publish('three', 'group:other')
   ctx.emit('agent/inbox/claimed', {agent, turn:2,
     message:{content:[{type:'text', text:prompt}]}})
   assert.match((await dispatch('mcp__astrbot__qq_file_receive')).content[0].text, /no trusted current turn/,
     'file tools reject a different group identity')
-  assert.equal(executions, 4)
+  assert.equal(executions, 7)
   console.log('group file MCP guard: exact tools allowed only for fresh admitted-group turns')
 } finally {
   rmSync(root, {recursive:true, force:true})

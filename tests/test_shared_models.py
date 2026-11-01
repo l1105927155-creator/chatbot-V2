@@ -44,3 +44,15 @@ def test_refresh_preserves_current_reasoning_and_native_values_without_inference
  r.model_status('active');assert requests==[]
  r.shared_models.revision='two';r.model_status('active');assert requests==[]
  assert list(r._session_model_configs)==['active']
+
+
+def test_dynamic_catalog_changes_fingerprint_without_yaml_edit(tmp_path):
+ p=tmp_path/'profile';s=tmp_path/'status';p.write_text('source')
+ digest=hashlib.sha256(p.read_bytes()).hexdigest();shared=SharedModels(p,s,'epoch')
+ def publish(revision,models):
+  s.write_text(json.dumps({'epoch':'epoch','source_sha256':digest,'ok':True,'catalog_sha256':revision,
+                          'catalog':[{'provider':'openai-codex','models':models}]}))
+ publish('a'*64,['one']);first,catalog=shared.snapshot(timeout=0)
+ publish('b'*64,['two']);second,updated=shared.snapshot(timeout=0)
+ assert first!=second and updated[0]['models']==['two']
+ assert p.read_text()=='source'

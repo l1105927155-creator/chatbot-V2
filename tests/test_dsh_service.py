@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import os
 import sys
 import threading
 from pathlib import Path
@@ -27,7 +28,11 @@ def load(name, path):
 
 journal = load("v2_dsh_service_journal", "astrbot-plugins/v2_journal/journal.py")
 state = load("v2_dsh_service_state", "astrbot-plugins/v2_dsh_router/state.py")
-service = load("v2_dsh_service_contract", "astrbot-plugins/v2_dsh_router/service.py")
+service_path = Path(os.environ.get(
+    "V2_SERVICE_STAGE", ROOT / "astrbot-plugins/v2_dsh_router/service.py")).resolve()
+if str(service_path.parent) not in sys.path:
+    sys.path.insert(0, str(service_path.parent))
+service = load("v2_dsh_service_contract", service_path)
 from runtime_audit import AuditStore
 
 
@@ -119,6 +124,54 @@ def test_cancel_does_not_wait_for_chat_lock_and_preserves_pending(tmp_path):
     assert saved.pending_upper_cursor == 1 and saved.last_seen_journal_id == 0
     assert dsh.calls == [("cancel", saved.session_id)]
 
+    async def reviewed_recovery():
+        with pytest.raises(service.PendingTurnError, match=r"/v2agent recover 1"):
+            await svc.assert_can_enable(conv)
+        resolved = await svc.resolve_pending(conv, 1)
+        assert resolved.last_seen_journal_id == 1
+        assert resolved.pending_upper_cursor is None
+        await svc.assert_can_enable(conv)
+
+    asyncio.run(reviewed_recovery())
+    assert dsh.calls == [("cancel", saved.session_id), ("drain", saved.session_id)]
+
+
+def test_enable_preflight_preserves_cancelled_pending_for_explicit_recovery(tmp_path):
+    s = state.StateStore(tmp_path / "state.sqlite3")
+    conv = journal.Conversation("qq", "1", "group:3")
+    mapped = s.get_or_create("qq", "1", conv.key, "sid")
+    s.begin_turn("qq", "1", conv.key, mapped.session_id, 17)
+    svc = service.ChatService(None, s, FakeDsh())
+
+    with pytest.raises(service.PendingTurnError, match=r"/v2agent recover 17"):
+        asyncio.run(svc.assert_can_enable(conv))
+    saved = s.get("qq", "1", conv.key)
+    assert saved.session_id == "sid"
+    assert saved.pending_upper_cursor == 17
+    assert saved.last_seen_journal_id == 0
+
+
+def test_enable_preflight_waits_for_turn_lock_before_reading_pending(tmp_path):
+    s = state.StateStore(tmp_path / "state.sqlite3")
+    conv = journal.Conversation("qq", "1", "group:3")
+    mapped = s.get_or_create("qq", "1", conv.key, "sid")
+    svc = service.ChatService(None, s, FakeDsh())
+
+    async def scenario():
+        lock = svc._lock(conv)
+        await lock.acquire()
+        checking = asyncio.create_task(svc.assert_can_enable(conv))
+        await asyncio.sleep(0)
+        assert not checking.done()
+        # Model the foreground turn committing its uncertain result before it
+        # releases the same conversation lock.
+        s.begin_turn("qq", "1", conv.key, mapped.session_id, 23)
+        lock.release()
+        with pytest.raises(service.PendingTurnError, match=r"/v2agent recover 23"):
+            await checking
+
+    asyncio.run(scenario())
+
 
 def test_reset_rotates_session_at_command_floor_and_copies_profile(tmp_path):
     j = journal.JournalStore(tmp_path / "journal.sqlite3")
@@ -166,6 +219,212 @@ def test_reset_does_not_clear_preexisting_unknown_pending(tmp_path):
     saved = s.get("qq", "1", conv.key)
     assert saved.session_id == old and saved.pending_upper_cursor == 1
     assert not any(call[0] == "drain" for call in dsh.calls)
+
+
+def _group_reset_fixture(tmp_path, *, prepare_memory_reset=None):
+    j = journal.JournalStore(tmp_path / "journal.sqlite3")
+    s = state.StateStore(tmp_path / "state.sqlite3")
+    conv = journal.Conversation("qq", "1", "group:3")
+    dsh = FakeDsh()
+    old = dsh.create_session()
+    s.get_or_create("qq", "1", conv.key, old)
+    append(j, "/new", "new-1", conversation=conv.key)
+    svc = service.ChatService(
+        j, s, dsh, execution_profile="group-sandbox",
+        prepare_memory_reset=prepare_memory_reset,
+    )
+    return j, s, conv, dsh, old, svc
+
+
+def test_group_reset_prepares_memory_before_create_drain_and_rotate(tmp_path, monkeypatch):
+    order = []
+
+    async def prepare(**kwargs):
+        order.append(("prepare", kwargs))
+        return True
+
+    j, s, conv, dsh, old, svc = _group_reset_fixture(tmp_path, prepare_memory_reset=prepare)
+    original_create, original_drain = dsh.create_session, dsh.drain_session
+    original_rotate = s.rotate_session
+
+    def create(*args):
+        order.append(("create", None))
+        return original_create(*args)
+
+    def drain(*args):
+        order.append(("drain", None))
+        return original_drain(*args)
+
+    def rotate(*args, **kwargs):
+        order.append(("rotate", None))
+        return original_rotate(*args, **kwargs)
+
+    dsh.create_session = create
+    dsh.drain_session = drain
+    monkeypatch.setattr(s, "rotate_session", rotate)
+    result = asyncio.run(svc.reset_conversation(conv, "new-1"))
+
+    assert order[0] == ("prepare", {
+        "conversation": conv, "through_journal_id": 1, "session_id": old,
+    })
+    assert [item[0] for item in order] == ["prepare", "create", "drain", "rotate"]
+    assert result.session_id != old
+
+
+@pytest.mark.parametrize("provider", [None, False, "raises", "timeout"])
+def test_group_reset_memory_failure_keeps_mapping_and_skips_native_rotation(tmp_path, provider):
+    async def prepare(**_kwargs):
+        if provider in {"raises", "timeout"}:
+            if provider == "timeout":
+                raise TimeoutError("memory store timed out")
+            raise RuntimeError("memory store failed")
+        return provider
+
+    callback = None if provider is None else prepare
+    _j, s, conv, dsh, old, svc = _group_reset_fixture(tmp_path, prepare_memory_reset=callback)
+    before = s.get("qq", "1", conv.key)
+    with pytest.raises(service.ResetError, match="旧上下文未清空.*skip_mem"):
+        asyncio.run(svc.reset_conversation(conv, "new-1"))
+    assert s.get("qq", "1", conv.key) == before
+    assert not any(call[0] in {"create", "drain"} for call in dsh.calls)
+
+
+def test_cancelled_active_turn_memory_failure_can_be_skipped_on_retry(tmp_path):
+    started, cancelled = threading.Event(), threading.Event()
+    callback_calls = []
+
+    class Cancellable(FakeDsh):
+        def run(self, session_id, prompt):
+            if not started.is_set():
+                started.set()
+                assert cancelled.wait(5)
+                raise service.DshTurnCancelled("native cancellation confirmed")
+            return super().run(session_id, prompt)
+
+        def cancel_session(self, _session_id):
+            cancelled.set()
+            return True
+
+    async def prepare(**kwargs):
+        callback_calls.append(kwargs)
+        return False
+
+    j = journal.JournalStore(tmp_path / "journal.sqlite3")
+    s = state.StateStore(tmp_path / "state.sqlite3")
+    conv = journal.Conversation("qq", "1", "group:3")
+    dsh = Cancellable()
+    svc = service.ChatService(
+        j, s, dsh, execution_profile="group-sandbox", prepare_memory_reset=prepare,
+    )
+
+    async def send(_reply):
+        return None
+
+    async def scenario():
+        append(j, "active turn", "in-1", conversation=conv.key)
+        active = asyncio.create_task(svc.handle(conv, "in-1", send))
+        assert await asyncio.to_thread(started.wait, 2)
+        append(j, "/new", "new-2", conversation=conv.key)
+        before = s.get("qq", "1", conv.key)
+        with pytest.raises(service.ResetError, match="skip_mem"):
+            await svc.reset_conversation(conv, "new-2")
+        with pytest.raises(service.DshTurnCancelled):
+            await active
+
+        pending = s.get("qq", "1", conv.key)
+        assert pending.session_id == before.session_id
+        assert pending.last_seen_journal_id == before.last_seen_journal_id
+        assert pending.pending_upper_cursor == 1
+        assert svc._reset_confirmed_cancellations[("qq", "1", conv.key)] == (
+            before.session_id, 1,
+        )
+
+        append(j, "/new skip_mem", "new-3", conversation=conv.key)
+        rotated = await svc.reset_conversation(conv, "new-3", skip_memory=True)
+        assert rotated.session_id != before.session_id
+        assert rotated.pending_upper_cursor is None
+        assert callback_calls == [{
+            "conversation": conv, "through_journal_id": 2,
+            "session_id": before.session_id,
+        }]
+        assert ("qq", "1", conv.key) not in svc._reset_confirmed_cancellations
+
+    asyncio.run(scenario())
+
+
+def test_group_reset_unknown_pending_still_rejected(tmp_path):
+    _j, s, conv, _dsh, old, svc = _group_reset_fixture(tmp_path)
+    s.begin_turn("qq", "1", conv.key, old, 12)
+    with pytest.raises(service.PendingTurnError):
+        asyncio.run(svc.reset_conversation(conv, "new-1", skip_memory=True))
+    assert s.get("qq", "1", conv.key).session_id == old
+    assert s.get("qq", "1", conv.key).pending_upper_cursor == 12
+
+
+@pytest.mark.parametrize("mismatch", ["sid", "cursor"])
+def test_group_reset_rejects_nonmatching_confirmed_cancellation(tmp_path, mismatch):
+    _j, s, conv, _dsh, old, svc = _group_reset_fixture(tmp_path)
+    s.begin_turn("qq", "1", conv.key, old, 12)
+    credential = ("another-session", 12) if mismatch == "sid" else (old, 11)
+    svc._reset_confirmed_cancellations[("qq", "1", conv.key)] = credential
+    with pytest.raises(service.PendingTurnError):
+        asyncio.run(svc.reset_conversation(conv, "new-1", skip_memory=True))
+    saved = s.get("qq", "1", conv.key)
+    assert saved.session_id == old and saved.pending_upper_cursor == 12
+
+
+def test_group_reset_skip_memory_bypasses_provider(tmp_path):
+    async def should_not_run(**_kwargs):
+        raise AssertionError("skip_memory must bypass memory preparation")
+
+    _j, s, conv, _dsh, old, svc = _group_reset_fixture(
+        tmp_path, prepare_memory_reset=should_not_run,
+    )
+    result = asyncio.run(svc.reset_conversation(conv, "new-1", skip_memory=True))
+    assert result.session_id != old
+    assert s.get("qq", "1", conv.key) == result
+
+
+def test_group_reset_cancelled_memory_prepare_releases_barrier_and_keeps_mapping(tmp_path):
+    entered = asyncio.Event()
+
+    async def prepare(**_kwargs):
+        entered.set()
+        await asyncio.Event().wait()
+        return True
+
+    _j, s, conv, dsh, old, svc = _group_reset_fixture(
+        tmp_path, prepare_memory_reset=prepare,
+    )
+    before = s.get("qq", "1", conv.key)
+
+    async def scenario():
+        reset = asyncio.create_task(svc.reset_conversation(conv, "new-1"))
+        await entered.wait()
+        reset.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await reset
+
+    asyncio.run(scenario())
+    assert svc._reset_barriers == {}
+    assert s.get("qq", "1", conv.key) == before
+    assert not any(call[0] in {"create", "drain"} for call in dsh.calls)
+
+
+def test_private_reset_does_not_prepare_group_memory(tmp_path):
+    async def should_not_run(**_kwargs):
+        raise AssertionError("private reset must not prepare group memory")
+
+    j = journal.JournalStore(tmp_path / "journal.sqlite3")
+    s = state.StateStore(tmp_path / "state.sqlite3")
+    conv = journal.Conversation("qq", "1", "private:2")
+    dsh = FakeDsh()
+    svc = service.ChatService(
+        j, s, dsh, execution_profile="safe-chat", prepare_memory_reset=should_not_run,
+    )
+    append(j, "/new", "new-private", conversation=conv.key)
+    result = asyncio.run(svc.reset_conversation(conv, "new-private"))
+    assert s.get("qq", "1", conv.key) == result
 
 
 def test_reset_initializes_new_conversation_at_command_without_placeholder(tmp_path):
@@ -537,8 +796,10 @@ def test_reset_suppresses_and_consumes_active_run_that_finishes_normally(tmp_pat
     asyncio.run(scenario())
 
 
-def test_plugin_capability_lease_blocks_reset_and_expires_with_turn(tmp_path):
+@pytest.mark.parametrize("bound", ["plugins", "messaging"])
+def test_plugin_capability_lease_blocks_reset_and_expires_with_turn(tmp_path, bound):
     from contextlib import asynccontextmanager
+    from types import SimpleNamespace
     entered, release = threading.Event(), threading.Event()
     holder = {}
     class Mcp:
@@ -568,7 +829,7 @@ def test_plugin_capability_lease_blocks_reset_and_expires_with_turn(tmp_path):
     async def send(_):
         pass
     async def scenario():
-        task = asyncio.create_task(svc.handle(conv, 'in-1', send, plugins=object()))
+        task = asyncio.create_task(svc.handle(conv, 'in-1', send, **{bound: SimpleNamespace()}))
         assert await asyncio.to_thread(entered.wait, 2)
         with pytest.raises(service.ResetError):
             svc.begin_reset(conv, 'new-2')
@@ -1089,7 +1350,7 @@ def test_trusted_source_with_mcp_preserves_server_binding_and_actual_requester(t
         async def __aenter__(self): return servers
         async def __aexit__(self, *_args): pass
         def set_history_through(self, _conversation, _journal_id): pass
-        def turn(self, *_args): return self
+        def turn(self, *_args, **_kwargs): return self
 
     dsh = CaptureDsh()
     async def send(_reply): pass
@@ -1342,6 +1603,13 @@ def test_visual_header_truncation_preserves_explicit_reply_image_without_refetch
     original_rows = j.before(conv, wake.journal_id + 1, 100)
     original = service.ChatService._prompt(conv, original_rows, wake.journal_id)
 
+    profiles = {'2': {'group_level': 100, 'group_title': '爱美的美'},
+                '1': {'group_level': 4}, '999': {'group_level': 20}}
+    profile_prompt = service.ChatService._prompt(conv, original_rows, wake.journal_id,
+                                                  member_profiles=profiles)
+    header = json.loads(profile_prompt.splitlines()[0])
+    assert header['current_group_member_profiles'] == {'2': profiles['2'], '1': profiles['1']}
+
     class SmallWindow(service.ChatService):
         MAX_DELTA_BYTES = len(original.encode('utf-8')) + 10
 
@@ -1371,9 +1639,8 @@ def test_visual_header_truncation_preserves_explicit_reply_image_without_refetch
     assert len(prompt.encode('utf-8')) <= svc.MAX_DELTA_BYTES
 
 
-@pytest.mark.parametrize('notice_failure', [False, True, 'timeout'])
 @pytest.mark.parametrize('conversation_key', ['private:2', 'group:3'])
-def test_busy_receipt_precedes_queued_turn_without_reentering_model(tmp_path, notice_failure, conversation_key):
+def test_queued_turn_waits_silently_then_replies_once(tmp_path, conversation_key):
     started, release = threading.Event(), threading.Event()
 
     class Blocking(FakeDsh):
@@ -1390,48 +1657,35 @@ def test_busy_receipt_precedes_queued_turn_without_reentering_model(tmp_path, no
     append(j, 'long research', 'first', conversation=conv.key)
     dsh = Blocking()
     svc = service.ChatService(j, s, dsh, audit=AuditStore(tmp_path / 'audit.jsonl'))
-    svc.BUSY_NOTICE_TIMEOUT_SECONDS = .02
-    delivered, noticed = [], asyncio.Event()
+    delivered = []
 
     async def first_send(text):
         delivered.append(('first', text))
 
     async def next_send(text):
-        if text == svc.BUSY_NOTICE:
-            noticed.set()
-            if notice_failure == 'timeout':
-                await asyncio.Event().wait()
-            if notice_failure:
-                raise OSError('receipt transport failed')
         delivered.append(('next', text))
 
-    class ReceiptMessaging:
-        async def send_origin(self, text, mention_user_ids, reply_to_journal_id):
-            assert mention_user_ids == ['2'] and reply_to_journal_id is None
-            await next_send(text)
+    class Messaging:
+        async def send_origin(self, *args, **kwargs):
+            pytest.fail('queued messages must not trigger a control send')
 
     async def scenario():
         first = asyncio.create_task(svc.handle(conv, 'first', first_send))
         assert await asyncio.to_thread(started.wait, 2)
         append(j, 'finished yet?', 'second', conversation=conv.key)
-        second = asyncio.create_task(svc.handle(conv, 'second', next_send, messaging=ReceiptMessaging()))
-        duplicate = None
+        second = asyncio.create_task(svc.handle(conv, 'second', next_send, messaging=Messaging()))
+        duplicate = asyncio.create_task(svc.handle(conv, 'second', next_send, messaging=Messaging()))
         try:
-            await asyncio.wait_for(noticed.wait(), 1)
+            await asyncio.sleep(.05)
             assert len(dsh.calls) == 1 and not second.done()
-            saved = s.get('qq', '1', conv.key)
-            assert saved.last_seen_journal_id == 0
-            # A duplicate incoming delivery must not send another busy notice.
-            duplicate = asyncio.create_task(svc.handle(conv, 'second', next_send, messaging=ReceiptMessaging()))
-            await asyncio.sleep(.04)
-            assert len(svc._busy_notices) == 1
+            assert delivered == []
+            assert s.get('qq', '1', conv.key).last_seen_journal_id == 0
         finally:
             release.set()
-            results = await asyncio.gather(first, second, *([duplicate] if duplicate else []))
+            results = await asyncio.gather(first, second, duplicate)
         assert results == ['reply 1', 'reply 2', None]
         assert len(dsh.calls) == 2 and svc._queued == 0
-        assert delivered.count(('next', svc.BUSY_NOTICE)) == (0 if notice_failure else 1)
-        assert delivered[-1] == ('next', 'reply 2')
+        assert delivered == [('first', 'reply 1'), ('next', 'reply 2')]
 
     asyncio.run(scenario())
 
@@ -1464,7 +1718,7 @@ def test_consumed_message_redelivery_during_another_turn_has_no_busy_receipt(tmp
         old = asyncio.create_task(svc.handle(conv, 'old', send))
         try:
             await asyncio.sleep(.05)
-            assert svc.BUSY_NOTICE not in delivered
+            assert delivered == ['completed']
         finally:
             release.set()
             assert await running == 'completed'

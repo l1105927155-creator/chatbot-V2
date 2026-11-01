@@ -96,6 +96,17 @@ def test_pre_console_v2_component_manifest_remains_accepted(tmp_path):
     assert agent_backup._valid_components(previous, tmp_path, 2) == tuple(previous)
 
 
+def test_pre_tasks_v2_backup_remains_accepted_with_or_without_console(tmp_path):
+    task_component = ".runtime/astrbot/data/plugin_data/v2_tasks"
+    console_component = ".runtime/astrbot/data/plugin_data/v2_console"
+    memory_component = ".runtime/astrbot/data/plugin_data/v2_memory"
+    assert task_component in agent_backup.COMPONENTS
+    for absent in ({task_component}, {task_component, console_component},
+                   {memory_component}, {task_component, console_component, memory_component}):
+        previous = [component for component in agent_backup.COMPONENTS if component not in absent]
+        assert agent_backup._valid_components(previous, tmp_path, 2) == tuple(previous)
+
+
 def test_legacy_v1_backup_remains_restorable(tmp_path):
     root = fixture_root(tmp_path)
     current = make_archive(root, tmp_path / "private" / "current.tar.gz")
@@ -197,7 +208,7 @@ def test_backup_restore_preserves_real_group_volume_and_router_state(tmp_path, m
     import sys
     sys.path.insert(0, str(SCRIPT.parents[1] / "dsh/plugins/agent-profile"))
     import group_volume
-    identity = ("test-platform", "test-bot", "test-group")
+    identity = ("test-platform", "test-bot", "12345")
     data = group_volume.prepare_group(root / ".runtime", *identity)
     key = data["key"]
     workspace = Path(data["workspace"])
@@ -210,6 +221,16 @@ def test_backup_restore_preserves_real_group_volume_and_router_state(tmp_path, m
     sentinel = workspace / "persisted.txt"
     expected_content = "survives real unmount, archive, restore, and remount"
     sentinel.write_text(expected_content)
+    sys.path.insert(0, str(SCRIPT.parents[1] / "astrbot-plugins"))
+    from v2_memory.store import MemoryStore
+    memory_identity = (identity[0], identity[1], "group:" + identity[2])
+    memory_path = workspace / ".v2-memory/state.sqlite3"
+    memory = MemoryStore(memory_path, memory_identity)
+    memory.initialize(100)
+    expected_memory = memory.commit(0, 100, 101, [{
+        "content": "群卷恢复后仍记得共同维护Bot的经历", "members": ["90001"],
+        "source_ids": [101], "weight": 5, "status": "active",
+    }], {})
     output_dir = tmp_path / "backups"
     output_dir.mkdir(mode=0o700)
     archive = output_dir / "group-runtime.tar.gz"
@@ -236,6 +257,7 @@ def test_backup_restore_preserves_real_group_volume_and_router_state(tmp_path, m
         reopened = group_volume.prepare_group(root / ".runtime", *identity)
         assert reopened["key"] == key
         assert (Path(reopened["workspace"]) / "persisted.txt").read_text() == expected_content
+        assert MemoryStore(memory_path, memory_identity).snapshot() == expected_memory
     finally:
         if os.path.ismount(workspace):
             group_volume.unmount_group(workspace)

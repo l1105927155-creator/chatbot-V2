@@ -370,7 +370,7 @@ p.chmod(0o600)
     plugins_root = staged_repo / "astrbot-plugins"
     if plugins_root.is_symlink():
         raise RuntimeError(f"Staged plugin root must not be a symlink: {plugins_root}")
-    plugin_names = ["v2_ai_gate", "v2_journal", "v2_dsh_router", "v2_phase1_probe", "v2_sandbox_fixture"]
+    plugin_names = ["v2_ai_gate", "v2_journal", "v2_dsh_router", "v2_tasks", "v2_memory", "v2_phase1_probe", "v2_sandbox_fixture"]
     fixture = ROOT / "sandbox/fixture_plugin"
     if not fixture.is_dir():
         plugin_names.remove("v2_sandbox_fixture")
@@ -384,9 +384,16 @@ p.chmod(0o600)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(original, target, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         plugin_target = astrbot_root / "data/plugins" / name
-        if name == "v2_dsh_router" and dsh_mode == "disabled":
+        if name in {"v2_dsh_router", "v2_tasks", "v2_memory"} and dsh_mode == "disabled":
             if plugin_target.is_symlink():
                 plugin_target.unlink()
+            elif name in {"v2_tasks", "v2_memory"} and plugin_target.exists():
+                marker = plugin_target / ".v2-sandbox-snapshot"
+                if (not plugin_target.is_dir() or marker.is_symlink() or not marker.is_file()
+                        or marker.stat().st_size > 4096
+                        or marker.read_text(encoding="utf-8") != str(target.resolve())):
+                    raise RuntimeError(f"Refusing to remove an unrelated task plugin: {plugin_target}")
+                shutil.rmtree(plugin_target)
             continue
         if name == "v2_sandbox_fixture":
             plugin_target = astrbot_root / "data/plugins/v2_sandbox_fixture"
@@ -395,6 +402,23 @@ p.chmod(0o600)
             if checked.is_symlink():
                 raise RuntimeError(f"Sandbox AstrBot path must not be a symlink: {checked}")
         plugin_target.parent.mkdir(parents=True, exist_ok=True)
+        if name in {"v2_tasks", "v2_memory"}:
+            # Native plugin pages require the resolved plugin root to remain
+            # beneath data/plugins. Keep this plugin as a physical snapshot.
+            marker = plugin_target / ".v2-sandbox-snapshot"
+            if plugin_target.is_symlink():
+                if plugin_target.resolve() != target.resolve():
+                    raise RuntimeError(f"Sandbox task plugin link is not owned: {plugin_target}")
+                plugin_target.unlink()
+            elif plugin_target.exists():
+                if (not plugin_target.is_dir() or marker.is_symlink() or not marker.is_file()
+                        or marker.stat().st_size > 4096
+                        or marker.read_text(encoding="utf-8") != str(target.resolve())):
+                    raise RuntimeError(f"Refusing to replace an unrelated task plugin: {plugin_target}")
+                shutil.rmtree(plugin_target)
+            shutil.copytree(target, plugin_target)
+            marker.write_text(str(target.resolve()), encoding="utf-8")
+            continue
         if plugin_target.is_symlink():
             if plugin_target.resolve() != target.resolve():
                 raise RuntimeError(f"Sandbox plugin link points outside its staged snapshot: {plugin_target}")

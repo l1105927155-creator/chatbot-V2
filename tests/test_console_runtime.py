@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,7 +12,8 @@ from types import SimpleNamespace
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-PLUGIN = ROOT / "astrbot-plugins" / "v2_console"
+PLUGIN = Path(os.environ.get(
+    "V2_CONSOLE_STAGE", ROOT / "astrbot-plugins" / "v2_console")).resolve()
 sys.path.insert(0, str(PLUGIN))
 sys.path.insert(0, str(PLUGIN.parent))
 from v2_console.runtime import PartialRuntimeOperation, RuntimeAdapter  # noqa: E402
@@ -81,6 +83,8 @@ class FakeService:
         self.journal = FakeJournal()
         self.cancel_calls = []
         self.enabled_error = None
+        self.enable_preflight_error = None
+        self.enable_preflight_calls = []
         self.model_status_calls = 0
         self.reset_calls = []
         self.compact_calls = []
@@ -103,6 +107,12 @@ class FakeService:
             self._disabled_identities.add(identity)
             await self.cancel(conversation)
         return enabled
+
+    async def assert_can_enable(self, conversation):
+        self.enable_preflight_calls.append((conversation.platform_id, conversation.bot_id,
+                                            conversation.key))
+        if self.enable_preflight_error:
+            raise self.enable_preflight_error
 
     async def model_status(self, _conversation):
         self.model_status_calls += 1
@@ -171,12 +181,21 @@ class FakeContext:
     def __init__(self, router):
         self.router = router
         self.config = FakeAstrConfig(platform_settings={"id_whitelist": ["qq:GroupMessage:7"]})
+        self.reloaded_conf_ids = []
+        self.config_requested_for = []
+        self.astrbot_config_mgr = SimpleNamespace(
+            get_conf_info=lambda umo: {"id": "profile-1" if umo.endswith(":123") else "default"}
+        )
 
     def get_registered_star(self, name):
         return SimpleNamespace(star_cls=self.router) if name == "v2_dsh_router" else None
 
-    def get_config(self):
+    def get_config(self, _umo=None):
+        self.config_requested_for.append(_umo)
         return self.config
+
+    async def reload_pipeline_scheduler(self, conf_id):
+        self.reloaded_conf_ids.append(conf_id)
 
 
 def make_adapter(tmp_path, router=None):
@@ -263,6 +282,32 @@ def test_update_checks_revision_model_and_persists_before_runtime_enable(tmp_pat
     assert router.services["owner"].enabled_calls == [("qq", "bot", "private:42", True)]
     assert result["session"]["resume_through_journal_id"] == 731
     assert router.services["owner"].journal.calls == [("qq", "bot", "private:42")]
+    assert router.services["owner"].enable_preflight_calls == [("qq", "bot", "private:42")]
+
+
+def test_enable_preflight_rejects_pending_before_console_commit(tmp_path):
+    adapter, _context, router, _config = make_adapter(tmp_path)
+    store = ConsoleStore(tmp_path / "console" / "state.json")
+    imported = store.import_session("qq", "bot", "private:42", {
+        "model": {"provider": "shared", "model": "model-a"},
+        "enabled": False, "editors": [],
+    }, expected_revision=store.read()["revision"])
+    service = router.services["owner"]
+    service.enable_preflight_error = RuntimeError("pending Journal 17")
+
+    with pytest.raises(RuntimeError, match="pending Journal 17"):
+        asyncio.run(adapter.update(identity_row(key="private:42"), {
+            "model": {"provider": "shared", "model": "model-a"},
+            "enabled": True, "editors": [],
+        }, imported["state"]["revision"], store))
+
+    current = store.read()
+    assert current["revision"] == imported["state"]["revision"]
+    assert current["sessions"][store.session_key({
+        "platform_id": "qq", "bot_id": "bot", "conversation_key": "private:42",
+    })]["settings"]["enabled"] is False
+    assert service.enabled_calls == []
+    assert service.journal.calls == []
 
 
 def test_disabled_update_does_not_wait_for_active_turn_lock_before_cancelling(tmp_path):
@@ -331,12 +376,15 @@ def test_add_group_syncs_both_admission_gates_and_initializes_selected_template_
     result = asyncio.run(adapter.add_group({
         "platform_id": "qq", "bot_id": "bot", "group_id": "123",
         "template_id": template_id, "expected_revision": revision,
-    }, store, templates))
+    }, store, templates, reload_pipeline_scheduler=context.reload_pipeline_scheduler))
     assert result["added"] is True
     assert result["completed"][-1] == "Router 会话准入已启用"
     assert "group:123" in router.allowed_conversations
     assert "qq:GroupMessage:123" in context.config["platform_settings"]["id_whitelist"]
     assert context.config.save_count == 1
+    assert context.reloaded_conf_ids == ["profile-1"]
+    assert context.config_requested_for == ["qq:GroupMessage:123"]
+    assert "AstrBot 平台白名单流水线已刷新" in result["completed"]
     assert "group:123" in json.loads(config_path.read_text())["allowed_conversations"]
     workspace = Path(result["workspace"])
     assert (workspace / "AGENTS.md").read_text() == "group guide"
@@ -347,6 +395,27 @@ def test_add_group_syncs_both_admission_gates_and_initializes_selected_template_
     assert session["template_id"] == template_id
 
 
+def test_add_group_retry_refreshes_native_pipeline_for_already_admitted_group(tmp_path):
+    adapter, context, _router, store, _config, templates, template_id, revision = prepare_group_add(tmp_path)
+    first = asyncio.run(adapter.add_group({
+        "platform_id": "qq", "bot_id": "bot", "group_id": "123",
+        "template_id": template_id, "expected_revision": revision,
+    }, store, templates, reload_pipeline_scheduler=context.reload_pipeline_scheduler))
+    assert first["added"] is True
+
+    recovered = asyncio.run(adapter.add_group({
+        "platform_id": "qq", "bot_id": "bot", "group_id": "123",
+        "template_id": template_id, "expected_revision": store.read()["revision"],
+    }, store, templates, reload_pipeline_scheduler=context.reload_pipeline_scheduler))
+    assert recovered["added"] is False
+    assert recovered["recovered"] is True
+    assert recovered["completed"] == [
+        "AstrBot 平台会话白名单已同步",
+        "AstrBot 平台白名单流水线已刷新",
+    ]
+    assert context.reloaded_conf_ids == ["profile-1", "profile-1"]
+
+
 def test_add_group_partial_failure_is_reported_and_agent_stays_unadmitted(tmp_path, monkeypatch):
     adapter, context, router, store, config_path, templates, template_id, revision = prepare_group_add(tmp_path)
     runtime_module = sys.modules[RuntimeAdapter.__module__]
@@ -355,10 +424,11 @@ def test_add_group_partial_failure_is_reported_and_agent_stays_unadmitted(tmp_pa
         asyncio.run(adapter.add_group({
             "platform_id": "qq", "bot_id": "bot", "group_id": "123",
             "template_id": template_id, "expected_revision": revision,
-        }, store, templates))
+        }, store, templates, reload_pipeline_scheduler=context.reload_pipeline_scheduler))
     assert failure.value.completed == (
         "会话设置已持久化", "群工作区与运行时已准备",
         "工作区模板已安全初始化", "AstrBot 平台会话白名单已同步",
+        "AstrBot 平台白名单流水线已刷新",
     )
     assert "group:123" not in router.allowed_conversations
     assert "group:123" not in json.loads(config_path.read_text())["allowed_conversations"]
@@ -367,13 +437,56 @@ def test_add_group_partial_failure_is_reported_and_agent_stays_unadmitted(tmp_pa
                              "conversation_key": "group:123"}) in store.read()["sessions"]
 
 
+def test_add_group_reload_failure_is_recoverable_without_replacing_workspace(tmp_path):
+    adapter, context, router, store, config_path, templates, template_id, revision = prepare_group_add(tmp_path)
+    calls = []
+
+    async def fail_first_reload(conf_id):
+        calls.append(conf_id)
+        if len(calls) == 1:
+            raise OSError("scheduler reload failed")
+        context.reloaded_conf_ids.append(conf_id)
+
+    payload = {
+        "platform_id": "qq", "bot_id": "bot", "group_id": "123",
+        "template_id": template_id, "expected_revision": revision,
+    }
+    with pytest.raises(PartialRuntimeOperation) as failure:
+        asyncio.run(adapter.add_group(
+            payload, store, templates, reload_pipeline_scheduler=fail_first_reload
+        ))
+
+    assert failure.value.completed == (
+        "会话设置已持久化", "群工作区与运行时已准备",
+        "工作区模板已安全初始化", "AstrBot 平台会话白名单已同步",
+    )
+    assert "qq:GroupMessage:123" in context.config["platform_settings"]["id_whitelist"]
+    assert "group:123" not in json.loads(config_path.read_text())["allowed_conversations"]
+    assert "group:123" not in router.allowed_conversations
+
+    workspace = router._group_runtimes["group:123"]["workspace"]
+    (workspace / "operator-note.txt").write_text("keep this workspace content")
+    payload["expected_revision"] = store.read()["revision"]
+    recovered = asyncio.run(adapter.add_group(
+        payload, store, templates, reload_pipeline_scheduler=fail_first_reload
+    ))
+
+    assert recovered["added"] is True
+    assert (workspace / "operator-note.txt").read_text() == "keep this workspace content"
+    assert (workspace / "AGENTS.md").read_text() == "group guide"
+    assert "group:123" in json.loads(config_path.read_text())["allowed_conversations"]
+    assert "group:123" in router.allowed_conversations
+    assert calls == ["profile-1", "profile-1"]
+    assert context.reloaded_conf_ids == ["profile-1"]
+
+
 def test_add_group_rejects_identity_not_matching_owner_pair(tmp_path):
-    adapter, _context, _router, store, _config, templates, template_id, revision = prepare_group_add(tmp_path)
+    adapter, context, _router, store, _config, templates, template_id, revision = prepare_group_add(tmp_path)
     with pytest.raises(PermissionError, match="唯一已配置"):
         asyncio.run(adapter.add_group({
             "platform_id": "other", "bot_id": "bot", "group_id": "123",
             "template_id": template_id, "expected_revision": revision,
-        }, store, templates))
+        }, store, templates, reload_pipeline_scheduler=context.reload_pipeline_scheduler))
 
 
 def test_models_without_existing_session_return_todo_without_creating_one(tmp_path):
@@ -438,7 +551,7 @@ def test_failed_restart_restores_only_sessions_disabled_by_quiesce(tmp_path):
 
 
 def test_add_group_selected_persona_replaces_only_stock_group_guide(tmp_path):
-    adapter, _context, router, store, _config, templates, template_id, revision = prepare_group_add(tmp_path)
+    adapter, context, router, store, _config, templates, template_id, revision = prepare_group_add(tmp_path)
     stock_root = adapter.repo / "dsh/templates/group"
     stock_root.mkdir(parents=True)
     (stock_root / "AGENTS.md").write_text("stock agents")
@@ -457,7 +570,7 @@ def test_add_group_selected_persona_replaces_only_stock_group_guide(tmp_path):
     result = asyncio.run(adapter.add_group({
         "platform_id": "qq", "bot_id": "bot", "group_id": "123",
         "template_id": template_id, "expected_revision": revision,
-    }, store, templates))
+    }, store, templates, reload_pipeline_scheduler=context.reload_pipeline_scheduler))
     workspace = Path(result["workspace"])
     assert (workspace / "persona.md").read_text() == "selected persona"
     assert (workspace / "AGENTS.md").read_text() == "group guide"

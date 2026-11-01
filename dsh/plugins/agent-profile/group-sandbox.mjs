@@ -6,15 +6,17 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { SandboxProvider } from '../../node_modules/@deepseek-ai/dsh-sandbox/lib/index.js'
 import { privateSourceRoot, readTurnSource,
-  validateClaimedPrompt, sameTurnSource, verifyTurnImageProofs, validateTurnImages } from './trusted-turn-guard.mjs'
+  validateClaimedPrompt, sameTurnSource, verifyTurnImageProofs, validateTurnImages,
+  scheduledToolAllowed } from './trusted-turn-guard.mjs'
 import { researchDelegation } from './background-authority.mjs'
 import { canWriteGroupWorkspace } from './group-write-policy.mjs'
 
 export const name = 'v2-group-sandbox'
 
 const safeMcp = new Set(['mcp__astrbot__history_recent', 'mcp__astrbot__history_before',
-  'mcp__astrbot__history_search', 'mcp__astrbot__history_read_image', 'mcp__astrbot__current_group_info', 'mcp__astrbot__current_group_members', 'mcp__astrbot__qq_prepare_reply', 'mcp__astrbot__qq_send_origin',
-  'mcp__astrbot__qq_file_receive', 'mcp__astrbot__qq_file_send', 'mcp__astrbot__meme_categories', 'mcp__astrbot__meme_list', 'mcp__astrbot__meme_send', 'mcp__astrbot__plugin_status', 'mcp__astrbot__bili_dynamics', 'mcp__astrbot__bili_subscribe', 'mcp__astrbot__bili_subscriptions', 'mcp__astrbot__bili_unsubscribe', 'mcp__astrbot__twitter_subscribe', 'mcp__astrbot__twitter_subscriptions', 'mcp__astrbot__twitter_unsubscribe'])
+  'mcp__astrbot__memory_search', 'mcp__astrbot__memory_sources',
+  'mcp__astrbot__history_search', 'mcp__astrbot__history_read_image', 'mcp__astrbot__history_read_forward', 'mcp__astrbot__history_read_forward_image', 'mcp__astrbot__qq_send_forward', 'mcp__astrbot__current_group_info', 'mcp__astrbot__current_group_members', 'mcp__astrbot__qq_prepare_reply', 'mcp__astrbot__qq_send_origin',
+  'mcp__astrbot__qq_file_receive', 'mcp__astrbot__qq_file_send', 'mcp__astrbot__meme_categories', 'mcp__astrbot__meme_list', 'mcp__astrbot__meme_send', 'mcp__astrbot__plugin_status', 'mcp__astrbot__bili_dynamics', 'mcp__astrbot__bili_subscribe', 'mcp__astrbot__bili_subscriptions', 'mcp__astrbot__bili_unsubscribe', 'mcp__astrbot__twitter_subscribe', 'mcp__astrbot__twitter_subscriptions', 'mcp__astrbot__twitter_unsubscribe', 'mcp__astrbot__task_list', 'mcp__astrbot__task_manage'])
 const allowedTools = new Set(['bash', 'skill', 'web_search', 'web_fetch', 'background_research', ...safeMcp])
 allowedTools.add('group_app')
 const text = value => typeof value === 'string' && value.length > 0
@@ -92,6 +94,9 @@ export class GroupSandbox extends SandboxProvider {
         const binding = this.binding(exec.agent)
         if (exec.signal.aborted || binding.signal?.aborted) throw new Error('inactive turn')
         if (!allowedTools.has(exec.name)) throw new Error('unavailable tool')
+        if (binding.source.kind === 'scheduled' && !scheduledToolAllowed(exec.name)) {
+          throw new Error('tool unavailable to scheduled turns')
+        }
         if (exec.name === 'bash') {
           const args = exec.arguments ?? {}
           if (args.sandbox_permissions && args.sandbox_permissions !== 'workspace-write') {

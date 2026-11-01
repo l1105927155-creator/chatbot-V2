@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>V2 群聊记忆</title>
+  <style>
+    :root { color-scheme: light dark; font: 14px system-ui, sans-serif; }
+    body { margin: 0; padding: 22px; background: Canvas; color: CanvasText; }
+    main { max-width: 1200px; margin: auto; }
+    header, .row, .toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    header { justify-content: space-between; }
+    section, .card { border: 1px solid color-mix(in srgb, CanvasText 18%, transparent); border-radius: 8px; padding: 14px; margin: 14px 0; }
+    button, input, select, textarea { font: inherit; padding: 7px 9px; }
+    button { cursor: pointer; }
+    input[type="search"] { min-width: 220px; }
+    textarea { box-sizing: border-box; width: 100%; min-height: 130px; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 380px; overflow: auto; }
+    .muted { opacity: .72; } .error { color: #d33; } .ok { color: #27843b; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(190px,1fr)); gap: 10px; }
+    .list { display: grid; gap: 8px; margin-top: 12px; }
+    .entry { width: 100%; text-align: left; }
+    .entry strong { display: block; margin-bottom: 4px; }
+    label { display: grid; gap: 5px; margin: 10px 0; }
+    @media(max-width:600px) { body { padding: 12px; } input[type="search"] { min-width: 100%; box-sizing: border-box; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div><h1>群聊记忆</h1><div id="notice" class="muted" role="status">正在读取…</div></div>
+    <button id="reload">刷新状态</button>
+  </header>
+  <div id="poll-state" class="error" role="status"></div>
+  <section>
+    <h2>群状态与整理记录</h2>
+    <div id="status" class="grid"></div>
+    <label>当前群<select id="group"></select></label>
+    <div class="toolbar">
+      <button id="toggle">切换记忆启用状态</button>
+      <button id="cancel" disabled>取消当前整理</button>
+      <button id="export">导出 JSON</button>
+      <button id="clear">清理本群记忆</button>
+    </div>
+  </section>
+  <section>
+    <h2>后台增量整理</h2>
+    <p class="muted">群友新消息达到门槛，或最早一条等待达到上限时整理；Bot消息不计数，仍保留在整理内容中。失败后暂停，未完成消息保留。</p>
+    <div id="incremental-state" role="status"></div>
+    <div class="row">
+      <label>后台增量<select id="incremental-enabled"><option value="true">启用</option><option value="false">停用</option></select></label>
+      <label>新增群友消息门槛<input id="incremental-min" type="number" min="1" max="10000" step="1"></label>
+      <label>最长等待（秒）<input id="incremental-wait" type="number" min="1" max="86400" step="1"></label>
+      <button id="incremental-save">保存增量设置</button>
+      <button id="incremental-retry" disabled>重试未完成范围</button>
+    </div>
+  </section>
+  <section>
+    <h2>记忆浏览</h2>
+    <div class="toolbar">
+      <input id="query" type="search" placeholder="按内容搜索">
+      <button id="search">搜索</button><button id="previous">上一页</button><button id="next">下一页</button>
+      <span id="page" class="muted"></span>
+    </div>
+    <div id="entries" class="list"></div>
+  </section>
+  <section id="detail" hidden>
+    <h2>记忆详情与编辑</h2>
+    <div id="detail-meta" class="muted"></div>
+    <label>内容<textarea id="content"></textarea></label>
+    <label>相关成员（稳定标识 JSON 数组）<textarea id="members"></textarea></label>
+    <div class="row">
+      <label>长期显著性（1–5）<input id="weight" type="number" min="1" max="5" step="1"></label>
+      <label>状态<select id="entry-status"><option value="active">保留</option><option value="archived">归档</option><option value="forgotten">遗忘</option></select></label>
+      <button id="save">保存修改</button>
+    </div>
+    <h3>逐条陈述与原文</h3><div id="claims-status" class="muted"></div><pre id="claims"></pre>
+    <h3>来源标记</h3><pre id="sources"></pre>
+    <h3>修订记录</h3><pre id="revisions"></pre>
+  </section>
+</main>
+<script>
+  const $ = (id) => document.getElementById(id);
+  const esc = (value) => String(value ?? "—").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+  let groups = [], selectedGroup = "", selectedEntry = null, selectedRevision = null, offset = 0;
+  let statusRequest = 0, entryRequest = 0, detailRequest = 0, statusLoading = false;
+  let incrementalDirty = false, incrementalRevision = null;
+  const limit = 20;
+  function say(text, kind = "muted") { $("notice").textContent = text; $("notice").className = kind; }
+  async function call(action, fields = {}) {
+    const bridge = window.AstrBotPluginPage;
+    if (!bridge || typeof bridge.apiPost !== "function") throw new Error("页面接口尚未就绪，请从 AstrBot 控制台重新打开。");
+    await bridge.ready();
+    const result = await bridge.apiPost("api", {action, ...fields});
+    if (result?.status === "error") throw new Error(result.message || "操作未完成");
+    return result?.data ?? result;
+  }
+  function groupKey() { return selectedGroup; }
+  function phaseLabel(progress) {
+    if (!progress?.available) return "进度不可用";
+    const phases = {idle:"空闲",preparing:"准备批次",waiting_model:"等待模型",reasoning:"模型推理",generating:"生成正文",finishing:"收尾",completed:"已完成",failed:"失败",cancelled:"已取消"};
+    let label = phases[progress.phase] || "状态未知";
+    if (progress.active && progress.heartbeat && progress.event_count === 0 && progress.text_bytes === 0 && progress.reasoning_bytes === 0) label += " · 仅收到心跳，尚无模型输出";
+    else if (progress.active && progress.text_bytes > 0) label += ` · 正文 ${progress.text_bytes} 字节`;
+    else if (progress.active && progress.reasoning_bytes > 0) label += ` · 推理内容 ${progress.reasoning_bytes} 字节`;
+    else if (progress.active && progress.event_count > 0) label += ` · 已收到 ${progress.event_count} 个模型事件`;
+    return label;
+  }
+  function renderStatus() {
+    const selected = groups.find((g) => g.key === selectedGroup);
+    const progress = selected?.progress;
+    $("cancel").disabled = !progress?.available || !progress.active;
+    const increment = selected?.incremental;
+    $("incremental-save").disabled = !increment;
+    $("incremental-retry").disabled = !increment?.enabled || !increment.blocked || !selected?.enabled || !selected?.agent_enabled || !!increment.scheduled || !!progress?.active;
+    $("incremental-state").textContent = increment
+      ? `后台${increment.enabled ? "启用" : "停用"} · 待处理群友消息 ${increment.inbound_count} 条（含Bot共 ${increment.total_messages} 条） · 最早等待 ${increment.oldest_wait_seconds} 秒${increment.blocked ? ` · 已暂停：未完成范围 (${increment.failed_after}, ${increment.failed_through}]，${increment.error_code || "未知错误"}` : increment.scheduled ? " · 等待或正在执行" : ""}`
+      : "后台增量状态暂不可用";
+    if (!incrementalDirty) {
+      incrementalRevision = increment?.revision ?? null;
+      $("incremental-enabled").value = increment?.enabled ? "true" : "false";
+      $("incremental-min").value = increment?.min_messages ?? 99;
+      $("incremental-wait").value = increment?.max_wait_seconds ?? 1800;
+    }
+    $("status").innerHTML = groups.map((g) => {
+      const run = g.last_run || {}, p = g.progress;
+      const state = {running:"整理中",completed:"已完成",failed:"失败",cancelled:"已取消",unavailable:"不可用"}[run.status] || "暂无";
+      const metrics = p?.available ? `<br>进度：${esc(phaseLabel(p))}<br>运行 ${esc(p.run_elapsed_ms)} 毫秒 · 批次 ${esc(p.batch_index || 0)}（${esc(p.batch_message_count || 0)} 条） · 已提交 ${esc(p.completed_batches || 0)} 批 / ${esc(p.committed_messages || 0)} 条 · 游标 ${esc(p.committed_cursor ?? "—")} / ${esc(p.target_cursor ?? "—")}<br>模型事件 ${esc(p.event_count || 0)} · 正文 ${esc(p.text_bytes || 0)} 字节 · 推理 ${esc(p.reasoning_bytes || 0)} 字节 · 距上次模型增量 ${esc(p.idle_ms || 0)} 毫秒${p.host_last_seen_age_ms != null ? ` · 宿主通道回执 ${esc(p.host_last_seen_age_ms)} 毫秒前` : ""}${p.error_category ? `<br>进度错误类别：${esc(p.error_category)}` : ""}` : `<br>运行进度：未观测`;
+      return `<div class="card"><strong>${esc(g.label || g.key)}</strong><br>记忆：${g.enabled ? "启用" : "停用"}；后端：${g.connected ? "已连接" : "不可用"}<br>记忆数：${esc(g.memory_count)}<br>最近整理：${esc(state)} ${esc(run.created_at || "")}<br>耗时：${esc(run.duration_ms ?? "未提供")}毫秒；模型用量：${esc(run.usage == null ? "未提供" : JSON.stringify(run.usage))}${run.error_code ? `<br>失败类别：${esc(run.error_code)}` : ""}${metrics}</div>`;
+    }).join("") || `<div class="muted">当前没有已准入群。</div>`;
+  }
+  async function loadStatus({automatic = false, reloadEntries = !automatic} = {}) {
+    if (automatic && (statusLoading || document.hidden)) return;
+    statusLoading = true;
+    const requestId = ++statusRequest;
+    const groupAtStart = selectedGroup;
+    if (!automatic) say("正在读取群状态…");
+    try {
+      const data = await call("status");
+      if (requestId !== statusRequest) return;
+      $("poll-state").textContent = "";
+      groups = Array.isArray(data?.groups) ? data.groups : [];
+      if (!automatic) {
+        if (!groups.some((g) => g.key === selectedGroup)) selectedGroup = groups[0]?.key || "";
+        $("group").innerHTML = groups.map((g) => `<option value="${esc(g.key)}">${esc(g.label || g.key)}</option>`).join("");
+        $("group").value = selectedGroup;
+      } else if (groupAtStart !== selectedGroup) return;
+      renderStatus();
+      if (!automatic) say("状态已更新");
+      if (reloadEntries && selectedGroup) await loadEntries(); else if (!selectedGroup) $("entries").textContent = "尚无可浏览的群。";
+    } catch (error) {
+      if (requestId === statusRequest) {
+        if (!automatic) say(error.message || "读取失败，请检查服务日志。", "error");
+        else $("poll-state").textContent = "状态更新失败，当前显示的进度可能已过期。";
+      }
+    } finally { if (requestId === statusRequest) statusLoading = false; }
+  }
+  async function loadEntries() {
+    if (!groupKey()) return;
+    const requestId = ++entryRequest, groupAtStart = groupKey();
+    say("正在搜索记忆…");
+    try {
+      const data = await call("list", {group_key: groupAtStart, limit, offset, query: $("query").value});
+      if (requestId !== entryRequest || groupAtStart !== groupKey()) return;
+      const entries = Array.isArray(data.entries) ? data.entries : [];
+      $("page").textContent = `第 ${Math.floor(offset / limit) + 1} 页 · ${entries.length} 条`;
+      $("entries").innerHTML = entries.map((entry) => `<button class="entry" data-id="${esc(entry.id)}"><strong>${esc(entry.content)}</strong><span class="muted">ID ${esc(entry.id)} · 状态 ${esc(entry.status)} · 权重 ${esc(entry.weight)}</span></button>`).join("") || `<div class="muted">没有匹配的记忆。</div>`;
+      for (const button of $("entries").querySelectorAll("button[data-id]")) button.addEventListener("click", () => loadDetail(button.dataset.id));
+      say("记忆列表已更新");
+    } catch (error) { say(error.message || "记忆列表读取失败。", "error"); }
+  }
+  async function loadDetail(id) {
+    const requestId = ++detailRequest, groupAtStart = groupKey();
+    try {
+      const data = await call("get", {group_key: groupAtStart, id});
+      if (requestId !== detailRequest || groupAtStart !== groupKey()) return;
+      selectedEntry = data.entry;
+      selectedRevision = data.revision;
+      $("detail").hidden = false;
+      $("detail-meta").textContent = `ID ${selectedEntry.id} · 创建 ${selectedEntry.created_at || "—"} · 更新 ${selectedEntry.updated_at || "—"}`;
+      $("content").value = selectedEntry.content ?? "";
+      $("members").value = JSON.stringify(selectedEntry.members ?? [], null, 2);
+      $("weight").value = selectedEntry.weight ?? 0;
+      $("entry-status").value = selectedEntry.status ?? "active";
+      $("sources").textContent = JSON.stringify(data.sources ?? selectedEntry.sources ?? [], null, 2);
+      $("claims-status").textContent = selectedEntry.claims == null ? "旧记忆：尚无逐条原文证据，原有来源仍保留。" : selectedEntry.claims_review_required ? "手工修改后待核对：以下证据对应修改前的陈述。" : selectedEntry.evidence_status === "partial" ? "部分陈述有原文引用；旧记忆部分尚未重新核对。发言者由Journal绑定，解释仍可能有误。" : "发言者由程序依据Journal绑定；引句已核对原文。陈述的解释仍可能有误。";
+      $("claims").textContent = selectedEntry.claims == null ? "" : JSON.stringify(selectedEntry.claims, null, 2);
+      $("revisions").textContent = JSON.stringify(data.revisions ?? [], null, 2);
+      $("detail").scrollIntoView({behavior: "smooth", block: "start"});
+    } catch (error) { say(error.message || "无法读取该记忆。", "error"); }
+  }
+  $("reload").addEventListener("click", loadStatus);
+  $("cancel").addEventListener("click", async () => {
+    const group = groups.find((item) => item.key === groupKey());
+    if (!group?.progress?.active) return;
+    try { await call("cancel", {group_key: group.key, run_id: group.progress.run_id}); say("当前整理已取消，已提交的批次保持。", "ok"); await loadStatus({automatic: true, reloadEntries: false}); }
+    catch (error) { say(error.message || "取消请求失败。", "error"); }
+  });
+  $("search").addEventListener("click", () => { offset = 0; loadEntries(); });
+  $("query").addEventListener("keydown", (event) => { if (event.key === "Enter") { offset = 0; loadEntries(); } });
+  $("previous").addEventListener("click", () => { offset = Math.max(0, offset - limit); loadEntries(); });
+  $("next").addEventListener("click", () => { offset += limit; loadEntries(); });
+  $("group").addEventListener("change", (event) => { selectedGroup = event.target.value; incrementalDirty = false; offset = 0; selectedEntry = null; detailRequest++; $("detail").hidden = true; renderStatus(); loadEntries(); });
+  for (const id of ["incremental-enabled", "incremental-min", "incremental-wait"]) $(id).addEventListener("input", () => { incrementalDirty = true; });
+  $("incremental-save").addEventListener("click", async () => {
+    const key = groupKey(); if (!key || incrementalRevision == null) return;
+    try {
+      await call("configure_incremental", {group_key: key, expected_revision: incrementalRevision,
+        enabled: $("incremental-enabled").value === "true", min_messages: Number($("incremental-min").value), max_wait_seconds: Number($("incremental-wait").value)});
+      if (key !== groupKey()) return;
+      incrementalDirty = false; say("增量设置已持久保存", "ok"); await loadStatus({automatic: true});
+    } catch (error) { say(error.message || "增量设置保存失败，请刷新后核对。", "error"); }
+  });
+  $("incremental-retry").addEventListener("click", async () => {
+    const group = groups.find((item) => item.key === groupKey()); if (!group?.incremental?.blocked) return;
+    try {
+      await call("retry_incremental", {group_key: group.key, expected_revision: group.incremental.revision});
+      say("已请求重试未完成范围，结果将显示在整理状态中。", "ok"); await loadStatus({automatic: true});
+    } catch (error) { say(error.message || "重试请求失败，请刷新后核对。", "error"); }
+  });
+  $("toggle").addEventListener("click", async () => {
+    const group = groups.find((item) => item.key === groupKey()); if (!group) return;
+    try { await call("enable", {group_key: group.key, enabled: !group.enabled, expected_revision: group.revision}); say("群记忆状态已更新", "ok"); await loadStatus(); }
+    catch (error) { say(error.message || "状态更新失败。", "error"); }
+  });
+  $("save").addEventListener("click", async () => {
+    if (!selectedEntry) return;
+    try {
+      const members = JSON.parse($("members").value);
+      if (!Array.isArray(members)) throw new Error("成员标识必须是 JSON 数组。");
+      await call("edit", {group_key: groupKey(), id: selectedEntry.id, expected_revision: selectedRevision,
+        content: $("content").value, members, weight: Number($("weight").value), status: $("entry-status").value});
+      say("记忆已保存", "ok"); await loadDetail(selectedEntry.id); await loadEntries();
+    } catch (error) { say(error.message || "保存失败，请重新加载后核对。", "error"); }
+  });
+  $("export").addEventListener("click", async () => {
+    if (!groupKey()) return;
+    try {
+      const result = await call("export", {group_key: groupKey()});
+      const blob = new Blob([JSON.stringify(result.data ?? result, null, 2)], {type: "application/json"});
+      const url = URL.createObjectURL(blob), anchor = document.createElement("a");
+      anchor.href = url; anchor.download = `group-memory-${Date.now()}.json`; anchor.click(); URL.revokeObjectURL(url);
+      say("导出文件已生成", "ok");
+    } catch (error) { say(error.message || "导出失败。", "error"); }
+  });
+  $("clear").addEventListener("click", async () => {
+    const group = groups.find((item) => item.key === groupKey()); if (!group) return;
+    if (!window.confirm(`将清理“${group.label || group.key}”的全部记忆。Journal 原始消息不会被删除。确定继续吗？`)) return;
+    try { await call("clear", {group_key: group.key, expected_revision: group.revision}); selectedEntry = null; $("detail").hidden = true; say("本群记忆已清理", "ok"); await loadStatus(); }
+    catch (error) { say(error.message || "清理失败，请刷新后核对。", "error"); }
+  });
+  // AstrBot appends its blocking bridge SDK after this inline script.
+  // DOMContentLoaded runs after that SDK has attached; call() then awaits its context.
+  window.addEventListener("DOMContentLoaded", () => {
+    loadStatus({automatic: false});
+    window.setInterval(() => loadStatus({automatic: true, reloadEntries: false}), 3000);
+  }, {once: true});
+</script>
+</body>
+</html>

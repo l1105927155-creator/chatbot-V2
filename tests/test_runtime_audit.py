@@ -92,6 +92,17 @@ def test_audit_is_bounded_private_and_storage_failure_does_not_change_sends(tmp_
     assert store.write_errors == 2
 
 
+def test_memory_tools_keep_names_without_logging_query_or_sources(tmp_path):
+    store = AuditStore(tmp_path / "audit")
+    trace = store.trace(Conversation("qq", "1", "group:3"), "incoming", "chat")
+    for name in ("mcp__astrbot__memory_search", "mcp__astrbot__memory_sources"):
+        trace.emit("tool/start", tool=name, query="PRIVATE_MEMORY_QUERY", source="PRIVATE_SOURCE")
+    rows = list(store.rows())
+    assert [row["tool"] for row in rows] == ["mcp__astrbot__memory_search", "mcp__astrbot__memory_sources"]
+    assert "PRIVATE_MEMORY_QUERY" not in json.dumps(rows)
+    assert "PRIVATE_SOURCE" not in json.dumps(rows)
+
+
 def test_receipts_require_exact_canonical_outbound_identity(tmp_path):
     store = AuditStore(tmp_path / "audit")
     journal = JournalStore(tmp_path / "journal.sqlite3")

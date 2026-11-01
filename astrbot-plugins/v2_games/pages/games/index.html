@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>V2 小游戏与排行榜</title>
+  <style>
+    :root { color-scheme: light dark; font: 14px system-ui, sans-serif; }
+    body { margin: 0; padding: 22px; background: Canvas; color: CanvasText; }
+    main { max-width: 1100px; margin: auto; }
+    header, .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    header { justify-content: space-between; }
+    section { border: 1px solid color-mix(in srgb, CanvasText 18%, transparent); border-radius: 8px; padding: 14px; margin: 14px 0; }
+    h2 { margin: 0 0 10px; font-size: 17px; }
+    button, input, select { font: inherit; padding: 7px 9px; }
+    button { cursor: pointer; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid color-mix(in srgb, CanvasText 12%, transparent); }
+    th { font-weight: 600; opacity: .8; }
+    .muted { opacity: .7; } .error { color: #d33; } .ok { color: #27843b; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+    .card { border: 1px solid color-mix(in srgb, CanvasText 14%, transparent); border-radius: 6px; padding: 10px; }
+    .card strong { display: block; font-size: 18px; margin-top: 4px; }
+    code { overflow-wrap: anywhere; }
+    .table-wrap { overflow-x: auto; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>V2 小游戏与排行榜</h1>
+      <div id="notice" class="muted" role="status">正在读取…</div>
+    </div>
+    <button id="reload">刷新</button>
+  </header>
+
+  <section>
+    <h2>服务状态</h2>
+    <div id="status" class="grid"></div>
+    <p class="muted">游戏网页只监听 127.0.0.1；公网入口由 Tailscale Funnel/Serve 指向该端口。公开页不显示完整 QQ。</p>
+  </section>
+
+  <section>
+    <h2>群入口</h2>
+    <div id="groups"></div>
+  </section>
+
+  <section>
+    <h2>排行榜</h2>
+    <div class="row">
+      <label>群 <select id="group"></select></label>
+      <label>周期 <select id="period"><option value="all">总榜</option><option value="week">周榜</option></select></label>
+      <label>类型 <select id="kind"><option value="all">全部</option><option value="human">人类</option><option value="bot">Bot</option></select></label>
+      <button id="load-board">刷新排行榜</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>排名</th><th>群</th><th>QQ</th><th>类型</th><th>分数</th><th>最大块</th><th>时间</th></tr></thead>
+        <tbody id="board"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>最近对局</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>时间</th><th>群</th><th>QQ</th><th>类型</th><th>分数</th><th>最大块</th><th>状态</th><th>来源</th></tr></thead>
+        <tbody id="runs"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+<script>
+  const $ = (id) => document.getElementById(id);
+  const esc = (value) => String(value ?? "—").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+  function say(text, kind = "muted") { $("notice").textContent = text; $("notice").className = kind; }
+  function time(value) { return value ? new Date(Number(value) * 1000).toLocaleString("zh-CN", { hour12: false }) : "—"; }
+  async function call(action, fields = {}) {
+    const bridge = window.AstrBotPluginPage;
+    if (!bridge || typeof bridge.apiPost !== "function") throw new Error("页面接口尚未就绪，请从 AstrBot 控制台重新打开。");
+    await bridge.ready();
+    const result = await bridge.apiPost("api", {action, ...fields});
+    if (result?.status === "error") throw new Error(result.message || "操作未完成");
+    return result?.data ?? result;
+  }
+  function renderStatus(data) {
+    const web = data.web || {};
+    $("status").innerHTML = [
+      ["网页服务", web.running ? "运行中" : (web.error ? "启动失败：" + web.error : "未启用")],
+      ["监听端口", web.port || "—"],
+      ["公开地址", data.public_base_url || "未配置"],
+      ["群链接", data.groups?.length ?? 0],
+      ["对局总数", data.runs_total ?? 0],
+      ["进行中", data.runs_active ?? 0],
+      ["已完成", data.runs_finished ?? 0],
+    ].map(([label, value]) => `<div class="card"><span class="muted">${esc(label)}</span><strong>${esc(value)}</strong></div>`).join("");
+  }
+  function renderGroups(data) {
+    const groups = data.groups || [];
+    const select = $("group");
+    const current = select.value;
+    select.innerHTML = '<option value="">全部群</option>' + groups.map((group) =>
+      `<option value="${esc(group.group_id)}">${esc(group.group_id)}</option>`).join("");
+    if ([...select.options].some((option) => option.value === current)) select.value = current;
+    $("groups").innerHTML = groups.length ? groups.map((group) =>
+      `<div class="card"><strong>群 ${esc(group.group_id)}</strong><div class="muted"><code>${esc(group.link || "未配置 public_base_url")}</code></div></div>`).join("") : '<div class="muted">还没有群生成过入口。</div>';
+  }
+  function renderBoard(data) {
+    const rows = data.rows || [];
+    $("board").innerHTML = rows.length ? rows.map((row, index) =>
+      `<tr><td>${index + 1}</td><td>${esc(row.group_id)}</td><td>${esc(row.qq)}</td><td>${esc(row.kind)}</td><td>${esc(row.score)}</td><td>${esc(row.max_tile)}</td><td>${esc(time(row.ended_at))}</td></tr>`).join("")
+      : '<tr><td colspan="7" class="muted">暂无成绩。</td></tr>';
+  }
+  function renderRuns(data) {
+    const rows = data.rows || [];
+    $("runs").innerHTML = rows.length ? rows.map((row) =>
+      `<tr><td>${esc(time(row.ended_at || row.started_at))}</td><td>${esc(row.group_id)}</td><td>${esc(row.qq)}</td><td>${esc(row.kind)}</td><td>${esc(row.score)}</td><td>${esc(row.max_tile)}</td><td>${esc(row.status)}</td><td>${esc(row.source)}</td></tr>`).join("")
+      : '<tr><td colspan="8" class="muted">暂无对局。</td></tr>';
+  }
+  async function loadStatus() {
+    const data = await call("status");
+    renderStatus(data);
+    return data;
+  }
+  async function loadGroups() {
+    const data = await call("groups");
+    renderGroups(data);
+  }
+  async function loadBoard() {
+    const data = await call("leaderboard", {
+      group_id: $("group").value,
+      period: $("period").value,
+      kind: $("kind").value,
+      limit: 50,
+    });
+    renderBoard(data);
+  }
+  async function loadRuns() {
+    renderRuns(await call("runs", {limit: 50}));
+  }
+  async function reloadAll() {
+    try {
+      say("正在读取…");
+      await loadStatus();
+      await loadGroups();
+      await loadBoard();
+      await loadRuns();
+      say("已读取", "ok");
+    } catch (error) {
+      say("读取失败：" + error.message, "error");
+    }
+  }
+  $("reload").addEventListener("click", reloadAll);
+  $("load-board").addEventListener("click", () => loadBoard().catch((error) => say("排行榜读取失败：" + error.message, "error")));
+  if (document.readyState === "complete") reloadAll();
+  else window.addEventListener("load", reloadAll);
+  // AstrBot appends its blocking bridge SDK after this inline script.
+</script>
+</body>
+</html>

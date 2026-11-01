@@ -12,19 +12,23 @@ POLICY = ROOT / "dsh/plugins/agent-profile/group-write-policy.mjs"
 NODE = shutil.which("node")
 
 
-def _node_policy(state_file: Path, source: dict[str, str], owners: list[dict[str, str]]) -> bool:
+def _node_policy(state_file: Path, source: dict[str, str], owners: list[dict[str, str]],
+                 demotions: list[dict[str, str]] | None = None) -> bool:
     script = (
         f"import {{canWriteGroupWorkspace}} from {json.dumps(POLICY.as_uri())};"
         "const source=JSON.parse(process.env.TEST_SOURCE);"
         "const owners=process.env.TEST_OWNERS;"
+        "const demotions=process.env.TEST_DEMOTIONS;"
         "process.stdout.write(String(canWriteGroupWorkspace(source,{"
-        "stateFile:process.env.V2_CONSOLE_STATE_FILE,ownersRaw:owners})));"
+        "stateFile:process.env.V2_CONSOLE_STATE_FILE,ownersRaw:owners,"
+        "ownerWriteDemotionsRaw:demotions})));"
     )
     result = subprocess.run(
         [NODE or "node", "--input-type=module", "-e", script],
         text=True, capture_output=True, check=True,
         env={**os.environ, "V2_CONSOLE_STATE_FILE": str(state_file),
-             "TEST_SOURCE": json.dumps(source), "TEST_OWNERS": json.dumps(owners)},
+             "TEST_SOURCE": json.dumps(source), "TEST_OWNERS": json.dumps(owners),
+             "TEST_DEMOTIONS": json.dumps(demotions or [])},
     )
     return result.stdout == "true"
 
@@ -65,6 +69,36 @@ def test_only_exact_deployed_owner_bypasses_group_editor_list(tmp_path):
     assert _node_policy(state_file, source, owners) is True
     owners[0]["bot_id"] = "other-bot"
     assert _node_policy(state_file, source, owners) is False
+
+
+def test_owner_write_demotion_is_exactly_scoped_to_one_group_and_user(tmp_path):
+    state_file = tmp_path / "private" / "console.json"
+    _state(state_file, [])
+    owners = [{"platform_id": "qq", "bot_id": "bot-1", "user_id": "90000"}]
+    demotions = [{"platform_id": "qq", "bot_id": "bot-1", "group_id": "123",
+                  "user_id": "90000"}]
+    target = {"platform_id": "qq", "bot_id": "bot-1", "conversation_key": "group:123",
+              "requester_id": "90000"}
+    other_group = {**target, "conversation_key": "group:456"}
+    other_user = {**target, "requester_id": "90001"}
+    other_bot = {**target, "bot_id": "bot-2"}
+    assert _node_policy(state_file, target, owners, demotions) is False
+    assert _node_policy(state_file, other_group, owners, demotions) is True
+    assert _node_policy(state_file, other_user, owners, demotions) is False
+    assert _node_policy(state_file, other_bot, owners, demotions) is False
+    # Removing the temporary row restores the normal exact Owner bypass.
+    assert _node_policy(state_file, target, owners, []) is True
+
+
+def test_temporary_owner_demotion_overrides_editor_membership(tmp_path):
+    state_file = tmp_path / "private" / "console.json"
+    _state(state_file, ["90000"])
+    source = {"platform_id": "qq", "bot_id": "bot-1", "conversation_key": "group:123",
+              "requester_id": "90000"}
+    owners = [{"platform_id": "qq", "bot_id": "bot-1", "user_id": "90000"}]
+    demotions = [{"platform_id": "qq", "bot_id": "bot-1", "group_id": "123",
+                  "user_id": "90000"}]
+    assert _node_policy(state_file, source, owners, demotions) is False
 
 
 def test_background_child_rechecks_latest_policy_for_inherited_requester(tmp_path):

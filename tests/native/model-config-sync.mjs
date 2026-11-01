@@ -64,18 +64,26 @@ const loader = new Map([
   ['llm-deepseek-api-key', deepseekEntry],
 ])
 let adapterUpdateEvents = 0
+let dynamic = []
+let failDynamic = false
+let duringCatalog
+let topologyListener
 const ctx = {
-  events: { dispatch(_mode, args) { return args[0] === 'llm/adapters-updated' ? [() => { adapterUpdateEvents += 1 }] : [] } },
+  on(event, listener) { assert.equal(event, 'llm/adapters-updated'); topologyListener = listener; return () => { topologyListener = undefined } },
+  events: { dispatch(_mode, args) { return args[0] === 'llm/adapters-updated' ? [() => { adapterUpdateEvents += 1 }, ...(topologyListener ? [topologyListener] : [])] : [] } },
   logger: { warn() {}, error() {} },
   loader: { entries() { return loader.values() } },
   llm: {
     listProviders() {
       return [
         { id: 'deepseek-official', name: 'DeepSeek' },
+        ...(dynamic.length ? [{ id: 'openai-codex' }] : []),
         ...Object.keys(piEntry.options.config.providers).map(id => ({ id, name: id })),
       ]
     },
     async listModels(provider) {
+      if (duringCatalog) { const run = duringCatalog; duringCatalog = undefined; run() }
+      if (provider === 'openai-codex') { if (failDynamic) throw new Error('transient'); return dynamic }
       if (provider === 'deepseek-official') return deepseekEntry.options.config.models.map(model => ({ provider, id: model.id, name: model.name ?? model.id }))
       const config = piEntry.options.config.providers[provider]
       if (!config) throw new Error('route missing')
@@ -150,7 +158,40 @@ try {
   const recoveredStatus = JSON.parse(await readFile(status, 'utf8'))
   assert.equal(recoveredStatus.ok, true, 'restoring byte-identical last-good content clears a failed marker')
   assert.equal(recoveredStatus.source_sha256, readdedStatus.source_sha256)
+  const sourceBeforeDynamic = await readFile(profile, 'utf8')
+  const configBeforeDynamic = JSON.stringify(piEntry.options.config)
+  const notificationsBeforeDynamic = adapterUpdateEvents
+  dynamic = [{ id: 'subscription-one', name: 'Subscription One' }]
+  topologyListener()
+  await sync.flush()
+  const dynamicStatus = JSON.parse(await readFile(status, 'utf8'))
+  assert.equal(dynamicStatus.source_sha256, recoveredStatus.source_sha256)
+  assert.notEqual(dynamicStatus.catalog_sha256, recoveredStatus.catalog_sha256)
+  assert.deepEqual(dynamicStatus.catalog.find(row => row.provider === 'openai-codex').models, ['subscription-one'])
+  assert.equal(await readFile(profile, 'utf8'), sourceBeforeDynamic)
+  assert.equal(JSON.stringify(piEntry.options.config), configBeforeDynamic)
+  assert.equal(adapterUpdateEvents, notificationsBeforeDynamic, 'dynamic publication never reapplies or broadcasts recursively')
+  failDynamic = true
+  topologyListener()
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal(JSON.parse(await readFile(status, 'utf8')).ok, false)
+  failDynamic = false
+  topologyListener()
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal(JSON.parse(await readFile(status, 'utf8')).ok, true, 'topology event recovers after a transient directory failure')
+  dynamic = []
+  topologyListener()
+  await sync.flush()
+  assert.ok(!JSON.parse(await readFile(status, 'utf8')).catalog.some(row => row.provider === 'openai-codex'))
   await sync.dispose()
+  duringCatalog = () => {
+    dynamic = [{ id: 'arrived-during-bootstrap', name: 'During Bootstrap' }]
+    topologyListener()
+  }
+  const bootstrapped = await installModelConfigSync(ctx, { profilePath: profile, statusPath: status })
+  assert.deepEqual(JSON.parse(await readFile(status, 'utf8')).catalog.find(row => row.provider === 'openai-codex').models,
+    ['arrived-during-bootstrap'], 'registration during initial enumeration cannot be lost')
+  await bootstrapped.dispose()
   console.log(JSON.stringify({
     safeProfileParsing: true,
     unrelatedEntriesIgnored: true,

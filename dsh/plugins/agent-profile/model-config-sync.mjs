@@ -224,6 +224,30 @@ export async function installModelConfigSync(ctx, { profilePath, statusPath, epo
     }
   }
 
+  async function collectCatalog(changes) {
+    const catalog = []
+    const expected = expectedCatalogModels(changes)
+    const providers = ctx.llm.listProviders()
+    if (!Array.isArray(providers) || providers.length > 1000) throw new Error('catalog-not-ready')
+    let totalModels = 0
+    for (const { id: provider } of [...providers].sort((a, b) => a.id.localeCompare(b.id))) {
+      if (typeof provider !== 'string' || !provider || provider.length > 128) throw new Error('catalog-not-ready')
+      const models = await ctx.llm.listModels(provider)
+      if (!Array.isArray(models) || models.length > 1000 || (totalModels += models.length) > 20000) throw new Error('catalog-not-ready')
+      const ids = models.map(model => model.id)
+      if (expected.has(provider) && JSON.stringify(ids) !== JSON.stringify(expected.get(provider))) {
+        throw new Error('catalog-not-ready')
+      }
+      catalog.push({ provider, models: ids, names: models.map(model => model.name ?? model.id) })
+    }
+    return catalog
+  }
+
+  async function publishCatalog(candidate) {
+    const catalog_sha256 = createHash('sha256').update(JSON.stringify(candidate.catalog)).digest('hex')
+    await atomicStatus(statusPath, { ok: true, source_sha256: candidate.hash, epoch, catalog: candidate.catalog, catalog_sha256 })
+  }
+
   async function applyCandidate(candidate) {
     const entries = new Map()
     const previous = new Map()
@@ -266,22 +290,7 @@ export async function installModelConfigSync(ctx, { profilePath, statusPath, epo
         applied.push(id)
       }
       await notifyAdaptersUpdated(ctx)
-      const catalog = []
-      const expected = expectedCatalogModels(candidate.changes)
-      const providers = ctx.llm.listProviders()
-      if (!Array.isArray(providers) || providers.length > 1000) throw new Error('catalog-not-ready')
-      let totalModels = 0
-      for (const { id: provider } of [...providers].sort((a, b) => a.id.localeCompare(b.id))) {
-        if (typeof provider !== 'string' || !provider || provider.length > 128) throw new Error('catalog-not-ready')
-        const models = await ctx.llm.listModels(provider)
-        if (!Array.isArray(models) || models.length > 1000 || (totalModels += models.length) > 20000) throw new Error('catalog-not-ready')
-        const ids = models.map(model => model.id)
-        if (expected.has(provider) && JSON.stringify(ids) !== JSON.stringify(expected.get(provider))) {
-          throw new Error('catalog-not-ready')
-        }
-        catalog.push({ provider, models: ids, names: models.map(model => model.name ?? model.id) })
-      }
-      candidate.catalog = catalog
+      candidate.catalog = await collectCatalog(candidate.changes)
     } catch (error) {
       for (const id of applied.reverse()) {
         try { await entries.get(id).update({ config: previous.get(id) }) } catch { /* keep the last status false; do not leak details */ }
@@ -298,7 +307,7 @@ export async function installModelConfigSync(ctx, { profilePath, statusPath, epo
       if (candidate.hash === currentHash && lastStatusOk) return
       await applyCandidate(candidate)
       currentHash = candidate.hash
-      await atomicStatus(statusPath, { ok: true, source_sha256: candidate.hash, epoch, catalog: candidate.catalog })
+      await publishCatalog(candidate)
       lastStatusOk = true
     } catch (error) {
       let failedHash = null
@@ -309,7 +318,33 @@ export async function installModelConfigSync(ctx, { profilePath, statusPath, epo
     }
   }
 
-  await syncOnce()
+  // Plugin-owned directories can change without touching the Web YAML. Publish
+  // native topology independently; never reapply configuration or emit recursively.
+  const offAdapters = ctx.on?.('llm/adapters-updated', () => {
+    queued = queued.then(async () => {
+      if (stopped) return
+      const candidate = await loadCandidate()
+      if (candidate.hash !== currentHash) return
+      try {
+        candidate.catalog = await collectCatalog(candidate.changes)
+        await publishCatalog(candidate)
+        lastStatusOk = true
+      } catch {
+        lastStatusOk = false
+        await atomicStatus(statusPath, { ok: false, source_sha256: candidate.hash, epoch, error: 'catalog-not-ready' })
+      }
+    }).catch(() => {})
+  })
+
+  // Subscribe before bootstrapping, and serialize bootstrap with topology
+  // refreshes. A plugin can finish registering while the initial catalog is
+  // being enumerated; that notification must run after this publication.
+  const initial = queued = queued.then(syncOnce)
+  try { await initial; await queued } catch (error) {
+    stopped = true
+    offAdapters?.()
+    throw error
+  }
 
   const parent = dirname(sourcePath)
   watcher = await watch(parent, { persistent: false }, (_event, filename) => {
@@ -324,11 +359,12 @@ export async function installModelConfigSync(ctx, { profilePath, statusPath, epo
 
   return {
     get sourceSha256() { return currentHash },
-    async flush() { await queued; await syncOnce() },
+    async flush() { queued = queued.then(syncOnce, syncOnce); await queued },
     async dispose() {
       stopped = true
       clearTimeout(timer)
       watcher?.close()
+      offAdapters?.()
       await queued
     },
   }

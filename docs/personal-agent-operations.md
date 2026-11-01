@@ -160,7 +160,7 @@ systemctl --user start chatbot-v2-agent.service
 
 ## QQ 附件与文件发送
 
-文件任务中，DSH 通过 `qq_file_receive(journal_id, segment_index)` 将当前会话 Journal 中的 file/image/record/video 按原始字节保存，通过 `qq_file_send(path, name?)` 经 AstrBot 发回当前会话。模型无需将文件转换为txt；文件工具不把附件二进制塞入文本提示词。工具返回路径、大小及SHA256，文件提交不等同于QQ客户端收件确认，失败不自动重发。
+文件任务中，DSH 通过 `qq_file_receive(journal_id, segment_index)` 将当前会话 Journal 中的 file/image/record/video 按原始字节保存，通过 `qq_file_send(path, name?)` 经 AstrBot 发回当前会话。新生成的 Markdown 或其它文本可直接用 `qq_file_send(content, name?)` 交付；宿主仅在私有发送快照中临时写入，不修改群工作区，所以普通成员也可请求生成文本附件。`path` 与 `content` 必须且只能提供一个。模型无需将二进制转换为文本；文件工具不把附件二进制塞入文本提示词。工具返回路径或文件名、大小及SHA256，文件提交不等同于QQ客户端收件确认，失败不自动重发。
 
 群附件在本群已有 `/workspace/attachments/`，占用该群1GiB卷；Owner/普通私聊附件保存在 `plugin_data/v2_dsh_router/attachments/<会话hash>/attachments/`，已纳入现有完整备份。Owner接收结果返回绝对路径，可用原生工具整理到任务指定位置；原生执行cwd不变。safe-chat只能保管、返回本会话已收到的附件，累计容量1GiB，不开放宿主文件或Shell。
 
@@ -216,3 +216,8 @@ DSH通过 `qq_send_origin` 为独立消息选择原生At/引用；`qq_prepare_re
 Owner 使用 `/v2agent status` 查看原因；核对后执行 `/v2agent recover <编号>` 跳过这次失败输入、解除暂停，不会重跑它。恢复后若要从干净上下文开始，再执行 `/new`；人格、工作区与长期文件保留。普通模型输入拒绝不必一律重置，下一轮会先卸载旧图片。
 
 状态与恢复回复由程序生成，不要求模型可用；已暂停会话不拦截独立 AstrBot 命令/插件。DSH 传输仍损坏时 recover 不会宣称恢复成功。整个 AstrBot、QQ 连接或宿主不可用时，无法保证即时 QQ 报错；现有 systemd `Restart=on-failure` 与启动健康检查承担进程恢复，`health --systemd --ready` 用于外部核验。没有部署独立通知通道或死锁 watchdog；进程尚存但健康检查失败时按运维检查后受控重启。
+
+
+## QQ 发送保护（2026-10-26）
+
+实际 OneBot 客户端的普通消息、转发和文件发送串行执行，每次发送前随机等待1.5～3.5秒。明确账号风控/冻结或发送频率拒绝后冷却300秒，期间新发送立即失败；不自动重试旧消息。群禁言、网络错误与未知数字错误码不触发账号冷却。日志搜索 `V2 QQ platform send restriction detected`；冷却按客户端保存在进程内，重启清除。平台成功回执不等同于接收者可见，无法据此保证检测所有风控。见[阶段与边界](phases/qq-send-guard-2026-10-26.md)。

@@ -6,6 +6,8 @@ import os
 import asyncio
 import importlib.util
 import hashlib
+import json
+import tempfile
 import sys
 from sys import maxsize
 from pathlib import Path
@@ -16,7 +18,7 @@ from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.core.star.filter.command import GreedyStr
 
 from .dsh_client import DshTurnCancelled, start_client
-from .routing import should_route
+from .routing import addresses_bot, should_route
 from .service import ChatService, PendingTurnError, RecoveryError, ResetError, FinalReplyDeliveryError, ModelTurnError, AgentDisabledError
 from .delivery_error import notify_delivery_error
 from .turn_error import notify_turn_error
@@ -32,6 +34,7 @@ from .trust_domain import Owner, classify, parse_owners
 from .persona_state import PersonaStateStore
 from .scene_state import SceneStateStore
 from .runtime_audit import AuditStore, OneBotAudit, CURRENT_TRACE
+from .blacklist_gate import SilenceGate
 
 
 def _private_shell_environment() -> dict[str, str]:
@@ -87,7 +90,10 @@ class V2DshRouter(star.Star):
         journal_dir = Path(star.StarTools.get_data_dir("v2_journal"))
         own_dir = Path(star.StarTools.get_data_dir("v2_dsh_router"))
         self.audit = AuditStore(own_dir / "audit", self.logger)
+        self._group_maintenance_path = own_dir / "group-maintenance.json"
+        self._group_maintenance_lock = asyncio.Lock()
         self.onebot_audit = OneBotAudit()
+        self.bind_send_guard_clients()
         self.owners = parse_owners(os.environ.get("V2_QQ_OWNERS", "[]"))
         journal = JournalStore(journal_dir / "journal.sqlite3")
         # Keep the old safe-chat mapping intact. Owner-host and each group get
@@ -96,6 +102,7 @@ class V2DshRouter(star.Star):
         owner_state = StateStore(own_dir / "state-owner-host.sqlite3") if self.owners else None
         self.mcp = McpServer(journal, logger=self.logger, health=self.health)
         self.mcp.configure_background(self._background_event)
+        self.mcp.configure_owner_group_maintenance(self._owner_group_maintenance)
         self.clients = {}
         self.services = {}
         self._group_runtimes = {}
@@ -204,7 +211,7 @@ class V2DshRouter(star.Star):
             settings = session_settings(store, conversation)
             await service.set_enabled(conversation, settings["enabled"])
 
-    def _console_accepts(self, message):
+    def _console_accepts(self, message, *, allow_disabled_owner_control=False):
         if getattr(self, "_closing", False):
             return False
         store = getattr(self, "console_store", None)
@@ -215,13 +222,276 @@ class V2DshRouter(star.Star):
             return False
         from .console_settings import session_settings
         try:
-            return session_settings(store, message.conversation)["enabled"] is True
+            enabled = session_settings(store, message.conversation)["enabled"] is True
+            return enabled or (
+                allow_disabled_owner_control
+                and Owner(message.platform_id, message.bot_id, message.actor_id) in self.owners
+            )
         except PermissionError:
             return False
+
+    def _games_capability(self, message):
+        """Resolve the optional games plugin without making routing depend on it."""
+        try:
+            metadata = self.context.get_registered_star("v2_games")
+            plugin = getattr(metadata, "star_cls", None) if metadata else None
+            if plugin is None or not callable(getattr(plugin, "capability_for", None)):
+                return None
+            if callable(getattr(plugin, "ready", None)) and not plugin.ready():
+                return None
+            return plugin.capability_for(
+                message.conversation, actor_id=getattr(message, "actor_id", None))
+        except Exception as error:  # noqa: BLE001 - optional capability must fail closed
+            self.logger.warning("V2 games capability unavailable: %s", type(error).__name__)
+            return None
+
+    def _read_group_maintenance(self):
+        path = self._group_maintenance_path
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            return {"version": 1, "groups": {}}
+        if not path.is_file() or path.is_symlink() or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise PermissionError("group maintenance state is not a private owned file")
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(value, dict) or value.get("version") != 1 or not isinstance(value.get("groups"), dict):
+            raise RuntimeError("group maintenance state is invalid")
+        return value
+
+    def _write_group_maintenance(self, value):
+        path = self._group_maintenance_path
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fd, temporary = tempfile.mkstemp(prefix=".group-maintenance-", dir=path.parent)
+        try:
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                json.dump(value, stream, ensure_ascii=False, sort_keys=True)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+            directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+
+    async def _persist_group_maintenance(self, value):
+        """Keep the global read/write lock until an atomic worker write has settled."""
+        worker = asyncio.create_task(asyncio.to_thread(self._write_group_maintenance, value))
+        try:
+            await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            while not worker.done():
+                try:
+                    await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    continue
+                except BaseException:
+                    break
+            raise
+
+    async def _owner_group_maintenance(self, action, group_id, platform_id, bot_id,
+                                       owner_key, actor_id):
+        """Pause/resume one admitted group's Agent and scheduled work for maintenance."""
+        if action not in {"pause", "resume"}:
+            raise ValueError("action must be pause or resume")
+        if (not isinstance(group_id, str) or not group_id.isdigit() or len(group_id) > 32
+                or owner_key != "private:" + actor_id
+                or Owner(platform_id, bot_id, actor_id) not in self.owners):
+            raise PermissionError("request is not from the configured Owner private conversation")
+        owner_pairs = {(owner.platform_id, owner.bot_id) for owner in self.owners}
+        if len(owner_pairs) != 1 or (platform_id, bot_id) not in owner_pairs:
+            raise PermissionError("target group platform and Bot are ambiguous")
+        conversation_key = "group:" + group_id
+        if conversation_key not in self.allowed_conversations:
+            raise PermissionError("target group is not admitted")
+        matches = [(name, runtime) for name, runtime in self._group_runtimes.items()
+                   if isinstance(runtime, dict)
+                   and (runtime.get("platform_id"), runtime.get("bot_id"), runtime.get("group_id"))
+                   == (platform_id, bot_id, group_id)]
+        if len(matches) != 1 or matches[0][0] not in self.services:
+            raise PermissionError("target group runtime is unavailable or ambiguous")
+        manager = getattr(self.mcp, "task_manager", None)
+        if manager is None:
+            raise RuntimeError("workspace task manager is unavailable")
+        console_metadata = self.context.get_registered_star("v2_console")
+        console_plugin = getattr(console_metadata, "star_cls", None) if console_metadata else None
+        controller = getattr(console_plugin, "controller", None)
+        console_runtime = getattr(controller, "runtime", None)
+        if console_runtime is None or self.console_store is None:
+            raise RuntimeError("console runtime is unavailable")
+        identity = (platform_id, bot_id, conversation_key)
+        lock = self._group_maintenance_lock
+        async with lock:
+            value = await asyncio.to_thread(self._read_group_maintenance)
+            key = "\0".join(identity)
+            record = value["groups"].get(key)
+            if action == "pause":
+                if record is not None:
+                    return {"group_id": group_id, "status": "already_paused_or_interrupted",
+                            "completed": list(record.get("completed", [])),
+                            "in_progress": list(record.get("in_progress", [])),
+                            "pause_journal_id": record.get("pause_journal_id")}
+                state = self.console_store.read()
+                session_key = self.console_store.session_key(dict(zip(
+                    ("platform_id", "bot_id", "conversation_key"), identity)))
+                session = state["sessions"].get(session_key)
+                if session is None:
+                    raise RuntimeError("group console settings are unavailable")
+                settings = dict(session["settings"])
+                task_policy = await manager.dashboard("snapshot", {})
+                policy = task_policy["policy"]
+                override = next((item["enabled"] for item in policy["overrides"]
+                                 if tuple(item["identity"]) == identity), None)
+                conversation = self._conversation_type(*identity)
+                pause_journal_id = self.mcp.journal.high_watermark(conversation)
+                record = {"identity": list(identity), "before_settings": settings,
+                          "before_task_override": override,
+                          "before_task_default": policy["default_enabled"],
+                          "before_task_effective": manager.run_store.policy_enabled(identity),
+                          "pause_journal_id": pause_journal_id,
+                          "completed": [], "in_progress": [],
+                          "expected_paused_settings": {**settings, "enabled": False}}
+                value["groups"][key] = record
+                await self._persist_group_maintenance(value)
+                try:
+                    record["in_progress"].append("agent_disable")
+                    await self._persist_group_maintenance(value)
+                    if settings["enabled"] is True:
+                        await console_runtime.update(
+                            {"identity": {"platform_id": platform_id, "bot_id": bot_id,
+                                          "conversation_key": conversation_key}},
+                            {**settings, "enabled": False}, state["revision"], self.console_store)
+                    else:
+                        await self.services[matches[0][0]].set_enabled(
+                            self._conversation_type(*identity), False)
+                    record["completed"].append("agent_disabled_and_drained")
+                    if "agent_disable" in record["in_progress"]:
+                        record["in_progress"].remove("agent_disable")
+                    await self._persist_group_maintenance(value)
+                    record["in_progress"].append("workspace_task_disable")
+                    await self._persist_group_maintenance(value)
+                    await manager.dashboard("policy", {
+                        "identity": list(identity), "enabled": False,
+                        "expected_revision": policy["revision"]})
+                    record["completed"].append("workspace_tasks_disabled_and_drained")
+                    record["in_progress"].remove("workspace_task_disable")
+                    record["paused_task_revision"] = manager.run_store.policy_snapshot()["revision"]
+                    await self._persist_group_maintenance(value)
+                except BaseException as error:
+                    record["error_type"] = type(error).__name__
+                    await self._persist_group_maintenance(value)
+                    raise RuntimeError("pause incomplete; progress is saved for inspection/resume") from error
+                return {"group_id": group_id, "status": "paused",
+                        "completed": list(record["completed"]),
+                        "pause_journal_id": pause_journal_id}
+
+            if record is None:
+                raise ValueError("there is no saved maintenance pause for this group")
+            runtime_name = matches[0][0]
+            service = self.services[runtime_name]
+            if ("agent_disable" in record.get("in_progress", [])
+                    or ("agent_disabled_and_drained" not in record.get("completed", [])
+                        and record["before_settings"]["enabled"] is True)):
+                identity_key = identity
+                active = getattr(service, "_active_runs", {}).get(identity_key)
+                scheduled = getattr(service, "_scheduled_runs", {}).get(identity_key)
+                if ((active is not None and not active.done.is_set())
+                        or (scheduled is not None and not scheduled.done.is_set())):
+                    raise RuntimeError("Agent cancellation is not confirmed drained; resume stopped")
+            if ("workspace_task_disable" in record.get("in_progress", [])
+                    or "workspace_tasks_disabled_and_drained" not in record.get("completed", [])):
+                callbacks = getattr(manager, "_callback_defs", {})
+                running = any(not callback.done() and context[0] == identity
+                              for callback, context in tuple(callbacks.items()))
+                if running:
+                    raise RuntimeError("workspace task cancellation is not confirmed drained; resume stopped")
+            current_state = self.console_store.read()
+            session_key = self.console_store.session_key(dict(zip(
+                ("platform_id", "bot_id", "conversation_key"), identity)))
+            session = current_state["sessions"].get(session_key)
+            if session is None:
+                raise RuntimeError("group console settings are unavailable")
+            current_settings = session["settings"]
+            expected_settings = record["expected_paused_settings"]
+            before_settings = record["before_settings"]
+            if current_settings not in (expected_settings, before_settings):
+                raise RuntimeError("group settings changed during maintenance; resume stopped for review")
+            # A native cancellation can leave a durable uncertain turn even
+            # after the foreground worker drained. Do not restore task policy
+            # or enable the Agent until the Owner explicitly reviews/skips it.
+            if before_settings["enabled"] is True:
+                can_enable = getattr(service, "assert_can_enable", None)
+                if callable(can_enable):
+                    await can_enable(self._conversation_type(*identity))
+            policy_snapshot = await manager.dashboard("snapshot", {})
+            if policy_snapshot["policy"]["default_enabled"] != record["before_task_default"]:
+                raise RuntimeError("default task policy changed during maintenance; resume stopped for review")
+            current_override = next((item["enabled"] for item in policy_snapshot["policy"]["overrides"]
+                                     if tuple(item["identity"]) == identity), None)
+            expected_override = record["before_task_override"]
+            # Pausing always installs an explicit false override. A restored value may already
+            # equal the saved override if the operation was interrupted during resume.
+            if current_override not in (False, expected_override):
+                raise RuntimeError("group task policy changed during maintenance; resume stopped for review")
+            if current_override is False and expected_override is not False:
+                task_restore_intent = "workspace_task_policy_restore" in record.get("in_progress", [])
+                if not task_restore_intent:
+                    record["in_progress"].append("workspace_task_policy_restore")
+                    await self._persist_group_maintenance(value)
+                await manager.dashboard("policy", {
+                    "identity": list(identity), "enabled": expected_override,
+                    "expected_revision": policy_snapshot["policy"]["revision"]})
+                record["completed"].append("workspace_task_policy_restored")
+                record["in_progress"].remove("workspace_task_policy_restore")
+                await self._persist_group_maintenance(value)
+            if current_settings == expected_settings and expected_settings != before_settings:
+                agent_restore_intent = "agent_state_restore" in record.get("in_progress", [])
+                if not agent_restore_intent:
+                    record["in_progress"].append("agent_state_restore")
+                    await self._persist_group_maintenance(value)
+                latest = self.console_store.read()
+                latest_session = latest["sessions"].get(session_key)
+                if (latest_session is None
+                        or latest_session.get("settings") != expected_settings):
+                    raise RuntimeError("group settings changed during resume; Agent restore stopped for review")
+                await console_runtime.update(
+                    {"identity": {"platform_id": platform_id, "bot_id": bot_id,
+                                  "conversation_key": conversation_key}},
+                    before_settings, latest["revision"], self.console_store)
+                record["completed"].append("agent_state_restored")
+                record["in_progress"].remove("agent_state_restore")
+                await self._persist_group_maintenance(value)
+            resumed = self.mcp.journal.high_watermark(self._conversation_type(*identity))
+            del value["groups"][key]
+            await self._persist_group_maintenance(value)
+            return {"group_id": group_id, "status": "resumed",
+                    "completed": list(record["completed"]),
+                    "pause_journal_id": record["pause_journal_id"],
+                    "resume_journal_id": resumed,
+                    "disabled_period_inbound_replayed": False}
+
+    @filter.on_platform_loaded()
+    async def bind_new_send_guard_platform(self):
+        self.bind_send_guard_clients()
+
+    def bind_send_guard_clients(self):
+        observer = getattr(self, 'onebot_audit', None)
+        if observer is None or self._closing:
+            return
+        for platform in self.context.platform_manager.get_insts():
+            if platform.meta().name == 'aiocqhttp':
+                observer.bind(platform.get_client())
 
     @filter.on_astrbot_loaded()
     async def install_agent_commands(self):
         """Bind user commands after all native handlers have been registered."""
+        self.bind_send_guard_clients()
         from .command_surface import install_command_surface
         self._command_surface = await install_command_surface(previous=self._command_surface)
         self._commands_ready = True
@@ -242,6 +512,11 @@ class V2DshRouter(star.Star):
     async def reset_chat(self, event: AstrMessageEvent, args: GreedyStr = ""):
         """开始干净的 DSH 对话，与 /new 相同。"""
         await self._agent_command(event, "reset", args)
+
+    @filter.command("memory", alias={"整理记忆"})
+    async def consolidate_memory(self, event: AstrMessageEvent, args: GreedyStr = ""):
+        """主动整理本群记忆，保留当前对话上下文。"""
+        await self._agent_command(event, "memory", args)
 
     @filter.command("stop")
     async def stop_chat(self, event: AstrMessageEvent, args: GreedyStr = ""):
@@ -344,11 +619,55 @@ class V2DshRouter(star.Star):
                 }
                 await reply(notices[action])
                 return
+            if action == "memory":
+                if not message.conversation_key.startswith("group:"):
+                    await reply("记忆整理命令仅用于已启用记忆的群聊。")
+                    return
+                if Owner(message.platform_id, message.bot_id, message.actor_id) not in self.owners:
+                    await reply("仅 Bot Owner 可以主动整理本群记忆。")
+                    return
+                if args.strip():
+                    await reply("用法：/memory 或 /整理记忆（无需参数）")
+                    return
+                manager = getattr(self, "memory_manager", None)
+                backend = manager.for_conversation(message.conversation) if manager is not None else None
+                if backend is None:
+                    await reply("本群记忆服务尚未启用或暂不可用，未执行整理。")
+                    return
+                rows = await asyncio.to_thread(self.mcp.journal.by_message_id,
+                                               message.platform_id, message.bot_id, message.message_id)
+                command = next((row for row in rows if row.message.conversation == message.conversation
+                                and row.message.direction == "inbound"
+                                and row.message.actor_id == message.actor_id), None)
+                if command is None:
+                    await reply("未找到本条命令的规范消息记录，未执行整理；上下文保留。")
+                    return
+                try:
+                    async with backend.guard(message.conversation):
+                        cursor = await backend.cursor(message.conversation)
+                        if command.journal_id > cursor:
+                            result = await backend.consolidate(message.conversation,
+                                after_journal_id=cursor, through_journal_id=command.journal_id)
+                            if result is not True:
+                                raise RuntimeError("memory consolidation did not complete")
+                except Exception as error:
+                    self.logger.warning("V2 manual memory consolidation failed: %s", type(error).__name__)
+                    await reply("记忆整理失败，当前对话上下文未重置；本次不自动重试。")
+                else:
+                    await reply("记忆整理完成，当前对话上下文已保留。")
+                return
             if (message.conversation_key.startswith("group:") and
                     Owner(message.platform_id, message.bot_id, message.actor_id) not in self.owners):
                 await reply("群聊共享一个 Agent 会话，仅 Bot Owner 可以使用 /new、/reset、/stop。")
                 return
-            if args.strip():
+            skip_memory = False
+            if action in {"new", "reset"}:
+                argument = args.strip()
+                if argument not in {"", "skip_mem", "跳过记忆"}:
+                    await reply(f"用法：/{action} [skip_mem 或 跳过记忆]")
+                    return
+                skip_memory = bool(argument)
+            elif args.strip():
                 await reply("用法：/" + action)
                 return
             service = self._cached_service_for(message)
@@ -359,7 +678,8 @@ class V2DshRouter(star.Star):
                 service = await self._service_for(message)
             if action in {"new", "reset"}:
                 await service.reset_conversation(message.conversation, message.message_id,
-                                                 get_group=event.get_group, barrier=barrier)
+                                                 get_group=event.get_group, barrier=barrier,
+                                                 skip_memory=skip_memory)
                 await reply("已开始新的 Agent 对话，历史检索从本次重置后开始。人格、场景和工作区文件保留。")
             elif action == "stop":
                 accepted = await service.cancel(message.conversation)
@@ -375,6 +695,8 @@ class V2DshRouter(star.Star):
             self.logger.exception("V2 Agent command %s failed", action)
             await reply("模型目录同步或切换尚未完成，请检查 DSH Web 模型设置或运行日志，再查询 /provider。"
                         if action == 'provider' else
+                        "记忆命令回执未能送达，请查看记忆管理页确认结果；当前上下文保留。"
+                        if action == 'memory' else
                         "Agent 命令未完成，请由 Bot Owner 检查运行日志；未确认重置或停止成功。")
         finally:
             if trace_token is not None:
@@ -546,6 +868,70 @@ class V2DshRouter(star.Star):
         domain = classify(message, self.owners)
         return self.services[domain]
 
+    def _scheduled_runtime(self, conversation):
+        """Resolve the admitted task's exact group runtime."""
+        if (self._closing or not self._initialized
+                or conversation.key not in self.allowed_conversations
+                or not conversation.key.startswith("group:")):
+            raise RuntimeError("scheduled delivery group is unavailable")
+        group_id = conversation.key.removeprefix("group:")
+        if not group_id.isascii() or not group_id.isdigit():
+            raise ValueError("scheduled delivery requires a numeric group")
+        matching = [name for name, runtime in self._group_runtimes.items()
+                    if (runtime["platform_id"], runtime["bot_id"], runtime["group_id"]) ==
+                    (conversation.platform_id, conversation.bot_id, group_id)]
+        if len(matching) != 1 or matching[0] not in self.services:
+            raise RuntimeError("scheduled delivery has no exact group runtime")
+        return self._group_runtimes[matching[0]], group_id
+
+    def _scheduled_binding(self, conversation):
+        runtime, group_id = self._scheduled_runtime(conversation)
+        platforms = [platform for platform in self.context.platform_manager.get_insts()
+                     if platform.meta().id == conversation.platform_id
+                     and platform.meta().name == "aiocqhttp"]
+        if len(platforms) != 1:
+            raise RuntimeError("scheduled delivery platform is unavailable")
+        client = platforms[0].get_client()
+        connections = getattr(client, "_wsr_api_clients", {})
+        if conversation.bot_id not in connections:
+            raise RuntimeError("scheduled delivery Bot is disconnected")
+        return runtime, client, group_id
+
+    async def _send_scheduled_chain(self, conversation, chain) -> None:
+        from aiocqhttp import Event
+        from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
+        _runtime, client, group_id = self._scheduled_binding(conversation)
+        self.onebot_audit.bind(client)
+        # Only outbound routing metadata; never dispatched as an inbound event.
+        route = Event({"self_id": conversation.bot_id})
+        await AiocqhttpMessageEvent.send_message(
+            client, chain, event=route, is_group=True, session_id=group_id)
+
+    async def deliver_scheduled(self, conversation, text: str) -> None:
+        await self._send_scheduled_chain(conversation, MessageChain().message(text))
+
+    def scheduled_files(self, conversation):
+        """Use the ordinary group FileTransfer confinement and private snapshots."""
+        runtime, _group_id = self._scheduled_runtime(conversation)
+        workspace = Path(runtime["workspace"])
+        module = runtime["volume_module"]
+
+        async def resolve(segment):
+            _runtime, client, _group_id = self._scheduled_binding(conversation)
+            return await resolve_onebot_file(client, conversation, segment)
+
+        async def send_file(path, name):
+            await self._send_scheduled_chain(
+                conversation, MessageChain([File(name=name, file=str(path))]))
+
+        return FileTransfer(
+            self.mcp.journal, conversation, workspace, profile="group-sandbox",
+            verify_root=lambda: module.verified_group_workspace(workspace),
+            resolve=resolve, send=send_file, storage_root=workspace,
+            spool_dir=Path(star.StarTools.get_data_dir("v2_dsh_router")) / "file-spool",
+            workspace_lock_path=(workspace.parent / ".workspace-file.lock"
+                                 if getattr(self, "console_store", None) is not None else None))
+
     def _onebot_connected(self):
         manager = getattr(self.context, "platform_manager", None)
         if manager is None:
@@ -668,7 +1054,12 @@ class V2DshRouter(star.Star):
         try:
             raw = getattr(event.message_obj, "raw_message", None)
             message = message_from_onebot(event.get_platform_id(), raw)
-            if not self._console_accepts(message):
+            owner_recovery = (
+                kind in {"status", "recover"}
+                and Owner(message.platform_id, message.bot_id, message.actor_id) in self.owners
+            )
+            if not self._console_accepts(
+                    message, allow_disabled_owner_control=owner_recovery):
                 return
             domain = classify(message, self.owners)
             if not message.message_id:
@@ -776,6 +1167,42 @@ class V2DshRouter(star.Star):
                 CURRENT_TRACE.reset(trace_token)
             self._active.discard(task)
 
+    async def _silenced(self, event, message, raw):
+        """Report whether the routing framework must drop this message silently.
+
+        The ignore list is admission, not conversation, so it is answered before
+        a service exists: a silenced message never starts a DSH turn. Only an
+        already prepared group runtime counts, and every doubt keeps ordinary
+        routing, because a missing or damaged list must not lose a message.
+        """
+        if not message.conversation_key.startswith("group:"):
+            return False
+        identity = (message.platform_id, message.bot_id,
+                    message.conversation_key.removeprefix("group:"))
+        try:
+            runtime = next((item for name, item in self._group_runtimes.items()
+                            if name in self.services and
+                            (item["platform_id"], item["bot_id"], item["group_id"]) == identity),
+                           None)
+            if runtime is None:
+                return False
+            gates = self.__dict__.setdefault("_silence_gates", {})
+            gate = gates.get(identity)
+            if gate is None or gate.workspace != runtime["workspace"]:
+                module, workspace = runtime["volume_module"], runtime["workspace"]
+                gate = gates[identity] = SilenceGate(
+                    workspace, verify_root=lambda: module.verified_group_workspace(workspace))
+            verdict = await asyncio.to_thread(gate.decide, message.actor_id,
+                                              addressed=addresses_bot(event, raw))
+        except Exception:  # noqa: BLE001 - admission data must fail open
+            self.logger.exception("V2 ignore list unavailable for group_id=%s", identity[2])
+            return False
+        if verdict.reported:
+            self.logger.info(
+                "V2 message silenced by ignore list group_id=%s actor_id=%s scope=%s reason=%s",
+                identity[2], message.actor_id, verdict.scope or "-", verdict.reason)
+        return verdict.blocked
+
     def _file_transfer(self, event, message, service):
         profile = service.execution_profile
         workspace = Path(service.dsh.settings['workspace'])
@@ -836,6 +1263,11 @@ class V2DshRouter(star.Star):
                 raise ValueError("QQ inbound message has no platform message ID")
             if message.conversation_key not in self.allowed_conversations:
                 return
+            # The ignore list is admission, not conversation: answer it before a
+            # service exists so a silenced message never starts a DSH turn. The
+            # canonical Journal row was already captured in the OneBot hook.
+            if await self._silenced(event, message, raw):
+                return
             service = await self._service_for(message)
             domain = classify(message, self.owners)
 
@@ -866,6 +1298,7 @@ class V2DshRouter(star.Star):
                 vision=QQVision(resolve_image), messaging=messaging,
                 memes=MemeLibrary(self.runtime_root.parent / 'meme', send_meme),
                 plugins=PluginCapabilities(self.context, event),
+                games=self._games_capability(message),
             )
         except AgentDisabledError:
             self.logger.info("V2 Agent input stopped by console disable barrier")
@@ -927,6 +1360,14 @@ class V2DshRouter(star.Star):
 
     async def _close_runtime(self) -> None:
         errors = []
+        # Background memory and Dashboard writes must drain before clients or
+        # group mounts disappear, irrespective of AstrBot plugin unload order.
+        memory = getattr(self, "memory_manager", None)
+        if memory is not None:
+            try:
+                await memory.close()
+            except BaseException as error:
+                errors.append(error)
         for service in tuple(getattr(self, "services", {}).values()):
             try:
                 await service.close_background()

@@ -1,0 +1,6 @@
+name: v2_memory
+display_name: V2 群聊记忆
+author: chatbot-V2
+desc: 管理已准入群的记忆、来源和整理状态。
+version: 0.1.0
+astrbot_version: "==4.28.2"

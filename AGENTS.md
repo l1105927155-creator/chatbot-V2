@@ -107,6 +107,8 @@ Do not end with "waiting for confirmation" when the task is already sufficiently
 
 Do not report work as complete merely because code was written.
 
+生产运营能力未完整实现时，不得标记为部署上线。试点应交付完整的当前范围能力，通过可管理、持久生效的开关控制范围；临时环境变量白名单不能作为正式群接入机制。分别报告实现验证、运行环境接入和真实群验收状态。
+
 Verify the relevant behavior with the strongest practical evidence available:
 
 - unit tests;

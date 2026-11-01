@@ -54,6 +54,20 @@ def test_script_binding_is_per_native_turn_and_provider_target(tmp_path):
     store.close()
 
 
+def test_scripted_task_mcp_tools_are_supported(tmp_path):
+    store = SandboxStore(tmp_path / "onebot")
+    control = SandboxControl(store)
+    for name in ("mcp__astrbot__task_list", "mcp__astrbot__task_manage"):
+        plan = control.add_script({"conversation_key": "group:91000", "kind": "tool",
+                                   "name": name, "arguments": {"action": "create"}})
+        claim = control.claim({"target": "model", "session_id": "scheduled-session",
+                              "native_turn_id": name, "phase": "before"},
+                             conversation_key="group:91000")
+        assert claim["script"]["id"] == plan["id"]
+        assert claim["script"]["name"] == name
+    store.close()
+
+
 def test_private_runtime_probe_metadata_rotation_and_bounded_inputs(tmp_path):
     store = SandboxStore(tmp_path / "onebot")
     control = SandboxControl(store)

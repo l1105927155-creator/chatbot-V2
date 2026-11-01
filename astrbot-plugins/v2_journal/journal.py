@@ -19,7 +19,7 @@ from typing import Any, Mapping
 MEDIA_METADATA_KEYS = frozenset({
     "busid", "cache", "c", "duration", "file", "file_id", "file_name",
     "file_size", "id", "magic", "md5", "name", "path", "proxy", "size",
-    "media_type", "sub_type", "subtype", "summary", "thumb", "thumbnail",
+    "forward_id", "media_type", "res_id", "sub_type", "subtype", "summary", "thumb", "thumbnail",
     "timeout", "url",
 })
 
@@ -84,6 +84,27 @@ def _media_metadata(data: Mapping[str, Any]) -> dict[str, str | int | float | bo
         value = _small_scalar(raw_value)
         if value is not None:
             result[key] = value
+    return result
+
+
+def _group_member_metadata(sender: Any) -> dict[str, str | int]:
+    """Keep only bounded level/title values if an adapter includes them.
+
+    NapCat's current group sender payload omits both fields, so callers that
+    need authoritative current values must resolve them outside the receive
+    hook. This helper only preserves metadata already present on the event.
+    """
+    if not isinstance(sender, Mapping):
+        return {}
+    result: dict[str, str | int] = {}
+    level = sender.get("level")
+    if isinstance(level, (str, int)) and not isinstance(level, bool):
+        value = str(level).strip()
+        if len(value) <= 3 and value.isascii() and value.isdigit() and int(value) <= 100:
+            result["level"] = level if isinstance(level, int) else value
+    title = sender.get("title")
+    if isinstance(title, str) and len(title) <= 256 and title.strip():
+        result["title"] = title.strip()
     return result
 
 
@@ -239,6 +260,12 @@ def message_from_onebot(
         actor_name = sender.get("card") or sender.get("nickname")
         if actor_name is not None:
             actor_name = str(actor_name)
+    if message_type == "group":
+        member_metadata = _group_member_metadata(sender)
+        if member_metadata:
+            # Stored as ordinary bounded Journal content, so existing readers
+            # and old rows remain compatible without a schema migration.
+            content["group_member"] = member_metadata
     platform_message_id = _identifier(raw.get("message_id")) or None
     timestamp = raw.get("time")
     try:
@@ -260,6 +287,185 @@ def message_from_onebot(
         created_at=created_at,
         observed_at_ns=observed_at_ns if observed_at_ns is not None else time.time_ns(),
     )
+
+
+def message_from_file_send_receipt(
+    platform_id: str,
+    bot_id: Any,
+    action: Any,
+    params: Mapping[str, Any],
+    result: Any,
+    *,
+    observed_at_ns: int | None = None,
+) -> Message:
+    """Build a canonical outbound file message from a successful send receipt.
+
+    This narrowly covers OneBot send_group_msg/send_private_msg responses for
+    file segments, which some adapters do not echo as message_sent events.
+    The submitted segments are the message body; the response contributes only
+    its confirmed platform message ID.
+    """
+    if action not in ("send_group_msg", "send_private_msg"):
+        raise ValueError("unsupported file send action")
+    if not isinstance(params, Mapping):
+        raise ValueError("send parameters are required")
+    if not isinstance(result, Mapping):
+        raise ValueError("send receipt is required")
+    if result.get("status") not in (None, "ok"):
+        raise ValueError("send receipt is not successful")
+    retcode = result.get("retcode")
+    if retcode is not None and (isinstance(retcode, bool) or retcode != 0 and retcode != "0"):
+        raise ValueError("send receipt is not successful")
+    raw_message_id = result.get("message_id")
+    if isinstance(raw_message_id, bool):
+        raise ValueError("send receipt has no valid message_id")
+    if isinstance(raw_message_id, int):
+        message_id = str(raw_message_id) if raw_message_id != 0 else ""
+    elif (isinstance(raw_message_id, str)
+          and raw_message_id not in ("", "-")
+          and raw_message_id.removeprefix("-").isdecimal()
+          and not raw_message_id.startswith("--")):
+        message_id = raw_message_id if int(raw_message_id) != 0 else ""
+    else:
+        message_id = ""
+    if not message_id:
+        raise ValueError("send receipt has no valid message_id")
+
+    bot = _receipt_target_id(bot_id)
+    if not platform_id or not bot:
+        raise ValueError("platform and bot IDs are required")
+    if action == "send_group_msg":
+        target = _receipt_target_id(params.get("group_id"))
+        conversation_type = "group"
+        conversation_key = f"group:{target}"
+    else:
+        target = _receipt_target_id(params.get("user_id"))
+        conversation_type = "private"
+        conversation_key = f"private:{target}"
+    if not target or target == bot:
+        raise ValueError("send target is invalid")
+    if "self_id" in params and _receipt_target_id(params.get("self_id")) != bot:
+        raise ValueError("send receipt bot does not match target client")
+
+    segments = params.get("message")
+    if not isinstance(segments, list) or not segments:
+        raise ValueError("submitted OneBot message segments are required")
+    if not any(isinstance(segment, Mapping) and segment.get("type") == "file"
+               for segment in segments):
+        raise ValueError("submitted message has no file segment")
+    content, reply_to = normalize_segments(segments)
+    return Message(
+        platform_id=platform_id,
+        bot_id=bot,
+        conversation_key=conversation_key,
+        conversation_type=conversation_type,
+        direction="outbound",
+        actor_id=bot,
+        actor_name=None,
+        source="receipt",
+        message_id=message_id,
+        reply_to=reply_to,
+        content=content,
+        created_at=None,
+        observed_at_ns=observed_at_ns if observed_at_ns is not None else time.time_ns(),
+    )
+
+
+def message_from_forward_send_receipt(
+    platform_id: str,
+    bot_id: Any,
+    action: Any,
+    params: Mapping[str, Any],
+    result: Any,
+    *,
+    observed_at_ns: int | None = None,
+) -> Message:
+    """Build a canonical reference to a successfully sent forward node.
+
+    NapCat's forward send response can expose ``forward_id`` or ``res_id``.
+    Inner node content is deliberately not copied into the Journal: the forward
+    remains a reference the caller can expand on demand. A confirmed message
+    whose adapter omits that reference is still recorded with an explicit
+    marker so a later get_msg can resolve it.
+    """
+    if action not in ("send_group_forward_msg", "send_private_forward_msg"):
+        raise ValueError("unsupported forward send action")
+    if not isinstance(params, Mapping) or not isinstance(result, Mapping):
+        raise ValueError("send parameters and receipt are required")
+    if result.get("status") not in (None, "ok"):
+        raise ValueError("send receipt is not successful")
+    retcode = result.get("retcode")
+    if retcode is not None and (isinstance(retcode, bool) or retcode != 0 and retcode != "0"):
+        raise ValueError("send receipt is not successful")
+
+    raw_message_id = result.get("message_id")
+    if isinstance(raw_message_id, bool):
+        raise ValueError("send receipt has no valid message_id")
+    if isinstance(raw_message_id, int):
+        message_id = str(raw_message_id) if raw_message_id != 0 else ""
+    elif (isinstance(raw_message_id, str)
+          and raw_message_id not in ("", "-")
+          and raw_message_id.removeprefix("-").isdecimal()
+          and not raw_message_id.startswith("--")):
+        message_id = raw_message_id if int(raw_message_id) != 0 else ""
+    else:
+        message_id = ""
+    if not message_id:
+        raise ValueError("send receipt has no valid message_id")
+
+    bot = _receipt_target_id(bot_id)
+    if not platform_id or not bot:
+        raise ValueError("platform and bot IDs are required")
+    is_group = action == "send_group_forward_msg"
+    target = _receipt_target_id(params.get("group_id" if is_group else "user_id"))
+    if not target or target == bot:
+        raise ValueError("send target is invalid")
+    if "self_id" in params and _receipt_target_id(params.get("self_id")) != bot:
+        raise ValueError("send receipt bot does not match target client")
+
+    forward_id = _small_scalar(result.get("forward_id"))
+    res_id = _small_scalar(result.get("res_id"))
+    if forward_id is None:
+        forward_id = res_id
+    segment_data: dict[str, Any] = {}
+    if forward_id is not None:
+        segment_data["id"] = forward_id
+        segment_data["forward_id"] = forward_id
+    if res_id is not None:
+        segment_data["res_id"] = res_id
+    content: dict[str, Any] = {
+        "text": "",
+        "segments": [{"type": "forward", **segment_data}],
+        "is_message_delivery_receipt": True,
+    }
+    if forward_id is None:
+        content["forward_reference_missing"] = True
+    return Message(
+        platform_id=platform_id,
+        bot_id=bot,
+        conversation_key=f"group:{target}" if is_group else f"private:{target}",
+        conversation_type="group" if is_group else "private",
+        direction="outbound",
+        actor_id=bot,
+        actor_name=None,
+        source="receipt",
+        message_id=message_id,
+        reply_to=None,
+        content=content,
+        created_at=None,
+        observed_at_ns=observed_at_ns if observed_at_ns is not None else time.time_ns(),
+    )
+
+
+def _receipt_target_id(value: Any) -> str:
+    """Accept only exact QQ numeric IDs, never bools or arbitrary objects."""
+    if isinstance(value, bool):
+        return ""
+    if isinstance(value, int):
+        return str(value) if value > 0 else ""
+    if isinstance(value, str) and value.isdecimal() and int(value) > 0:
+        return value
+    return ""
 
 
 class JournalStore:
@@ -343,7 +549,7 @@ class JournalStore:
 
     def record_capture_failure(self, kind: str) -> dict[str, Any]:
         """Persist a sticky capture failure without fabricating a journal row."""
-        allowed = {"malformed_event", "append_failure", "shutdown_rejection"}
+        allowed = {"malformed_event", "append_failure", "receipt_failure", "shutdown_rejection"}
         if kind not in allowed:
             kind = "other"
         now = time.time_ns()
@@ -457,6 +663,28 @@ class JournalStore:
                 or result.message.actor_id != message.actor_id
             ):
                 raise ValueError("platform message ID collided with different actor/direction")
+            # The call_action receipt can win the race against OneBot's later
+            # message_sent event. Keep the stable Journal ID/cursor while
+            # replacing the receipt-derived body with the adapter's canonical
+            # event (which may contain QQ-resolved file metadata). A late
+            # receipt never overwrites an already observed event.
+            if (not inserted and result.message.source == "receipt"
+                    and message.direction == "outbound" and message.source == "unknown"):
+                conn.execute(
+                    """UPDATE journal SET conversation_type=?, actor_name=?, source=?,
+                       reply_to=?, content_json=?, created_at=?, observed_at_ns=?
+                       WHERE journal_id=?""",
+                    (
+                        message.conversation_type, message.actor_name, message.source,
+                        message.reply_to,
+                        json.dumps(message.content, ensure_ascii=False, separators=(",", ":")),
+                        message.created_at, message.observed_at_ns, result.journal_id,
+                    ),
+                )
+                row = conn.execute(
+                    "SELECT * FROM journal WHERE journal_id=?", (result.journal_id,)
+                ).fetchone()
+                result = self._row(row)
             return result, inserted
 
     @staticmethod
@@ -470,6 +698,63 @@ class JournalStore:
         if isinstance(after_id, bool) or not isinstance(after_id, int) or after_id < 0:
             raise ValueError("after_id must be a non-negative integer")
         return after_id
+
+    @staticmethod
+    def _through_id(through_id: int) -> int:
+        if isinstance(through_id, bool) or not isinstance(through_id, int) or through_id < 0:
+            raise ValueError("through_id must be a non-negative integer")
+        return through_id
+
+    def count_inbound(
+        self,
+        conversation: Conversation,
+        after_id: int = 0,
+        *,
+        through_id: int,
+    ) -> int:
+        """Count inbound messages in a bounded conversation cursor interval.
+
+        The interval is exclusive at ``after_id`` and inclusive at
+        ``through_id``. Bot-authored and outbound rows are excluded; no message
+        content is read or scanned.
+        """
+        after_id = self._after_id(after_id)
+        through_id = self._through_id(through_id)
+        if through_id < after_id:
+            raise ValueError("through_id must be greater than or equal to after_id")
+        with self._db() as conn:
+            row = conn.execute(
+                """SELECT COUNT(*) AS inbound_count FROM journal
+                   WHERE platform_id=? AND bot_id=? AND conversation_key=?
+                     AND journal_id>? AND journal_id<=?
+                     AND direction='inbound' AND actor_id<>?""",
+                (conversation.platform_id, conversation.bot_id, conversation.key,
+                 after_id, through_id, conversation.bot_id),
+            ).fetchone()
+        return int(row["inbound_count"])
+
+    def pending_summary(self, conversation: Conversation, after_id: int, through_id: int) -> dict:
+        """Bounded, content-free backlog observations using trusted capture time.
+
+        Counts are actual rows in this exact conversation, never Journal ID
+        differences. Bot messages remain in the backlog but do not trigger it.
+        """
+        after_id, through_id = self._after_id(after_id), self._through_id(through_id)
+        if through_id < after_id:
+            raise ValueError("reversed Journal range")
+        with self._db() as conn:
+            row = conn.execute(
+                """SELECT COUNT(*) AS total_messages,
+                   COALESCE(SUM(CASE WHEN direction='inbound' AND actor_id<>?
+                     THEN 1 ELSE 0 END),0) AS inbound_count,
+                   MIN(CASE WHEN direction='inbound' AND actor_id<>?
+                     THEN observed_at_ns END) AS first_inbound_observed_at_ns
+                   FROM journal WHERE platform_id=? AND bot_id=? AND conversation_key=?
+                     AND journal_id>? AND journal_id<=?""",
+                (conversation.bot_id, conversation.bot_id, conversation.platform_id,
+                 conversation.bot_id, conversation.key, after_id, through_id),
+            ).fetchone()
+        return dict(row)
 
     def recent(self, conversation: Conversation, limit: int = 50, *, after_id: int = 0) -> list[JournalRow]:
         after_id = self._after_id(after_id)
@@ -489,6 +774,35 @@ class JournalStore:
                 (conversation.platform_id, conversation.bot_id, conversation.key, journal_id, self._limit(limit)),
             ).fetchall()
         return [self._row(row) for row in rows]
+
+    def bounded_range(self, conversation: Conversation, after_id: int, through_id: int,
+                      limit: int = 100) -> list[JournalRow]:
+        """Read only a frozen, identity-bound (after, through] source page."""
+        after_id = self._after_id(after_id)
+        through_id = self._through_id(through_id)
+        if through_id < after_id:
+            raise ValueError("reversed Journal range")
+        with self._db() as conn:
+            rows = conn.execute(
+                """SELECT * FROM journal WHERE platform_id=? AND bot_id=?
+                   AND conversation_key=? AND journal_id>? AND journal_id<=?
+                   ORDER BY journal_id ASC LIMIT ?""",
+                (conversation.platform_id, conversation.bot_id, conversation.key,
+                 after_id, through_id, self._limit(limit)),
+            ).fetchall()
+        return [self._row(row) for row in rows]
+
+    def by_journal_id(self, conversation: Conversation, journal_id: int) -> JournalRow | None:
+        """Resolve an exact source without crossing the authenticated group."""
+        if type(journal_id) is not int or journal_id <= 0:
+            raise ValueError("journal_id must be a positive integer")
+        with self._db() as conn:
+            row = conn.execute(
+                """SELECT * FROM journal WHERE platform_id=? AND bot_id=?
+                   AND conversation_key=? AND journal_id=?""",
+                (conversation.platform_id, conversation.bot_id, conversation.key, journal_id),
+            ).fetchone()
+        return self._row(row) if row is not None else None
 
     def before(self, conversation: Conversation, journal_id: int, limit: int = 100, *,
                after_id: int = 0) -> list[JournalRow]:

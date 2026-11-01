@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>2048 · V2 小游戏</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <main class="game-page">
+    <header class="topbar">
+      <div>
+        <h1>2048</h1>
+        <p class="muted">方向键 / WASD / 滑动；成绩由服务端回放校验。</p>
+      </div>
+      <div class="row">
+        <span class="pill" id="identity">—</span>
+        <a class="button secondary" id="back" href="/">返回</a>
+      </div>
+    </header>
+
+    <section class="game-stats">
+      <div class="stat"><span>分数</span><strong id="score-value">0</strong></div>
+      <div class="stat"><span>最大块</span><strong id="max-value">0</strong></div>
+      <div class="stat"><span>步数</span><strong id="moves-value">0</strong></div>
+      <div class="stat"><span>个人最高</span><strong id="best-value">0</strong></div>
+    </section>
+
+    <section class="board-area">
+      <div id="canvas-host" class="canvas-host">
+        <canvas id="canvas" aria-label="2048 棋盘"></canvas>
+      </div>
+    </section>
+
+    <section class="row actions">
+      <button id="save" type="button" class="button">保存分数</button>
+      <button id="restart" type="button" class="button secondary">重新开始</button>
+      <span id="status" class="muted" role="status">正在准备…</span>
+    </section>
+  </main>
+
+  <script src="/assets/theme.js"></script>
+  <script src="/assets/canvas-fit.js"></script>
+  <script src="/assets/game2048-logic.js"></script>
+  <script src="/assets/game2048-render.js"></script>
+  <script src="/assets/game2048-page.js"></script>
+</body>
+</html>

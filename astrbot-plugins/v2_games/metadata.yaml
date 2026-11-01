@@ -1,0 +1,6 @@
+name: v2_games
+display_name: V2 小游戏与排行榜
+author: chatbot-V2
+desc: 本机小游戏入口、2048 成绩与群排行榜；网页通过 Tailscale 开放。
+version: 0.1.0
+astrbot_version: "==4.28.2"

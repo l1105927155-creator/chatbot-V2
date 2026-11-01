@@ -1,0 +1,127 @@
+{
+  "fixture": "NapCat OB11 forward with two nesting levels",
+  "source": {
+    "napcat_tree": "/home/abasun/chatbot/napcat/qq-client/resources/app/app_launcher/napcat/napcat.mjs",
+    "napcat_version": "3.2.30",
+    "onebot_account_config": "config/onebot11_2869323076.json",
+    "parseMultMsg": true
+  },
+  "message": {
+    "type": "forward",
+    "data": {
+      "id": "<outer-message-id>",
+      "res_id": "<outer-res-id>",
+      "forward_id": "<outer-res-id>",
+      "content": [
+        {
+          "self_id": "<bot-id>",
+          "user_id": "<sender-id>",
+          "time": 1793115530,
+          "message_id": "<outer-node-message-id>",
+          "message_seq": "<outer-node-seq>",
+          "real_id": "<outer-node-message-id>",
+          "real_seq": "<outer-node-seq>",
+          "message_type": "group",
+          "sender": {
+            "user_id": "<sender-id>",
+            "nickname": "<sender-name>",
+            "card": ""
+          },
+          "raw_message": "[CQ:forward,id=<inner-message-id>,res_id=<inner-res-id>,forward_id=<inner-res-id>,content=…]",
+          "font": 14,
+          "sub_type": "normal",
+          "message": [
+            {
+              "type": "forward",
+              "data": {
+                "id": "<inner-message-id>",
+                "res_id": "<inner-res-id>",
+                "forward_id": "<inner-res-id>",
+                "content": [
+                  {
+                    "self_id": "<bot-id>",
+                    "user_id": "<sender-id>",
+                    "time": 1793114899,
+                    "message_id": "<inner-node-message-id>",
+                    "message_seq": "<inner-node-seq>",
+                    "real_id": "<inner-node-message-id>",
+                    "real_seq": "<inner-node-seq>",
+                    "message_type": "group",
+                    "sender": {
+                      "user_id": "<sender-id>",
+                      "nickname": "<sender-name>",
+                      "card": ""
+                    },
+                    "raw_message": "[CQ:image,file=<image-file>,url=https://example.invalid/image.jpg,file_size=286767]",
+                    "font": 14,
+                    "sub_type": "normal",
+                    "message": [
+                      {
+                        "type": "image",
+                        "data": {
+                          "summary": "",
+                          "file": "<image-file>",
+                          "sub_type": 0,
+                          "url": "https://example.invalid/image.jpg",
+                          "file_size": "286767"
+                        }
+                      }
+                    ],
+                    "message_format": "array",
+                    "post_type": "message",
+                    "group_id": "<source-group-id>",
+                    "group_name": ""
+                  }
+                ],
+                "message_format": "array",
+                "post_type": "message",
+                "group_id": "<source-group-id>",
+                "group_name": ""
+              }
+            },
+            {
+              "type": "text",
+              "data": {
+                "text": "<inner-node-text>"
+              }
+            }
+          ],
+          "message_format": "array",
+          "post_type": "message",
+          "group_id": "<source-group-id>",
+          "group_name": ""
+        },
+        {
+          "self_id": "<bot-id>",
+          "user_id": "<sender-id>",
+          "time": 1793114917,
+          "message_id": "<outer-node-message-id-2>",
+          "message_seq": "<outer-node-seq-2>",
+          "real_id": "<outer-node-message-id-2>",
+          "real_seq": "<outer-node-seq-2>",
+          "message_type": "group",
+          "sender": {
+            "user_id": "<sender-id>",
+            "nickname": "<sender-name>",
+            "card": ""
+          },
+          "raw_message": "<outer-node-text>",
+          "font": 14,
+          "sub_type": "normal",
+          "message": [
+            {
+              "type": "text",
+              "data": {
+                "text": "<outer-node-text>"
+              }
+            }
+          ],
+          "message_format": "array",
+          "post_type": "message",
+          "group_id": "<source-group-id>",
+          "group_name": ""
+        }
+      ]
+    }
+  }
+}

@@ -38,7 +38,7 @@ async def check():
             calls.append(('model-default',conversation.key))
             return {'current':{'provider':'p','model':'base'},'choices':[],'overridden':False}
         async def reset_conversation(self, conversation, mid, **kwargs):
-            calls.append(('reset', conversation.key, mid))
+            calls.append(('reset', conversation.key, mid, kwargs['skip_memory']))
             return NS(session_id='new-sid')
         async def cancel(self, conversation):
             calls.append(('cancel', conversation.key))
@@ -65,7 +65,19 @@ async def check():
     await router.new_chat(event('42',bot='another-bot'))
     assert not calls and '仅 Bot Owner' in sent[-1]
     await router.new_chat(event('42'))
-    assert calls[-1][0:2]==('reset','group:3') and '已开始' in sent[-1]
+    assert calls[-1][0:2]==('reset','group:3') and calls[-1][-1] is False and '已开始' in sent[-1]
+    for argument in ('skip_mem', '跳过记忆', '  skip_mem  '):
+        await router.new_chat(event('42'),argument)
+        assert calls[-1][0:2]==('reset','group:3') and calls[-1][-1] is True
+    await router.reset_chat(event('42'),'跳过记忆')
+    assert calls[-1][0:2]==('reset','group:3') and calls[-1][-1] is True
+    n=len(calls)
+    for argument in ('skip_mem', '跳过记忆'):
+        await router.new_chat(event('43'),argument)
+        assert len(calls)==n and '仅 Bot Owner' in sent[-1]
+    for argument in ('skip_mem extra', '--skip_mem', 'skip_mem 跳过记忆'):
+        await router.new_chat(event('42'),argument)
+        assert len(calls)==n and '用法' in sent[-1]
     await router.stop_chat(event('42'))
     assert calls[-1]==('cancel','group:3') and '已请求停止' in sent[-1]
     await router.reset_chat(event('43',kind='private',target='43'))
@@ -100,6 +112,14 @@ async def check():
     router._service_for=pending
     await router.new_chat(event('42'))
     assert '尚未重置' in sent[-1] and 'private failure' not in sent[-1]
+    class MemoryFailed(Service):
+        async def reset_conversation(self,*args,**kwargs):
+            raise m.ResetError('记忆整理失败，未清空上下文；可用 /new skip_mem 跳过整理。')
+    async def memory_failed(message):return MemoryFailed()
+    router._service_for=memory_failed
+    sent_before=len(sent)
+    await router.new_chat(event('42'))
+    assert len(sent)==sent_before+1 and '记忆整理失败' in sent[-1] and '已开始' not in sent[-1]
     assert router._active==set()
 asyncio.run(check())
 '''

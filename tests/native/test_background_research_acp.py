@@ -161,8 +161,10 @@ def test_native_background_foreground_update_completion_and_stop(tmp_path, monke
             await turn('BG_START')
             await wait_for(lambda: log.read_text().count('fetch-start')==3)
             before=store.get('qq','1',conv.key)
-            command=append('/new')
-            after=await asyncio.wait_for(service.reset_conversation(conv,command),10)
+            # This lifecycle fixture has no memory backend. Explicitly skip
+            # collection while checking native cancellation and Session reset.
+            command=append('/new skip_mem')
+            after=await asyncio.wait_for(service.reset_conversation(conv,command,skip_memory=True),10)
             assert before.session_id != after.session_id
             assert not service.active_background(conv)
             release.touch()

@@ -1,4 +1,4 @@
-"""Pinned aiocqhttp bus test for the two Phase 2 journal capture paths."""
+"""Pinned aiocqhttp bus tests for canonical journal capture paths."""
 
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ sys.path.insert(0, str(REPO / "astrbot-plugins"))
 from v2_journal.journal import Conversation, JournalStore, message_from_onebot  # noqa: E402
 from aiocqhttp.bus import EventBus  # noqa: E402
 from aiocqhttp.event import Event  # noqa: E402
+from aiocqhttp.exceptions import ActionFailed  # noqa: E402
 
 plugin_module = importlib.import_module("v2_journal.main")
 V2Journal = plugin_module.V2Journal
@@ -51,6 +52,9 @@ class Client:
         self.hooks = {}
         self.bind_calls = 0
         self.unbind_calls = 0
+        self.action_result = {"message_id": 500}
+        self.action_calls = []
+        self.action_error = None
 
     def hook_before(self, name, callback):
         self.hooks[name] = callback
@@ -66,6 +70,12 @@ class Client:
     async def emit(self, payload):
         event = Event.from_payload(payload)
         await self.bus.emit(event.name, event)
+
+    async def call_action(self, action, **params):
+        self.action_calls.append((action, params))
+        if self.action_error is not None:
+            raise self.action_error
+        return self.action_result
 
 
 class Platform:
@@ -213,6 +223,18 @@ async def test_plugin_binds_once_captures_both_paths_and_unsubscribes(tmp_path):
     assert plugin.collector_health()["bindings_match"] is True
     assert client.unbind_calls == 3
     assert replacement.bind_calls == 3
+    replacement.action_result = {"message_id": 500}
+    await replacement.call_action("send_group_msg", group_id=900003,
+                                  message=[{"type": "file", "data": {"file": "stale.pdf"}}])
+    assert plugin.store.by_message_id("v2-test", "900001", "500") == []
+    assert plugin.capture_errors == 2
+    changed_bot = raw(5)
+    changed_bot["self_id"] = 900099
+    await replacement.emit(changed_bot)
+    replacement.action_result = {"message_id": 501}
+    await replacement.call_action("send_group_msg", group_id=900003,
+                                  message=[{"type": "file", "data": {"file": "new.pdf"}}])
+    assert plugin.store.by_message_id("v2-test", "900099", "501")[0].message.source == "receipt"
     queued_callback = replacement.hooks["message"]
     await plugin.terminate()
     assert replacement.unbind_calls == 3
@@ -220,7 +242,7 @@ async def test_plugin_binds_once_captures_both_paths_and_unsubscribes(tmp_path):
     assert replacement.bind_calls == 3
     # The bus may already have queued a callback when hooks are removed.
     await queued_callback(raw(4))
-    assert plugin.capture_errors == 2
+    assert plugin.capture_errors == 3
     assert [r.message.message_id for r in plugin.store.recent(ref)] == ["1", "2"]
 
 
@@ -340,6 +362,249 @@ async def test_bot_self_group_upload_is_outbound_notice_not_delivery_receipt(tmp
     assert [row.message.message_id for row in rows] == [notice_row.message_id, "82"]
     assert rows[1].message.direction == "outbound"
     assert rows[1].message.content.get("is_message_delivery_receipt") is None
+    await plugin.terminate()
+
+
+@pytest.mark.asyncio
+async def test_file_send_receipts_fill_missing_feedback_and_are_idempotent(tmp_path):
+    client = Client()
+    platform = Platform(client)
+    plugin = object.__new__(V2Journal)
+    plugin.context = SimpleNamespace(
+        platform_manager=SimpleNamespace(get_insts=lambda: [platform])
+    )
+    plugin.store = JournalStore(tmp_path / "journal.sqlite3")
+    plugin._write_lock = asyncio.Lock()
+    plugin._pending_writes = set()
+    plugin._bindings = {}
+    plugin._action_bindings = {}
+    plugin._bot_ids = {}
+    plugin.capture_errors = 0
+    plugin.capture_degraded = False
+    plugin.capture_status = {"failure_count": 0}
+    plugin._closing = False
+    plugin.logger = MagicMock()
+    plugin._bind_platforms()
+
+    await client.emit(raw(90))  # Establish this client's bot identity.
+    group_params = {"group_id": 900003, "message": [{"type": "file", "data": {
+        "file": "report.pdf", "name": "report.pdf", "size": 12345,
+    }}]}
+    client.action_result = {"message_id": 91}
+    await client.call_action("send_group_msg", **group_params)
+    receipt_row = plugin.store.by_message_id("v2-test", "900001", "91")[0]
+    assert receipt_row.message.source == "receipt"
+    sent = raw(91, outbound=True, group=True)
+    sent["message"] = [{"type": "file", "data": {
+        "file": "report.pdf", "name": "report.pdf", "size": 12345,
+        "file_id": "qq-file-91",
+    }}]
+    await client.emit(sent)  # If both paths report the same fact, keep one row.
+    await client.call_action("send_group_msg", **group_params)  # Late receipt cannot downgrade feedback.
+
+    client.action_result = {"message_id": "92"}
+    await client.call_action("send_private_msg", user_id=900002, message=[
+        {"type": "text", "data": {"text": "attached: "}},
+        {"type": "file", "data": {"file": "private.pdf", "file_size": 20}},
+    ])
+    # Text-only sends and unsuccessful/malformed file responses are not facts
+    # for this narrowly scoped fallback.
+    await client.call_action("send_group_msg", group_id=900003,
+                             message=[{"type": "text", "data": {"text": "hello"}}])
+    client.action_result = {"status": "failed", "retcode": 100, "message_id": 93}
+    await client.call_action("send_group_msg", **group_params)
+    client.action_result = {"status": "ok"}
+    await client.call_action("send_group_msg", **group_params)
+    client.action_result = {"message_id": True}
+    await client.call_action("send_group_msg", **group_params)
+
+    group_rows = plugin.store.recent(Conversation("v2-test", "900001", "group:900003"))
+    private_rows = plugin.store.recent(Conversation("v2-test", "900001", "private:900002"))
+    assert [row.message.message_id for row in group_rows] == ["91"]
+    assert group_rows[0].journal_id == receipt_row.journal_id
+    assert group_rows[0].message.source == "unknown"
+    assert group_rows[0].message.content["segments"] == [
+        {"type": "file", "file": "report.pdf", "name": "report.pdf", "size": 12345,
+         "file_id": "qq-file-91"}
+    ]
+    assert [row.message.message_id for row in private_rows] == ["90", "92"]
+    assert private_rows[0].message.direction == "inbound"
+    assert private_rows[1].message.source == "receipt"
+    assert private_rows[1].message.content["text"] == "attached: "
+    assert plugin.capture_errors == 2  # Missing/invalid IDs latch uncertainty; explicit failure does not.
+    assert plugin.capture_status["last_failure_kind"] == "receipt_failure"
+    await plugin.terminate()
+
+
+@pytest.mark.asyncio
+async def test_forward_receipt_is_reference_only_and_late_feedback_deduplicates(tmp_path):
+    client = Client()
+    platform = Platform(client)
+    plugin = object.__new__(V2Journal)
+    plugin.context = SimpleNamespace(platform_manager=SimpleNamespace(get_insts=lambda: [platform]))
+    plugin.store = JournalStore(tmp_path / "journal.sqlite3")
+    plugin._write_lock = asyncio.Lock()
+    plugin._pending_writes = set()
+    plugin._bindings = {}
+    plugin._action_bindings = {}
+    plugin._bot_ids = {}
+    plugin.capture_errors = 0
+    plugin.capture_degraded = False
+    plugin.capture_status = {"failure_count": 0}
+    plugin._closing = False
+    plugin.logger = MagicMock()
+    plugin._bind_platforms()
+    await client.emit(raw(100))
+
+    submitted_nodes = [{"type": "node", "data": {"content": [
+        {"type": "text", "data": {"text": "must stay remote"}},
+    ]}}]
+    client.action_result = {"message_id": 101, "forward_id": "napcat-forward-101",
+                            "res_id": "napcat-forward-101"}
+    await client.call_action("send_group_forward_msg", group_id=900003,
+                             messages=submitted_nodes)
+    ref = Conversation("v2-test", "900001", "group:900003")
+    receipt = plugin.store.by_message_id("v2-test", "900001", "101")[0]
+    assert receipt.message.source == "receipt"
+    assert receipt.message.content["segments"] == [{
+        "type": "forward", "id": "napcat-forward-101",
+        "forward_id": "napcat-forward-101", "res_id": "napcat-forward-101",
+    }]
+    assert "must stay remote" not in repr(receipt.message.content)
+
+    sent = raw(101, outbound=True, group=True)
+    sent["message"] = [{"type": "forward", "data": {
+        "id": "napcat-forward-101", "res_id": "napcat-forward-101",
+        "content": [{"type": "node", "data": {"content": "must stay remote"}}],
+    }}]
+    await client.emit(sent)
+    reconciled = plugin.store.recent(ref)
+    assert len([row for row in reconciled if row.message.message_id == "101"]) == 1
+    assert reconciled[-1].message.content["segments"][0]["type"] == "forward"
+
+    # A confirmed forward with no exposed reference is retained for later
+    # get_msg lookup and is not confused with an uncertain delivery.
+    client.action_result = {"message_id": 102}
+    await client.call_action("send_private_forward_msg", user_id=900002,
+                             messages=submitted_nodes)
+    private_ref = Conversation("v2-test", "900001", "private:900002")
+    missing_ref = plugin.store.by_message_id("v2-test", "900001", "102")[0]
+    assert missing_ref.message.conversation == private_ref
+    assert missing_ref.message.content["segments"] == [{"type": "forward"}]
+    assert missing_ref.message.content["forward_reference_missing"] is True
+    assert plugin.capture_errors == 0
+    await plugin.terminate()
+
+
+@pytest.mark.asyncio
+async def test_file_receipt_wrapper_preserves_outer_audit_wrapper(tmp_path):
+    client = Client()
+    platform = Platform(client)
+    plugin = object.__new__(V2Journal)
+    plugin.context = SimpleNamespace(
+        platform_manager=SimpleNamespace(get_insts=lambda: [platform])
+    )
+    plugin.store = JournalStore(tmp_path / "journal.sqlite3")
+    plugin._write_lock = asyncio.Lock()
+    plugin._pending_writes = set()
+    plugin._bindings = {}
+    plugin._action_bindings = {}
+    plugin._bot_ids = {}
+    plugin.capture_errors = 0
+    plugin.capture_degraded = False
+    plugin.capture_status = {"failure_count": 0}
+    plugin._closing = False
+    plugin.logger = MagicMock()
+    plugin._bind_platforms()
+    await client.emit(raw(94))
+
+    journal_wrapper = client.call_action
+    audit_calls = []
+
+    async def audit_wrapper(action, **params):
+        audit_calls.append(action)
+        return await journal_wrapper(action, **params)
+
+    client.call_action = audit_wrapper
+    client.action_result = {"message_id": 95}
+    await client.call_action("send_group_msg", group_id=900003,
+                             message=[{"type": "file", "data": {"file": "x"}}])
+    await plugin.terminate()
+    assert client.call_action is audit_wrapper
+    assert audit_calls == ["send_group_msg"]
+    assert plugin.store.by_message_id("v2-test", "900001", "95")[0].message.source == "receipt"
+    client.action_result = {"message_id": 96}
+    await client.call_action("send_group_msg", group_id=900003,
+                             message=[{"type": "file", "data": {"file": "y"}}])
+    assert plugin.store.by_message_id("v2-test", "900001", "96") == []
+
+
+@pytest.mark.asyncio
+async def test_cancel_after_file_receipt_still_finishes_ordered_append(tmp_path):
+    client = Client()
+    platform = Platform(client)
+    plugin = object.__new__(V2Journal)
+    plugin.context = SimpleNamespace(
+        platform_manager=SimpleNamespace(get_insts=lambda: [platform])
+    )
+    plugin.store = DelayedFirstStore(tmp_path / "journal.sqlite3", 97)
+    plugin._write_lock = asyncio.Lock()
+    plugin._pending_writes = set()
+    plugin._bindings = {}
+    plugin._action_bindings = {}
+    plugin._bot_ids = {}
+    plugin.capture_errors = 0
+    plugin.capture_degraded = False
+    plugin.capture_status = {"failure_count": 0}
+    plugin._closing = False
+    plugin.logger = MagicMock()
+    plugin._bind_platforms()
+
+    await client.emit(raw(96))
+    client.action_result = {"message_id": 97}
+    send = asyncio.create_task(client.call_action(
+        "send_group_msg", group_id=900003,
+        message=[{"type": "file", "data": {"file": "cancelled.pdf"}}],
+    ))
+    assert await asyncio.to_thread(plugin.store.started.wait, 5)
+    send.cancel()
+    plugin.store.release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await send
+    row = plugin.store.by_message_id("v2-test", "900001", "97")
+    assert len(row) == 1 and row[0].message.source == "receipt"
+    await plugin.terminate()
+
+
+@pytest.mark.asyncio
+async def test_definite_action_failed_does_not_create_row_or_degrade_capture(tmp_path):
+    client = Client()
+    platform = Platform(client)
+    plugin = object.__new__(V2Journal)
+    plugin.context = SimpleNamespace(
+        platform_manager=SimpleNamespace(get_insts=lambda: [platform])
+    )
+    plugin.store = JournalStore(tmp_path / "journal.sqlite3")
+    plugin._write_lock = asyncio.Lock()
+    plugin._pending_writes = set()
+    plugin._bindings = {}
+    plugin._action_bindings = {}
+    plugin._bot_ids = {}
+    plugin.capture_errors = 0
+    plugin.capture_degraded = False
+    plugin.capture_status = {"failure_count": 0}
+    plugin._closing = False
+    plugin.logger = MagicMock()
+    plugin._bind_platforms()
+    await client.emit(raw(98))
+    client.action_error = ActionFailed({"status": "failed", "retcode": 100})
+    with pytest.raises(ActionFailed):
+        await client.call_action(
+            "send_group_msg", group_id=900003,
+            message=[{"type": "file", "data": {"file": "rejected.pdf"}}],
+        )
+    assert plugin.store.recent(Conversation("v2-test", "900001", "group:900003")) == []
+    assert plugin.capture_errors == 0
     await plugin.terminate()
 
 

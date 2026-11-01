@@ -92,6 +92,14 @@ class AcpRuntime:
             self._console_control_token = secrets.token_hex(32)
             env.update(V2_CONSOLE_CONTROL_SOCKET=self._console_control_path,
                        V2_CONSOLE_CONTROL_TOKEN=self._console_control_token)
+        self._memory_control_dir = None
+        if execution_profile == "group-sandbox":
+            self._memory_control_dir = tempfile.TemporaryDirectory(prefix="v2-memory-control-")
+            os.chmod(self._memory_control_dir.name, 0o700)
+            self._memory_control_path = str(Path(self._memory_control_dir.name) / "memory.sock")
+            self._memory_control_token = secrets.token_hex(32)
+            env.update(V2_MEMORY_CONTROL_SOCKET=self._memory_control_path,
+                       V2_MEMORY_CONTROL_TOKEN=self._memory_control_token)
         if background_callback_url is not None or background_callback_token is not None:
             if (not isinstance(background_callback_url, str) or
                     not background_callback_url.startswith("http://127.0.0.1:") or
@@ -133,6 +141,8 @@ class AcpRuntime:
             if os.environ.get("V2_CONSOLE_STATE_FILE"):
                 env["V2_CONSOLE_STATE_FILE"] = os.environ["V2_CONSOLE_STATE_FILE"]
                 env["V2_QQ_OWNERS"] = os.environ.get("V2_QQ_OWNERS", "[]")
+            if os.environ.get("V2_GROUP_OWNER_WRITE_DEMOTIONS"):
+                env["V2_GROUP_OWNER_WRITE_DEMOTIONS"] = os.environ["V2_GROUP_OWNER_WRITE_DEMOTIONS"]
             env.update({
                 "V2_GROUP_WORKSPACE_ROOT": str(group_runtime["workspaceRoot"]),
                 "V2_GROUP_PLATFORM_ID": str(group_runtime["platformId"]),
@@ -176,6 +186,10 @@ class AcpRuntime:
                 self.shared_models.snapshot()
         except BaseException:
             self.client.close()
+            for attribute in ("_console_control_dir", "_memory_control_dir"):
+                directory = getattr(self, attribute, None)
+                if directory is not None:
+                    directory.cleanup()
             raise
 
     def request(self, method, params, **kwargs):
@@ -459,6 +473,192 @@ class AcpRuntime:
         directory = getattr(self, "_console_control_dir", None)
         if directory is not None:
             directory.cleanup()
+        directory = getattr(self, "_memory_control_dir", None)
+        if directory is not None:
+            directory.cleanup()
+
+    def _memory_control_request(self, payload, *, cancel_event=None, on_progress=None):
+        path = getattr(self, "_memory_control_path", None)
+        if not path:
+            raise RuntimeError("DSH memory control is not enabled")
+        payload = {**payload, "token": self._memory_control_token}
+        wire = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n"
+        if len(wire) > 1024 * 1024:
+            raise ValueError("memory control request exceeds the byte limit")
+        is_capacity = payload.get("action") == "capacity"
+        progress_enabled = payload.get("progress") is True
+        deadline = time.monotonic() + 120 if is_capacity else None
+        progress_state = None
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(0.25)
+            try:
+                connection.connect(path)
+                connection.sendall(wire)
+            except TimeoutError as error:
+                raise MemoryModelError("MEMORY_TRANSPORT_TIMEOUT" if progress_enabled
+                                       else "MEMORY_TIMEOUT") from error
+            except OSError as error:
+                raise MemoryModelError("MEMORY_TRANSPORT_ERROR" if progress_enabled
+                                       else "MODEL_INVALID_RESPONSE") from error
+            pending = bytearray()
+            final = None
+            last_frame_at = time.monotonic()
+            while final is None:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise DshTurnCancelled("memory consolidation was cancelled")
+                now = time.monotonic()
+                if deadline is not None and now >= deadline:
+                    raise MemoryModelError("MEMORY_PREPARE_TIMEOUT")
+                if not is_capacity and now - last_frame_at >= getattr(self, "_memory_transport_idle_seconds", 125):
+                    raise MemoryModelError("MEMORY_TRANSPORT_TIMEOUT" if progress_enabled
+                                           else "MEMORY_TIMEOUT")
+                try:
+                    chunk = connection.recv(4096)
+                except TimeoutError:
+                    continue
+                except OSError as error:
+                    raise MemoryModelError("MEMORY_TRANSPORT_ERROR" if progress_enabled
+                                           else "MODEL_INVALID_RESPONSE") from error
+                if not chunk:
+                    raise MemoryModelError("MEMORY_TRANSPORT_ERROR" if progress_enabled
+                                           else "MODEL_INVALID_RESPONSE")
+                pending.extend(chunk)
+                while b"\n" in pending:
+                    line, _, remainder = pending.partition(b"\n")
+                    pending = bytearray(remainder)
+                    if len(line) > 4 * 1024 * 1024:
+                        raise MemoryModelError("MEMORY_RESPONSE_TOO_LARGE")
+                    if not line:
+                        raise MemoryModelError("MODEL_INVALID_RESPONSE")
+                    try:
+                        frame = json.loads(line)
+                    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                        raise MemoryModelError("MODEL_INVALID_RESPONSE") from error
+                    if not isinstance(frame, dict):
+                        raise MemoryModelError("MODEL_INVALID_RESPONSE")
+                    if frame.get("type") == "progress":
+                        if not progress_enabled or on_progress is None:
+                            raise MemoryModelError("MODEL_INVALID_RESPONSE")
+                        safe = self._validate_memory_progress(frame)
+                        if progress_state is not None:
+                            previous = progress_state
+                            if (safe["event_count"] < previous["event_count"]
+                                    or safe["text_bytes"] < previous["text_bytes"]
+                                    or safe["reasoning_bytes"] < previous["reasoning_bytes"]
+                                    or safe["elapsed_ms"] < previous["elapsed_ms"]):
+                                raise MemoryModelError("MODEL_INVALID_RESPONSE")
+                        progress_state = safe
+                        last_frame_at = time.monotonic()
+                        try:
+                            on_progress(dict(safe))
+                        except Exception as error:
+                            try:
+                                connection.shutdown(socket.SHUT_RDWR)
+                            except OSError:
+                                pass
+                            raise MemoryModelError("MODEL_INVALID_RESPONSE") from error
+                        continue
+                    final = frame
+                    if pending:
+                        raise MemoryModelError("MODEL_INVALID_RESPONSE")
+                    break
+                if len(pending) > 4 * 1024 * 1024:
+                    raise MemoryModelError("MEMORY_RESPONSE_TOO_LARGE")
+            if pending:
+                raise MemoryModelError("MODEL_INVALID_RESPONSE")
+            result = final
+        if not isinstance(result, dict):
+            raise MemoryModelError("MODEL_INVALID_RESPONSE")
+        if result.get("ok") is not True:
+            code = result.get("code") if isinstance(result, dict) else None
+            if code == "CANCELLED":
+                raise DshTurnCancelled("memory consolidation was cancelled")
+            safe_codes = {"RATE_LIMITED", "UNAUTHORIZED", "NOT_FOUND", "INVALID_REQUEST",
+                          "MODEL_ERROR", "MODEL_OUTPUT_LIMIT", "MEMORY_TIMEOUT",
+                          "MODEL_TIMEOUT", "MODEL_TRANSPORT_ERROR", "MEMORY_PREPARE_TIMEOUT",
+                          "MEMORY_TRANSPORT_TIMEOUT", "MEMORY_TRANSPORT_ERROR",
+                          "MEMORY_RESPONSE_TOO_LARGE", "MODEL_INVALID_RESPONSE",
+                          "CONTEXT_WINDOW_EXCEEDED", "INVALID_CREDENTIAL", "QUOTA_EXCEEDED",
+                          "MISSING_CREDENTIAL", "NO_ADAPTER", "EMPTY_RESPONSE",
+                          "MEMORY_CAPACITY_CHANGED"}
+            if isinstance(code, str) and code in safe_codes:
+                status = result.get("status")
+                if isinstance(status, bool) or not isinstance(status, int) or not 100 <= status <= 599:
+                    status = None
+                raise MemoryModelError(code, status)
+            raise MemoryModelError("MODEL_INVALID_RESPONSE")
+        return result
+
+    @staticmethod
+    def _validate_memory_progress(frame):
+        phases = {"preparing", "waiting_model", "reasoning", "generating", "finishing"}
+        keys = ("elapsed_ms", "event_count", "text_bytes", "reasoning_bytes", "idle_ms")
+        if (frame.get("type") != "progress" or frame.get("phase") not in phases
+                or not isinstance(frame.get("heartbeat"), bool)):
+            raise MemoryModelError("MODEL_INVALID_RESPONSE")
+        safe = {"phase": frame["phase"], "heartbeat": frame["heartbeat"]}
+        for key in keys:
+            value = frame.get(key)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise MemoryModelError("MODEL_INVALID_RESPONSE")
+            safe[key] = value
+        if any(safe[key] > 2_147_483_647 for key in keys):
+            raise MemoryModelError("MODEL_INVALID_RESPONSE")
+        return safe
+
+    def consolidate_memory(self, *, provider, model, system, prompt, cancel_event=None,
+                           expected_capacity=None, on_progress=None):
+        route = validate_model_route((provider, model))
+        if not isinstance(system, str) or not system or not isinstance(prompt, str) or not prompt:
+            raise ValueError("memory consolidation system and prompt are required")
+        expected = None
+        if expected_capacity is not None:
+            if not isinstance(expected_capacity, dict):
+                raise ValueError("expected memory model capacity must be an object")
+            expected = {}
+            for key in ("contextWindow", "defaultMaxTokens"):
+                value = expected_capacity.get(key)
+                if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value <= 0):
+                    raise ValueError("expected memory model capacity is invalid")
+                expected[key] = value
+        result = self._memory_control_request({"action": "consolidate", "provider": route[0],
+                                               "model": route[1], "system": system,
+                                               "prompt": prompt,
+                                               **({"progress": True} if on_progress is not None else {}),
+                                               **({"expectedCapacity": expected} if expected is not None else {})},
+                                              cancel_event=cancel_event, on_progress=on_progress)
+        text = result.get("text")
+        usage = result.get("usage")
+        if ((result.get("provider"), result.get("model")) != route
+                or not isinstance(text, str) or not text):
+            raise MemoryModelError("MODEL_INVALID_RESPONSE")
+        response_wire = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n"
+        if len(response_wire) > 4 * 1024 * 1024:
+            raise MemoryModelError("MEMORY_RESPONSE_TOO_LARGE")
+        if usage is not None:
+            if (not isinstance(usage, dict)
+                    or any(isinstance(usage.get(key), bool) or not isinstance(usage.get(key), int)
+                           or usage[key] < 0 for key in ("inputTokens", "outputTokens"))):
+                raise MemoryModelError("MODEL_INVALID_RESPONSE")
+        return {"provider": route[0], "model": route[1], "text": text, "usage": usage}
+
+    def memory_capacity(self, *, provider, model, cancel_event=None):
+        path = getattr(self, "_memory_control_path", None)
+        if not path:
+            raise RuntimeError("DSH memory control is not enabled")
+        route = validate_model_route((provider, model))
+        result = self._memory_control_request({"action": "capacity", "provider": route[0],
+                                               "model": route[1]}, cancel_event=cancel_event)
+        if ((result.get("provider"), result.get("model")) != route
+                or result.get("capacitySource") != "native_adapter"):
+            raise MemoryModelError("MODEL_INVALID_RESPONSE")
+        capacity = {"provider": route[0], "model": route[1], "capacitySource": "native_adapter"}
+        for key in ("contextWindow", "defaultMaxTokens"):
+            value = result.get(key)
+            if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value <= 0):
+                raise MemoryModelError("MODEL_INVALID_RESPONSE")
+            capacity[key] = value
+        return capacity
 
     def compact_session(self, session_id):
         path = getattr(self, "_console_control_path", None)
@@ -504,6 +704,19 @@ class AcpRuntime:
 
 class DshTurnCancelled(RuntimeError):
     """The pinned ACP runtime confirmed that the active turn was cancelled."""
+
+
+class MemoryModelError(RuntimeError):
+    """Safe, provider-neutral memory model failure metadata."""
+
+    def __init__(self, error_code="MODEL_ERROR", status=None):
+        if not isinstance(error_code, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", error_code):
+            error_code = "MODEL_ERROR"
+        if isinstance(status, bool) or not isinstance(status, int) or not 100 <= status <= 599:
+            status = None
+        self.error_code = error_code
+        self.status = status
+        super().__init__("memory model call failed")
 
 
 class DshTurnFailure(RuntimeError):
@@ -966,6 +1179,23 @@ class DshClient:
         if not callable(lookup):
             raise RuntimeError("DSH background terminal lookup is unavailable")
         return lookup(session_id, task_id)
+
+    def consolidate_memory(self, *, provider, model, system, prompt, cancel_event=None,
+                           expected_capacity=None, on_progress=None):
+        """Run a one-shot model call without a conversation Session or turn lock."""
+        generate = getattr(self.runtime, "consolidate_memory", None)
+        if not callable(generate):
+            raise RuntimeError("DSH memory consolidation is unsupported by this runtime")
+        return generate(provider=provider, model=model, system=system, prompt=prompt,
+                        cancel_event=cancel_event, expected_capacity=expected_capacity,
+                        **({"on_progress": on_progress} if on_progress is not None else {}))
+
+    def memory_capacity(self, *, provider, model, cancel_event=None):
+        """Read exact native model capacity metadata without reserving a Session."""
+        lookup = getattr(self.runtime, "memory_capacity", None)
+        if not callable(lookup):
+            raise RuntimeError("DSH native memory capacity lookup is unsupported by this runtime")
+        return lookup(provider=provider, model=model, cancel_event=cancel_event)
 
     def select_persona(self, session_id: str, persona: str) -> dict:
         """Set the next-turn persona without changing the DSH session or tool set."""

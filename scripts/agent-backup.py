@@ -27,6 +27,8 @@ COMPONENTS = (
     ".runtime/astrbot/data/plugin_data/v2_journal",
     ".runtime/astrbot/data/plugin_data/v2_dsh_router",
     ".runtime/astrbot/data/plugin_data/v2_console",
+    ".runtime/astrbot/data/plugin_data/v2_tasks",
+    ".runtime/astrbot/data/plugin_data/v2_memory",
     ".runtime/dsh-home-chat",
     ".runtime/dsh-home-owner",
     ".runtime/dsh-home-owner-host",
@@ -81,11 +83,12 @@ def _valid_components(value: object, root: Path, archive_version: int) -> tuple[
     if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
         raise BackupError("backup component list is invalid")
     fixed = list(LEGACY_COMPONENTS if archive_version == 1 else COMPONENTS)
-    # Console state is an additive optional component. Pre-console v2 backups
-    # remain valid, including backups needed to roll back this deployment.
-    console_component = ".runtime/astrbot/data/plugin_data/v2_console"
-    if archive_version == 2 and console_component not in value:
-        fixed.remove(console_component)
+    # New plugin state is additive. Older v2 backups remain valid for rollback.
+    for optional in (".runtime/astrbot/data/plugin_data/v2_console",
+                     ".runtime/astrbot/data/plugin_data/v2_tasks",
+                     ".runtime/astrbot/data/plugin_data/v2_memory"):
+        if archive_version == 2 and optional not in value:
+            fixed.remove(optional)
     dynamic = []
     for item in value:
         if item in fixed:

@@ -216,11 +216,16 @@ def test_group_acp_launch_uses_private_home_but_session_cwd_is_workspace(tmp_pat
     )
 
     assert transports[0].config.cwd == str(home)
+    memory_socket = Path(transports[0].config.env["V2_MEMORY_CONTROL_SOCKET"])
+    memory_dir = memory_socket.parent
+    assert memory_dir.stat().st_mode & 0o777 == 0o700
+    assert len(transports[0].config.env["V2_MEMORY_CONTROL_TOKEN"]) == 64
     assert runtime.new_session() == "new-group-session"
     runtime.resume("new-group-session")
     session_calls = [params for method, params in transports[0].calls if method in {"session/new", "session/resume"}]
     assert session_calls[0]["cwd"] == session_calls[1]["cwd"] == str(workspace)
     runtime.close()
+    assert not memory_dir.exists()
 
 
 @pytest.mark.parametrize("profile,patch_name", [
@@ -255,6 +260,7 @@ def test_acp_turn_has_no_v2_wall_clock_timeout_for_any_profile(tmp_path, monkeyp
     )
     try:
         assert transports[0].config.request_timeout_seconds is None
+        assert ("V2_MEMORY_CONTROL_SOCKET" in transports[0].config.env) == (profile == "group-sandbox")
     finally:
         runtime.close()
 

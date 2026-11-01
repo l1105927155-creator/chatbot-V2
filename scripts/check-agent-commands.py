@@ -228,12 +228,16 @@ class ScriptedCommandCheck(live_helpers.LiveOwner):
         old_state = self.state(group)
         assert old_state is not None
         first_sid = old_state["session_id"]
-        new_event, _ = self._deterministic("/new", "已开始新的 Agent 对话", key=group, sender=self.owner)
+        # The sandbox has no memory collector yet: default reset must fail
+        # truthfully, and explicit skip still exercises the full reset path.
+        self._deterministic("/new", "旧上下文未清空", key=group, sender=self.owner)
+        assert self.state(group) == old_state
+        new_event, _ = self._deterministic("/new skip_mem", "已开始新的 Agent 对话", key=group, sender=self.owner)
         new_id = self._command_journal_id(new_event, group)
         new_state = self.state(group)
         assert new_state["session_id"] != first_sid
         assert new_state["history_after_journal_id"] == new_id
-        reset_event, _ = self._deterministic("/reset", "已开始新的 Agent 对话", key=group, sender=self.owner)
+        reset_event, _ = self._deterministic("/reset 跳过记忆", "已开始新的 Agent 对话", key=group, sender=self.owner)
         reset_id = self._command_journal_id(reset_event, group)
         reset_state = self.state(group)
         assert reset_state["session_id"] not in {first_sid, new_state["session_id"]}

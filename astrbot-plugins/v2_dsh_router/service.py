@@ -84,6 +84,19 @@ class _ActiveRun:
 
 
 @dataclass
+class _ScheduledRun:
+    task_id: str
+    run_id: str
+    done: asyncio.Event = field(default_factory=asyncio.Event)
+    session_id: str | None = None
+    cancel_token: Any = None
+    cancel_requested: bool = False
+    cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
+    lock_acquired: bool = False
+    error: BaseException | None = None
+
+
+@dataclass
 class _ResetBarrier:
     command_journal_id: int | None = None
     done: asyncio.Event = field(default_factory=asyncio.Event)
@@ -103,13 +116,10 @@ class ChatService:
     BACKGROUND_ACTIVE_LIMIT = 256
     BACKGROUND_TERMINAL_LIMIT = 256
     BACKGROUND_TOTAL_LIMIT = 512
-    BUSY_NOTICE_LIMIT = 256
-    BUSY_NOTICE_TIMEOUT_SECONDS = 5
-    BUSY_NOTICE = "已收到你的消息。上一项任务仍在前台处理中，这条消息会随后处理。"
 
     def __init__(self, journal: Any, state: Any, dsh: Any, mcp: Any = None,
                  trusted_sources: bool = False, audit=None, domain: str | None = None,
-                 execution_profile: str | None = None) -> None:
+                 execution_profile: str | None = None, prepare_memory_reset=None) -> None:
         self.journal = journal
         self.state = state
         self.dsh = dsh
@@ -122,11 +132,13 @@ class ChatService:
         self.execution_profile = execution_profile or ("owner-host" if self.domain == "owner" else "safe-chat")
         if self.execution_profile not in {"owner-host", "group-sandbox", "safe-chat"}:
             raise ValueError("unknown execution profile")
+        self.prepare_memory_reset = prepare_memory_reset
         self._queued = 0
-        self._busy_notices: OrderedDict[tuple, None] = OrderedDict()
         self._locks: dict[tuple[str, str, str], asyncio.Lock] = {}
         self._active_runs: dict[tuple[str, str, str], _ActiveRun] = {}
+        self._scheduled_runs: dict[tuple[str, str, str], _ScheduledRun] = {}
         self._reset_barriers: dict[tuple[str, str, str], _ResetBarrier] = {}
+        self._reset_confirmed_cancellations: dict[tuple[str, str, str], tuple[str, int]] = {}
         self._delivery_counts: dict[tuple[str, str, str], int] = {}
         self._reset_cancelled_wakes: set[tuple[tuple[str, str, str], str]] = set()
         self._disabled_identities: set[tuple[str, str, str]] = set()
@@ -308,6 +320,15 @@ class ChatService:
     async def close_background(self) -> None:
         """Stop callback acceptance and cancel queued sends before DSH shutdown."""
         self._background_closing = True
+        scheduled = tuple((identity, run) for identity, run in self._scheduled_runs.items())
+        if scheduled:
+            results = await asyncio.gather(*(self._cancel_scheduled(identity, run)
+                                             for identity, run in scheduled), return_exceptions=True)
+            failures = [result for result in results if isinstance(result, BaseException)]
+            failures.extend(RuntimeError("scheduled Agent turn did not confirm cancellation")
+                            for result in results if result is False)
+            if failures:
+                raise BaseExceptionGroup("scheduled Agent turns did not drain", failures)
         pending = tuple(self._background_delivery_tasks)
         for task in pending:
             task.cancel()
@@ -485,6 +506,12 @@ class ChatService:
     async def cancel(self, conversation) -> bool:
         """Stop a prompt or drain background work owned by this conversation."""
         identity = (conversation.platform_id, conversation.bot_id, conversation.key)
+        scheduled = self._scheduled_runs.get(identity)
+        cancelled_scheduled = False
+        if scheduled is not None:
+            cancelled_scheduled = await self._cancel_scheduled(identity, scheduled)
+            if not cancelled_scheduled:
+                return False
         active = self._active_runs.get(identity)
         if active is not None:
             def request():
@@ -509,6 +536,9 @@ class ChatService:
                 # let its delayed continuation drain a subsequent run.
                 return False
 
+        if cancelled_scheduled:
+            return True
+
         # An idle native Session can still own background jobs. Serialize with
         # new turns, then close that same SID; ACP close drains child work and
         # leaves the durable Session available for a later resume.
@@ -529,6 +559,14 @@ class ChatService:
 
     async def set_enabled(self, conversation, enabled: bool) -> bool:
         """Enable or disable this conversation's Agent without rotating state."""
+        identity = (conversation.platform_id, conversation.bot_id, conversation.key)
+        transitions = getattr(self, "_enable_transition_locks", None)
+        if transitions is None:
+            transitions = self._enable_transition_locks = {}
+        async with transitions.setdefault(identity, asyncio.Lock()):
+            return await self._set_enabled(conversation, enabled)
+
+    async def _set_enabled(self, conversation, enabled: bool) -> bool:
         if type(enabled) is not bool:
             raise ValueError("enabled must be a boolean")
         identity = (conversation.platform_id, conversation.bot_id, conversation.key)
@@ -542,13 +580,376 @@ class ChatService:
         disabled.add(identity)
         # Publish the barrier before cancellation; queued turns and late send
         # callbacks observe it synchronously while cancel drains the active run.
+        backend = getattr(self, "memory_backend", None)
+        if backend is not None and backend.identity == identity:
+            manager = getattr(backend.router, "memory_manager", None)
+            pause = getattr(manager, "pause_conversation", None)
+            if callable(pause):
+                await pause(conversation)
+            progress_reader = getattr(backend, "progress_snapshot", None)
+            progress = progress_reader() if callable(progress_reader) else {}
+            if progress.get("active"):
+                await backend.manage("cancel", {"run_id": progress["run_id"]})
         active = self._active_runs.get(identity)
+        scheduled = self._scheduled_runs.get(identity)
         cancelled = await self.cancel(conversation)
         if active is not None and not cancelled and not active.done.is_set():
             raise RuntimeError("Agent 准入已停止，但当前任务尚未确认取消，请检查运行状态。")
+        if scheduled is not None and not cancelled and not scheduled.done.is_set():
+            raise RuntimeError("Agent 准入已停止，但定时任务尚未确认取消，请检查运行状态。")
         return False
 
-    async def reset_conversation(self, conversation, inbound_message_id, get_group=None, *, barrier=None):
+    async def assert_can_enable(self, conversation) -> None:
+        """Reject enabling while a prior DSH outcome still needs Owner review.
+
+        A confirmed cancellation is not proof that tools had no side effects.
+        Keep its durable pending marker until the existing explicit recovery
+        flow drains the native Session and the Owner chooses to skip that wake.
+        """
+        identity = (conversation.platform_id, conversation.bot_id, conversation.key)
+        # A finishing turn commits its pending marker while holding this same
+        # lock. Wait for that commit before deciding whether enable is safe.
+        async with self._lock(conversation):
+            state = await asyncio.to_thread(self.state.get, *identity)
+            if state is not None and state.pending_upper_cursor is not None:
+                raise PendingTurnError(
+                    "会话有待核对的 DSH 轮次（Journal "
+                    f"{state.pending_upper_cursor}）；先检查结果，再执行 /v2agent recover "
+                    f"{state.pending_upper_cursor}，不会重试旧操作。"
+                )
+            fault = await asyncio.to_thread(self.state.get_pre_session_fault, *identity)
+            if fault is not None:
+                cursor = fault["failed_upper_cursor"]
+                raise PendingTurnError(
+                    f"会话在 Journal {cursor} 有待核对的 DSH 会话创建故障；"
+                    f"先检查状态，再执行 /v2agent recover {cursor}。"
+                )
+
+    async def _cancel_scheduled(self, identity, run) -> bool:
+        """Cancel and drain one independent scheduled Agent Session."""
+        if self._scheduled_runs.get(identity) is not run:
+            return run.done.is_set()
+        run.cancel_requested = True
+        run.cancel_event.set()
+        if not run.lock_acquired:
+            # The runner races its lock acquisition against this event, so a
+            # queued task can exit without holding up reset/disable/unload.
+            await run.done.wait()
+            return True
+        if run.session_id is not None and run.cancel_token is not None and not run.done.is_set():
+            accepted = await self._dsh_call(
+                self.dsh.cancel_session, run.session_id, run.cancel_token)
+            if not accepted and not run.done.is_set():
+                return False
+        await run.done.wait()
+        return run.error is None or isinstance(run.error, DshTurnCancelled)
+
+    async def cancel_scheduled(self, conversation, *, task_id: str,
+                               run_id: str | None = None) -> bool:
+        """Cancel only the scheduled run identified by this task and optional run id."""
+        identity = (conversation.platform_id, conversation.bot_id, conversation.key)
+        run = self._scheduled_runs.get(identity)
+        if run is None or run.task_id != task_id:
+            return False
+        if run_id is not None and run.run_id != run_id:
+            return False
+        return await self._cancel_scheduled(identity, run)
+
+    async def run_scheduled(self, conversation, *, task_id: str, run_id: str, prompt: str,
+                            requester_id: str, source_message_id: str, send=None, files=None) -> dict:
+        """Run one trusted task in a fresh DSH Session without touching chat state."""
+        identity = (conversation.platform_id, conversation.bot_id, conversation.key)
+        if self.execution_profile != "group-sandbox" or not conversation.key.startswith("group:"):
+            raise ValueError("scheduled Agent turns require a group conversation")
+        for value, label in ((task_id, "task_id"), (run_id, "run_id"),
+                             (source_message_id, "source_message_id")):
+            if (not isinstance(value, str) or not value or value != value.strip()
+                    or len(value) > 128 or any(ord(char) < 32 or ord(char) == 127 for char in value)):
+                raise ValueError(f"invalid scheduled {label}")
+            if label != "source_message_id" and any(
+                    not (char.isascii() and (char.isalnum() or char in ":._-")) for char in value):
+                raise ValueError(f"invalid scheduled {label}")
+        if (not isinstance(requester_id, str) or not requester_id.isascii() or not requester_id.isdigit()
+                or len(requester_id) > 20):
+            raise ValueError("scheduled task requester must be a numeric QQ identity")
+        if not isinstance(prompt, str) or not prompt.strip() or len(prompt.encode("utf-8")) > 1024 * 1024:
+            raise ValueError("scheduled task prompt is empty or exceeds its byte limit")
+        if self.mcp is None or not self.trusted_sources:
+            raise RuntimeError("scheduled Agent execution requires the trusted group MCP runtime")
+        if self._background_closing:
+            raise AgentDisabledError("Agent runtime is closing")
+        if identity in self._scheduled_runs:
+            raise RuntimeError("a scheduled Agent turn is already active for this group")
+
+        # Chat-created tasks retain their canonical Journal proof. A Dashboard
+        # task has no inbound QQ message: require the host registry to prove its
+        # current definition, configured QQ Owner and authenticated origin.
+        if source_message_id == "dashboard-owner:" + requester_id:
+            manager = getattr(self.mcp, "task_manager", None)
+            validate = getattr(manager, "validate_dashboard_source", None)
+            if (not callable(validate) or await validate(
+                    conversation, task_id, requester_id, source_message_id) is not True):
+                raise PermissionError("scheduled dashboard task source is not authorized")
+        else:
+            source_rows = await asyncio.to_thread(
+                self.journal.by_message_id, conversation.platform_id, conversation.bot_id,
+                source_message_id)
+            matching_sources = [row for row in source_rows
+                                if row.message.conversation_key == conversation.key
+                                and row.message.direction == "inbound"
+                                and row.message.actor_id == requester_id
+                                and row.message.message_id == source_message_id]
+            if len(matching_sources) != 1:
+                raise ValueError("scheduled task source is not a matching canonical group message")
+
+        run = _ScheduledRun(task_id=task_id, run_id=run_id)
+        self._scheduled_runs[identity] = run
+        lock = None
+        acquire = None
+        cancelled = None
+        acquired = False
+        accepting_sends = True
+        sending: set[asyncio.Event] = set()
+        original_file_send = getattr(files, "send", None) if files is not None else None
+        original_file_methods = ({name: getattr(files, name) for name in ("send_file", "send_text")
+                                  if callable(getattr(files, name, None))}
+                                 if files is not None else {})
+        copying_files: set[asyncio.Event] = set()
+
+        async def drain_sends():
+            leases = sending | copying_files
+            if leases:
+                drained = asyncio.gather(*(lease.wait() for lease in tuple(leases)))
+                while not drained.done():
+                    try:
+                        await asyncio.shield(drained)
+                    except asyncio.CancelledError:
+                        continue
+                drained.result()
+
+        try:
+            lock = self._lock(conversation)
+            acquire = asyncio.create_task(lock.acquire())
+            cancelled = asyncio.create_task(run.cancel_event.wait())
+            try:
+                done, _pending = await asyncio.wait(
+                    {acquire, cancelled}, return_when=asyncio.FIRST_COMPLETED)
+                if acquire in done:
+                    acquired = acquire.result()
+                if not acquired:
+                    raise DshTurnCancelled("scheduled turn cancelled while queued")
+            except BaseException:
+                # Task.cancel() can interrupt asyncio.wait() while lock.acquire()
+                # is still queued. Always cancel and drain it, including when the
+                # cancellation event and lock become ready in the same loop turn.
+                if acquire is not None:
+                    if not acquire.done():
+                        acquire.cancel()
+                    acquire_result = (await asyncio.gather(
+                        acquire, return_exceptions=True))[0]
+                    if acquire_result is True and not acquired:
+                        lock.release()
+                        acquired = False
+                raise
+            finally:
+                if cancelled is not None:
+                    cancelled.cancel()
+                    await asyncio.gather(cancelled, return_exceptions=True)
+            run.lock_acquired = True
+            self._ensure_enabled(identity)
+            if (self._background_closing or run.cancel_requested
+                    or identity in self._reset_barriers):
+                raise AgentDisabledError("scheduled Agent turn was cancelled before execution")
+            current = await asyncio.to_thread(self.state.get, *identity)
+            history_after = max(0, getattr(current, "history_after_journal_id", 0))
+            history_through = await asyncio.to_thread(self.journal.high_watermark, conversation)
+            if history_through < history_after:
+                raise RuntimeError("canonical group history boundary is inconsistent")
+
+            delivery_error = None
+
+            def ensure_send_allowed():
+                if not accepting_sends:
+                    raise DshTurnCancelled("scheduled model turn has ended")
+                if delivery_error is not None:
+                    raise RuntimeError("previous send failed; do not resend")
+                if (run.cancel_requested or self._background_closing
+                        or identity in self._reset_barriers):
+                    raise DshTurnCancelled("scheduled turn cancelled before send")
+                self._ensure_enabled(identity)
+
+            async def guarded_operation(operation, *args, validate_text=False):
+                nonlocal delivery_error
+                ensure_send_allowed()
+                if validate_text:
+                    validate_reply(args[0])
+                self._delivery_enter(identity)
+                lease = asyncio.Event()
+                sending.add(lease)
+                try:
+                    trace = (self.audit.trace(conversation, source_message_id, self.domain)
+                             if self.audit else None)
+
+                    async def deliver():
+                        if trace:
+                            async def traced_operation(_payload):
+                                return await operation(*args)
+                            return await trace.send(traced_operation,
+                                                    args[0] if validate_text else None, "mcp")
+                        return await operation(*args)
+
+                    delivery = asyncio.create_task(deliver())
+                    try:
+                        await asyncio.shield(delivery)
+                    except asyncio.CancelledError:
+                        # Drain a submitted receipt even if this tool is cancelled.
+                        # Its outcome can be uncertain, so never resend it.
+                        while not delivery.done():
+                            try:
+                                await asyncio.shield(delivery)
+                            except asyncio.CancelledError:
+                                continue
+                        delivery.result()
+                        raise
+                except BaseException as error:
+                    delivery_error = error
+                    raise
+                finally:
+                    self._delivery_exit(identity)
+                    sending.discard(lease)
+                    lease.set()
+
+            async def scheduled_send(text):
+                if not accepting_sends:
+                    raise DshTurnCancelled("scheduled model turn has ended")
+                if send is None:
+                    raise RuntimeError("scheduled sending is unavailable")
+                return await guarded_operation(send, text, validate_text=True)
+
+            if files is not None and callable(original_file_send):
+                async def guarded_file_send(path, name):
+                    # FileTransfer snapshots and validates the workspace source
+                    # before calling send. Recheck lifecycle at this final
+                    # boundary, immediately before the native QQ submission.
+                    return await guarded_operation(original_file_send, path, name)
+                files.send = guarded_file_send
+                for method_name, original_method in original_file_methods.items():
+                    async def guarded_file_operation(*args, _method=original_method, **kwargs):
+                        # Keep an in-progress snapshot operation attached to the
+                        # run until its final guarded callback has returned.
+                        ensure_send_allowed()
+                        lease = asyncio.Event()
+                        copying_files.add(lease)
+                        try:
+                            return await _method(*args, **kwargs)
+                        finally:
+                            copying_files.discard(lease)
+                            lease.set()
+                    setattr(files, method_name, guarded_file_operation)
+
+            async with self.mcp.turn(
+                conversation, scheduled_send, history_after=history_after,
+                history_through=history_through, execution_kind="scheduled",
+                actor_id=requester_id, source_message_id=source_message_id,
+                **({"files": files} if files is not None else {}),
+            ) as servers:
+                if run.cancel_requested or identity in self._reset_barriers:
+                    raise DshTurnCancelled("scheduled turn cancelled before Session creation")
+                session_id = await self._dsh_call(self.dsh.create_session, servers)
+                run.session_id = session_id
+                if run.cancel_requested or identity in self._reset_barriers:
+                    raise DshTurnCancelled("scheduled turn cancelled before model execution")
+
+                # Preserve the live group's selected model, persona, and scene,
+                # while making every mutation to a short-lived independent SID.
+                model_route = None
+                if self.console_store is not None:
+                    settings = session_settings(self.console_store, conversation)
+                    configured_model = settings.get("model")
+                    if isinstance(configured_model, dict):
+                        model_route = (configured_model["provider"], configured_model["model"])
+                elif hasattr(self.state, "get_model_route"):
+                    model_route = await asyncio.to_thread(self.state.get_model_route, *identity)
+                front_session = getattr(current, "session_id", None)
+                if front_session:
+                    personas = getattr(self.dsh, "personas", None)
+                    scenes = getattr(self.dsh, "scenes", None)
+                    if personas is not None:
+                        selected_persona = await asyncio.to_thread(personas.current, front_session)
+                        await self._dsh_call(self.dsh.select_persona, session_id,
+                                             selected_persona["persona"])
+                    if scenes is not None:
+                        selected_scene = await asyncio.to_thread(scenes.current, front_session)
+                        await self._dsh_call(self.dsh.select_scene, session_id,
+                                             selected_scene["scene"])
+                if run.cancel_requested or identity in self._reset_barriers:
+                    raise DshTurnCancelled("scheduled turn cancelled before model execution")
+
+                source = {
+                    "platform_id": conversation.platform_id,
+                    "bot_id": conversation.bot_id,
+                    "conversation_key": conversation.key,
+                    "requester_id": requester_id,
+                    "inbound_message_id": source_message_id,
+                    "kind": "scheduled",
+                    "task_id": task_id,
+                    "run_id": run_id,
+                }
+                reserve = getattr(self.dsh, "reserve_turn", None)
+                token = reserve(session_id) if callable(reserve) else None
+                run.cancel_token = token
+                if run.cancel_requested or self._background_closing:
+                    raise DshTurnCancelled("scheduled turn cancelled before model dispatch")
+                options = {"model_route": model_route} if model_route is not None else {}
+                if token is not None:
+                    options["cancel_token"] = token
+                try:
+                    reply = await self._dsh_call(
+                        self.dsh.run, session_id, prompt, servers, source, **options)
+                finally:
+                    # Client-side MCP cancellation can end the native model turn
+                    # while the HTTP server is still draining a submitted send.
+                    accepting_sends = False
+                    await drain_sends()
+                run.cancel_token = None
+                if (run.cancel_requested or self._background_closing
+                        or identity in self._reset_barriers):
+                    raise DshTurnCancelled("scheduled turn cancelled before completion")
+                if delivery_error is not None:
+                    raise RuntimeError("scheduled delivery failed; no automatic retry") from delivery_error
+                return {"status": "completed", "task_id": task_id, "run_id": run_id,
+                        "session_id": session_id, "reply": reply}
+        except BaseException as error:
+            run.error = error
+            raise
+        finally:
+            accepting_sends = False
+            await drain_sends()
+            # Own the lease at the outermost scope: cancellation can arrive while
+            # draining the auxiliary cancellation waiter, before business code's
+            # former inner finally was entered.
+            if acquired:
+                run.lock_acquired = False
+                lock.release()
+                acquired = False
+            drain_error = None
+            try:
+                if run.session_id is not None:
+                    await self._dsh_call(self.dsh.close_session, run.session_id)
+            except BaseException as error:
+                drain_error = RuntimeError("scheduled DSH Session drain failed")
+                run.error = drain_error
+                if error is not run.error:
+                    drain_error.__cause__ = error
+            finally:
+                if self._scheduled_runs.get(identity) is run:
+                    self._scheduled_runs.pop(identity, None)
+                run.done.set()
+            if drain_error is not None:
+                raise drain_error
+
+    async def reset_conversation(self, conversation, inbound_message_id, get_group=None, *, barrier=None,
+                                 skip_memory=False):
         """Rotate to a fresh native Session at the canonical /new command row.
 
         A command handler may call begin_reset synchronously before awaiting
@@ -575,6 +976,7 @@ class ChatService:
                 raise ResetError("找不到这条 /new 命令的规范会话记录，未重置上下文。")
             return await self._reset_at_floor(
                 conversation, inbound_message_id, get_group, barrier, command.journal_id,
+                prepare_memory=not skip_memory,
             )
         except PendingTurnError:
             if trace:
@@ -613,6 +1015,7 @@ class ChatService:
             barrier.command_journal_id = floor_cursor
             return await self._reset_at_floor(
                 conversation, operation_id, get_group, barrier, floor_cursor,
+                prepare_memory=False,
             )
         except PendingTurnError:
             if barrier.trace:
@@ -635,7 +1038,8 @@ class ChatService:
             if self._reset_barriers.get(identity) is barrier:
                 del self._reset_barriers[identity]
 
-    async def _reset_at_floor(self, conversation, reset_id, get_group, barrier, floor_cursor):
+    async def _reset_at_floor(self, conversation, reset_id, get_group, barrier, floor_cursor,
+                              *, prepare_memory=False):
         """Shared reset transaction after its command row or console cut is fixed."""
         identity = (conversation.platform_id, conversation.bot_id, conversation.key)
         trace = barrier.trace
@@ -645,7 +1049,15 @@ class ChatService:
         # row skipped. Unknown persisted pending state is never inferred
         # to be safe merely because this command arrived later.
         active = self._active_runs.get(identity)
+        scheduled = self._scheduled_runs.get(identity)
+        if scheduled is not None:
+            cancelled = await self._cancel_scheduled(identity, scheduled)
+            if not cancelled and not scheduled.done.is_set():
+                raise ResetError("定时任务尚未确认取消，原会话保持不变。")
         expected_pending = None
+        confirmed_cancel_sid = None
+        confirmed_cancel_cursor = None
+        native_cancel_confirmed = False
         if active is not None:
             active.reset_command_id = str(reset_id)
             if not active.done.is_set():
@@ -661,6 +1073,7 @@ class ChatService:
                     if active.inbound_message_id:
                         self._reset_cancelled_wakes.discard((identity, str(active.inbound_message_id)))
                     raise ResetError("当前模型轮次未能确认取消，旧会话保持不变。")
+                native_cancel_confirmed = cancellation_requested is True
             try:
                 await asyncio.to_thread(active.done.wait)
             except BaseException:
@@ -668,7 +1081,13 @@ class ChatService:
                     self._reset_cancelled_wakes.discard((identity, str(active.inbound_message_id)))
                 raise
             if isinstance(active.error, DshTurnCancelled):
+                if not native_cancel_confirmed:
+                    if active.inbound_message_id:
+                        self._reset_cancelled_wakes.discard((identity, str(active.inbound_message_id)))
+                    raise ResetError("当前轮次没有收到本次重置的原生取消确认，旧会话保持不变。")
                 expected_pending = active.pending_cursor
+                confirmed_cancel_sid = active.session_id
+                confirmed_cancel_cursor = active.pending_cursor
             elif active.error is not None:
                 if active.inbound_message_id:
                     self._reset_cancelled_wakes.discard((identity, str(active.inbound_message_id)))
@@ -680,13 +1099,49 @@ class ChatService:
         lock = self._lock(conversation)
         async with lock:
             current = await asyncio.to_thread(self.state.get, *identity)
+            if confirmed_cancel_sid is not None and isinstance(confirmed_cancel_cursor, int):
+                self._reset_confirmed_cancellations[identity] = (
+                    confirmed_cancel_sid, confirmed_cancel_cursor,
+                )
+            saved_cancellation = self._reset_confirmed_cancellations.get(identity)
+            if (expected_pending is None and saved_cancellation is not None and current is not None
+                    and current.session_id == saved_cancellation[0]
+                    and current.pending_upper_cursor == saved_cancellation[1]):
+                expected_pending = saved_cancellation[1]
             if await self._has_unjournaled_receipt(conversation):
                 raise ResetError("有一条此前已获平台回执的消息尚未进入会话记录，请稍后重新发送 /new；本次尚未重置。")
             if await self._outbound_after(conversation, floor_cursor):
                 raise ResetError("命令之后已有旧轮次回复送达，请在该回复完成后重新发送 /new；本次尚未重置。")
             if current is not None and current.pending_upper_cursor is not None:
-                if expected_pending is None or current.pending_upper_cursor != expected_pending:
+                cancellation_matches = (
+                    saved_cancellation is not None
+                    and saved_cancellation == (current.session_id, current.pending_upper_cursor)
+                )
+                active_cancellation_matches = (
+                    confirmed_cancel_sid == current.session_id
+                    and confirmed_cancel_cursor == current.pending_upper_cursor
+                )
+                if (expected_pending is None or current.pending_upper_cursor != expected_pending
+                        or not (cancellation_matches or active_cancellation_matches)):
                     raise PendingTurnError("存在未核对的 DSH 轮次，不能安全重置会话。")
+
+            if (prepare_memory and self.execution_profile == "group-sandbox"):
+                provider = self.prepare_memory_reset
+                message = "记忆整理未完成，旧上下文未清空；如需跳过整理，请发送 /new skip_mem。"
+                if provider is None:
+                    raise ResetError(f"群聊{message}（记忆整理尚未接入）。")
+                try:
+                    prepared = await provider(
+                        conversation=conversation,
+                        through_journal_id=floor_cursor,
+                        session_id=current.session_id if current is not None else None,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except BaseException as error:
+                    raise ResetError(message) from error
+                if prepared is not True:
+                    raise ResetError(message)
 
             old_persona = None
             old_scene = None
@@ -731,6 +1186,7 @@ class ChatService:
                         floor_cursor,
                         expected_pending=expected_pending,
                     )
+                    self._reset_confirmed_cancellations.pop(identity, None)
                     if created_session == new_state.session_id:
                         created["session_id"] = None  # The state store now owns this mapping.
                     if trace:
@@ -911,7 +1367,7 @@ class ChatService:
     @classmethod
     def _prompt(cls, conversation, rows: list[Any], wake_id: int, after: int = 0, *,
                 visual_input=None, visible_ids=None, history_floor: int = 0,
-                resume_through_journal_id: int = 0) -> str:
+                resume_through_journal_id: int = 0, member_profiles=None) -> str:
         selected = [(row, *cls._project_row(row)) for row in rows[-cls.MAX_DELTA_ROWS:]
                     if visible_ids is None or row.journal_id in visible_ids]
         if resume_through_journal_id > history_floor:
@@ -950,6 +1406,12 @@ class ChatService:
                 }
             if visual_input is not None:
                 header['visual_input'] = visual_input
+            if member_profiles:
+                relevant = {row.message.actor_id for row, _, _ in selected}
+                relevant.add(conversation.bot_id)
+                profiles = {key: value for key, value in member_profiles.items() if key in relevant}
+                if profiles:
+                    header["current_group_member_profiles"] = profiles
             prompt = "\n".join([json.dumps(header, ensure_ascii=False, separators=(",", ":"))]
                                + [encoded for _, encoded, _ in selected])
             if len(prompt.encode("utf-8")) <= cls.MAX_DELTA_BYTES:
@@ -1077,6 +1539,7 @@ class ChatService:
         messaging=None,
         memes=None,
         plugins=None,
+        games=None,
     ) -> str | None:
         """Run a turn once, then send through AstrBot while holding this chat's lock."""
         trace = self.audit.trace(conversation, inbound_message_id, self.domain) if self.audit else None
@@ -1088,7 +1551,6 @@ class ChatService:
         self._queued += 1
         waiting = True
         lifetime = _SendLifetime()
-        notice_task = None
         if files is not None:
             original_file_send = files.send
 
@@ -1103,62 +1565,10 @@ class ChatService:
         with trace_scope(trace):
             try:
                 lock = self._lock(conversation)
-                active = self._active_runs.get(identity)
-                notice_key = (identity, str(inbound_message_id))
-                if (lock.locked() and active is not None and not active.finished
-                        and inbound_message_id and active.inbound_message_id != inbound_message_id
-                        and notice_key not in self._busy_notices
-                        and identity not in self._reset_barriers):
-                    # A receipt is independent of the queued model turn. Reserve
-                    # before awaiting so redelivery cannot duplicate the notice;
-                    # an uncertain send is never retried automatically.
-                    self._busy_notices[notice_key] = None
-                    while len(self._busy_notices) > self.BUSY_NOTICE_LIMIT:
-                        self._busy_notices.popitem(last=False)
-                    async def busy_notice():
-                        entered = False
-                        try:
-                            current, matches = await asyncio.gather(
-                                asyncio.to_thread(self.state.get, *identity),
-                                asyncio.to_thread(self.journal.by_message_id,
-                                                  conversation.platform_id,
-                                                  conversation.bot_id, inbound_message_id),
-                            )
-                            wake = next((row for row in matches
-                                         if row.message.conversation_key == conversation.key
-                                         and row.message.direction == "inbound"), None)
-                            floor = max(getattr(current, "last_seen_journal_id", 0),
-                                        getattr(current, "history_after_journal_id", 0))
-                            if (wake is None or wake.journal_id <= floor
-                                    or self._active_runs.get(identity) is not active
-                                    or active.finished or not lock.locked()):
-                                return
-                            self._delivery_enter(identity, lifetime)
-                            entered = True
-                            async def receipt_send(text):
-                                if messaging is not None and conversation.key.startswith("group:"):
-                                    return await messaging.send_origin(
-                                        text, mention_user_ids=[wake.message.actor_id],
-                                        reply_to_journal_id=None)
-                                return await send(text)
-                            operation = (trace.send(receipt_send, self.BUSY_NOTICE, "control")
-                                         if trace else receipt_send(self.BUSY_NOTICE))
-                            await asyncio.wait_for(operation, self.BUSY_NOTICE_TIMEOUT_SECONDS)
-                        except Exception:
-                            # A receipt failure must not discard the real request.
-                            pass
-                        finally:
-                            if entered:
-                                self._delivery_exit(identity)
-
-                    notice_task = asyncio.create_task(busy_notice())
                 while True:
                     while True:
                         await lock.acquire()
                         try:
-                            if notice_task is not None:
-                                await notice_task
-                                notice_task = None
                             self._ensure_enabled(identity)
                         except BaseException:
                             lock.release()
@@ -1199,7 +1609,7 @@ class ChatService:
                                 options['vision'] = vision
                             if messaging is not None:
                                 options['messaging'] = messaging
-                            if memes is not None or plugins is not None:
+                            if memes is not None or plugins is not None or messaging is not None or games is not None:
                                 async def invoke_capability(operation):
                                     self._delivery_enter(identity, lifetime)
                                     try:
@@ -1208,10 +1618,15 @@ class ChatService:
                                     finally:
                                         self._delivery_exit(identity)
                                 options.update(memes=memes, plugins=plugins, invoke=invoke_capability)
+                            if games is not None:
+                                options['games'] = games
                             current = await asyncio.to_thread(self.state.get, *identity)
                             history_after = max(0, getattr(current, "history_after_journal_id", 0))
                             if history_after:
                                 options['history_after'] = history_after
+                            options['source_message_id'] = inbound_message_id
+                            if self.execution_profile == "owner-host":
+                                options['execution_kind'] = "owner-host"
                             async with self.mcp.turn(conversation, tool_send, get_group, **options) as servers:
                                 visual_options = {'vision': vision} if vision is not None else {}
                                 if messaging is not None:
@@ -1246,9 +1661,6 @@ class ChatService:
                 raise
             finally:
                 lifetime.active = False
-                if notice_task is not None:
-                    notice_task.cancel()
-                    await asyncio.gather(notice_task, return_exceptions=True)
                 if waiting:
                     self._queued -= 1
 
@@ -1364,8 +1776,14 @@ class ChatService:
         # Program-managed recovery uses the existing row/UTF-8 byte bounds.
         # These bound the new Journal input, not the retained native context;
         # byte size must not be described as an exact model token count.
+        member_profiles = {}
+        if messaging is not None and conversation.key.startswith("group:"):
+            lookup = getattr(messaging, "member_profiles", None)
+            if lookup is not None:
+                member_profiles = await lookup({row.message.actor_id for row in rows} | {conversation.bot_id})
         prompt = self._prompt(conversation, rows, wake.journal_id, state.last_seen_journal_id,
-                              history_floor=history_floor, resume_through_journal_id=resume_through)
+                              history_floor=history_floor, resume_through_journal_id=resume_through,
+                              member_profiles=member_profiles)
         image_blocks = []
         if vision is not None:
             # Automatically load only images attached to this wake and the
@@ -1402,7 +1820,8 @@ class ChatService:
                     visual_header[target + '_count'] = len(entries)
                 prompt = self._prompt(conversation, rows, wake.journal_id, state.last_seen_journal_id,
                                       visual_input=visual_header, visible_ids=visible_ids,
-                                      history_floor=history_floor, resume_through_journal_id=resume_through)
+                                      history_floor=history_floor, resume_through_journal_id=resume_through,
+                                      member_profiles=member_profiles)
                 final_ids = {json.loads(line)['journal_id'] for line in prompt.splitlines()[1:]}
                 if final_ids == visible_ids:
                     break
@@ -1421,7 +1840,7 @@ class ChatService:
             if not (visual['images'] or visual['errors'] or visual.get('omitted')):
                 prompt = self._prompt(conversation, rows, wake.journal_id, state.last_seen_journal_id,
                                       visible_ids=visible_ids, history_floor=history_floor,
-                                      resume_through_journal_id=resume_through)
+                                      resume_through_journal_id=resume_through, member_profiles=member_profiles)
             image_blocks = visual['images']
         trusted_source = None
         if self.trusted_sources:

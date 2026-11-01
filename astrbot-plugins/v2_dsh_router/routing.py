@@ -38,6 +38,20 @@ def _group_trigger(event: Any, raw: Mapping, segments: list) -> bool:
     )
 
 
+def addresses_bot(event: Any, raw: Any) -> bool:
+    """Report whether this message explicitly addresses this Bot in a group.
+
+    The silence gate reuses the same evidence ``should_route`` already trusts: a
+    real ``at`` segment for this Bot, or a reply whose sender the pinned adapter
+    resolved to this Bot. Text prefixes, nicknames, and ``at`` of others do not
+    count. Caller has already admitted the message through ``should_route``.
+    """
+    if not isinstance(raw, Mapping):
+        return False
+    segments = raw.get("message")
+    return isinstance(segments, list) and _group_trigger(event, raw, segments)
+
+
 def should_route(event: Any, raw: Any) -> bool:
     """Admit addressed text/attachments or a bare Bot mention unless already claimed.
 
@@ -74,7 +88,7 @@ def should_route(event: Any, raw: Any) -> bool:
         return True
     # An attachment is itself a user message. Group messages still require the
     # real mention/resolved Bot reply checked above; upload notices stay passive.
-    if any(isinstance(segment, Mapping) and segment.get('type') in {'file', 'image', 'record', 'video'}
+    if any(isinstance(segment, Mapping) and segment.get('type') in {'file', 'image', 'record', 'video', 'forward'}
            and isinstance(segment.get('data'), Mapping) for segment in segments):
         return True
     # Group addressing was already verified above. An actual Bot mention or

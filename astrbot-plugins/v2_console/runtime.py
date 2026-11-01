@@ -41,6 +41,22 @@ class RuntimeAdapter:
         # not an unresolved administrator setting or a recurring UI warning.
         return []
 
+    async def tasks(self, action: str, payload: dict) -> dict:
+        """Delegate an authenticated console request to the task plugin.
+
+        The plugin resolves exact admitted identities and the configured QQ
+        Owner; browser input never supplies execution authority or file paths.
+        """
+        if action not in {"snapshot", "policy", "manage", "run", "cancel"}:
+            raise ValueError("unknown task console action")
+        metadata = self.context.get_registered_star("v2_tasks")
+        plugin = getattr(metadata, "star_cls", None) if metadata is not None else None
+        handler = getattr(plugin, "dashboard", None)
+        if not callable(handler):
+            raise RuntimeError("自动任务服务尚未就绪。")
+        return await handler(action, {key: value for key, value in payload.items()
+                                      if key != "action"})
+
     async def health(self):
         status = await self._router().health()
         return {key: status[key] for key in ("pid", "ready", "onebot_connected", "core_ready")}
@@ -156,6 +172,13 @@ class RuntimeAdapter:
         enabling = current["settings"]["enabled"] is False and validated["enabled"] is True
         resume_through = None
         if enabling:
+            # Check before persisting enabled=true. A durable pending DSH turn
+            # must be explicitly reviewed and skipped through /recover; a
+            # native cancellation receipt does not prove that tools had no
+            # side effects. Keep compatibility with older service adapters.
+            can_enable = getattr(service, "assert_can_enable", None)
+            if callable(can_enable):
+                await can_enable(conversation)
             journal = getattr(service, "journal", None)
             if journal is None or not callable(getattr(journal, "high_watermark", None)):
                 raise RuntimeError("无法读取 Journal 高水位；启用设置未保存。")
@@ -177,7 +200,8 @@ class RuntimeAdapter:
             raise PartialRuntimeOperation("会话设置", ["设置已持久化"], error) from error
         return {"revision": updated["state"]["revision"], "session": updated["session"]}
 
-    async def add_group(self, payload: dict, store, templates_root: Path) -> dict:
+    async def add_group(self, payload: dict, store, templates_root: Path, *,
+                        reload_pipeline_scheduler=None) -> dict:
         if not isinstance(payload, dict):
             raise ValueError("group payload must be an object")
         platform, bot, group = self._group_payload(payload)
@@ -205,6 +229,7 @@ class RuntimeAdapter:
 
         conversation_key = f"group:{group}"
         identity = (platform, bot, conversation_key)
+        umo = f"{platform}:GroupMessage:{group}"
         session_key = store.session_key(dict(zip(
             ("platform_id", "bot_id", "conversation_key"), identity
         )))
@@ -216,15 +241,52 @@ class RuntimeAdapter:
         existing_session = state["sessions"].get(session_key)
         agent_admitted = conversation_key in allowed
         router_admitted = conversation_key in getattr(router, "allowed_conversations", ())
+        if reload_pipeline_scheduler is None:
+            raise RuntimeError("AstrBot 原生消息流水线刷新接口不可用。")
+
+        async def sync_platform_whitelist(completed):
+            config = self.context.get_config(umo)
+            platform_settings = config.get("platform_settings")
+            if not isinstance(platform_settings, dict):
+                raise ValueError("AstrBot platform_settings is unavailable")
+            whitelist = platform_settings.get("id_whitelist")
+            if not isinstance(whitelist, list) or any(not isinstance(item, str) for item in whitelist):
+                raise ValueError("AstrBot id_whitelist is invalid")
+            whitelist_entry = f"{platform}:GroupMessage:{group}"
+            if whitelist_entry not in whitelist:
+                previous = list(whitelist)
+                whitelist.append(whitelist_entry)
+                try:
+                    config.save_config()
+                except BaseException:
+                    whitelist[:] = previous
+                    raise
+            completed.append("AstrBot 平台会话白名单已同步")
+            manager = getattr(self.context, "astrbot_config_mgr", None)
+            get_conf_info = getattr(manager, "get_conf_info", None)
+            if not callable(get_conf_info):
+                raise RuntimeError("无法确定群消息使用的 AstrBot 配置流水线。")
+            conf_info = get_conf_info(umo)
+            conf_id = conf_info.get("id") if isinstance(conf_info, dict) else None
+            if not isinstance(conf_id, str) or not conf_id:
+                raise RuntimeError("AstrBot 群消息配置流水线标识无效。")
+            await reload_pipeline_scheduler(conf_id)
+            completed.append("AstrBot 平台白名单流水线已刷新")
+
         if agent_admitted:
             if existing_session is None:
                 raise RuntimeError("该群已在 Agent 准入配置中，但缺少控制台迁移记录；请刷新并核对。")
-            if router_admitted:
-                raise ValueError("该群已经接入；选择模板不会覆盖或重置现有工作区。")
-            # Recover the crash window after durable service-config save.
-            self._group_runtime(router, identity)
-            router.allowed_conversations = frozenset((*router.allowed_conversations, conversation_key))
-            return {"added": False, "recovered": True, "completed": ["Router 会话准入已恢复"]}
+            completed = []
+            try:
+                await sync_platform_whitelist(completed)
+                if not router_admitted:
+                    # Recover the crash window after durable service-config save.
+                    self._group_runtime(router, identity)
+                    router.allowed_conversations = frozenset((*router.allowed_conversations, conversation_key))
+                    completed.append("Router 会话准入已恢复")
+                return {"added": False, "recovered": True, "completed": completed}
+            except BaseException as error:
+                raise PartialRuntimeOperation("恢复群接入", completed, error) from error
         if router_admitted:
             raise RuntimeError("Router 与 Agent 服务准入状态不一致；请重启服务并核对配置。")
         if existing_session is not None and existing_session.get("template_id") != template_id:
@@ -252,23 +314,7 @@ class RuntimeAdapter:
                 template_id, group_runtime["workspace"], replace_pristine_guides=stock_guides)
             completed.append("工作区模板已安全初始化")
 
-            config = self.context.get_config()
-            platform_settings = config.get("platform_settings")
-            if not isinstance(platform_settings, dict):
-                raise ValueError("AstrBot platform_settings is unavailable")
-            whitelist = platform_settings.get("id_whitelist")
-            if not isinstance(whitelist, list) or any(not isinstance(item, str) for item in whitelist):
-                raise ValueError("AstrBot id_whitelist is invalid")
-            whitelist_entry = f"{platform}:GroupMessage:{group}"
-            if whitelist_entry not in whitelist:
-                previous = list(whitelist)
-                whitelist.append(whitelist_entry)
-                try:
-                    config.save_config()
-                except BaseException:
-                    whitelist[:] = previous
-                    raise
-            completed.append("AstrBot 平台会话白名单已同步")
+            await sync_platform_whitelist(completed)
 
             if conversation_key not in allowed:
                 updated_config = dict(agent_config)

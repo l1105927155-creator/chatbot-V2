@@ -31,8 +31,10 @@ MASKED_BUILTIN_HANDLERS = frozenset(
 )
 
 V2_COMMAND_HELP = """V2 Agent 命令
-/new：开始新的 DSH 对话上下文。群聊仅 Bot Owner 可用；准入私聊中由当前使用者管理自己的会话。
-/reset：与 /new 相同，开始新的 DSH 对话上下文。
+/new：群聊先整理记忆，成功后开始新的 DSH 对话上下文；整理失败则不重置、不自动重试。群聊仅 Bot Owner 可用；准入私聊中由当前使用者管理自己的会话。
+/new skip_mem 或 /new 跳过记忆：跳过记忆整理，直接重置上下文。
+/reset：与 /new 相同，也接受 skip_mem 或 跳过记忆。
+/memory 或 /整理记忆：仅整理本群记忆，不重置上下文；仅 Bot Owner 可用，无99条门槛，失败不自动重试。
 /stop：请求停止当前 DSH Agent 任务。群聊仅 Bot Owner 可用；准入私聊中由当前使用者管理自己的会话。
 /help：查看 V2 Agent 与平台命令说明。
 /provider：查看当前DSH模型；/provider list 查看目录。

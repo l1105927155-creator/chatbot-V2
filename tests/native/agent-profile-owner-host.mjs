@@ -42,13 +42,16 @@ try {
   assert.equal(toolGuard({
     agent, name: 'read', arguments: { file_path: '/etc/hostname' }, signal: new AbortController().signal,
   }), undefined, 'verified Owner may call native host file tools')
-  for (const name of ['mcp__astrbot__qq_prepare_reply', 'mcp__astrbot__current_group_members', 'mcp__astrbot__qq_file_receive', 'mcp__astrbot__qq_file_send', 'mcp__astrbot__meme_categories', 'mcp__astrbot__meme_list', 'mcp__astrbot__meme_send']) {
+  for (const name of ['mcp__astrbot__history_read_forward', 'mcp__astrbot__history_read_forward_image', 'mcp__astrbot__qq_send_forward', 'mcp__astrbot__qq_prepare_reply', 'mcp__astrbot__current_group_members', 'mcp__astrbot__qq_file_receive', 'mcp__astrbot__qq_file_send', 'mcp__astrbot__meme_categories', 'mcp__astrbot__meme_list', 'mcp__astrbot__meme_send', 'mcp__astrbot__group_maintenance']) {
     assert.equal(toolGuard({agent, name, token: name, arguments: {}, signal: new AbortController().signal}),
       undefined, `verified Owner may call ${name}`)
   }
   assert.match(String(toolGuard({agent, name: 'mcp__astrbot__qq_file_read_any_path',
     arguments: {}, signal: new AbortController().signal})), /tool is unavailable/,
   'file tools are allowlisted by exact name')
+  assert.match(String(toolGuard({agent, name: 'mcp__astrbot__group_maintenance_extra',
+    arguments: {}, signal: new AbortController().signal})), /tool is unavailable/,
+  'group maintenance is allowlisted by exact name')
   assert.match(String(toolGuard({
     agent, name: 'bash', arguments: { command: 'sleep 1', run_in_background: true },
     signal: new AbortController().signal,
@@ -71,6 +74,8 @@ try {
   listeners.get('agent/inbox/claimed')({ agent, turn: 2, message: { content: [{ type: 'text', text: prompt }] } })
   assert.match(String(toolGuard({ agent, name: 'bash', arguments: { command: 'id' } })), /no trusted current turn/,
     'ordinary private chat cannot inherit Owner host access')
+  assert.match(String(toolGuard({agent, name: 'mcp__astrbot__group_maintenance', arguments: {}})), /no trusted current turn/,
+    'ordinary private chat cannot invoke group maintenance')
 
   assert.throws(() => parseOwnerShellEnvironment(JSON.stringify({
     PATH: '/usr/bin', DEEPSEEK_API_KEY: 'secret-value',

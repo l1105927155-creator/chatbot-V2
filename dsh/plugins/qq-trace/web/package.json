@@ -1,0 +1,14 @@
+{
+  "name": "@chatbot-v2/qq-trace-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "index.mjs",
+  "exports": { ".": "./index.mjs", "./client": "./client.js" },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": ["@deepseek-ai/dsh-api-session-controller", "@deepseek-ai/dsh-client-ui-conversation"]
+    }
+  }
+}

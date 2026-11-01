@@ -12,7 +12,7 @@ const globals = ['read', 'write', 'edit', 'bash', 'conversation_scope_get', 'con
   'list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource',
   'web_search', 'web_fetch', 'skill', 'background_research']
 const safeMcp = new Set(['mcp__astrbot__history_recent', 'mcp__astrbot__history_before',
-  'mcp__astrbot__history_search', 'mcp__astrbot__history_read_image', 'mcp__astrbot__current_group_info', 'mcp__astrbot__qq_send_origin'])
+  'mcp__astrbot__history_search', 'mcp__astrbot__history_read_image', 'mcp__astrbot__history_read_forward', 'mcp__astrbot__history_read_forward_image', 'mcp__astrbot__qq_send_forward', 'mcp__astrbot__current_group_info', 'mcp__astrbot__qq_send_origin'])
 const text = value => typeof value === 'string' && value.length > 0 && value.trim() === value && !/[\x00-\x1f\x7f]/.test(value)
 const nested = (base, path) => path === base || path.startsWith(base + sep)
 

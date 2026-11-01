@@ -72,30 +72,24 @@ class Check(helper.Check):
                 and r['conversation']==event['conversation']
                 and int(r['message_id'])>int(event['message_id'])]
 
-    def busy_receipt(self):
+    def silent_queue(self):
         release=self.directory/'release';release.unlink(missing_ok=True)
         fetches=self.fetch_count();models_before=self.model_count()
         first=self.wake('group:91000','FG_BLOCK: hold the foreground turn until the fixture is released.',sender='90001')
         self.wait(lambda:self.fetch_count()==fetches+1,'foreground fetch entered its blocking fixture')
         models_blocked=self.model_count()
-        second=self.wake('group:91000','ordinary message while the prior turn is blocked',sender='90001')
-        notice_text='已收到你的消息。上一项任务仍在前台处理中，这条消息会随后处理。'
-        notice=self.wait(lambda:next((row for row in self.outputs_after(second)
-            if notice_text in json.dumps(row,ensure_ascii=False)),None),'program busy receipt delivered before release',timeout=10)
-        notice_mentions=[str(segment['data']['qq']) for segment in notice['event']['message']
-                         if segment['type']=='at']
-        assert notice_mentions==['90001'],notice_mentions
+        second=self.wake('group:91000','ordinary message while the prior turn is blocked',sender='90002')
+        # Wait until the second request is queued at the Router, then confirm
+        # it neither dispatches a model nor sends a provisional QQ response.
+        self.wait(lambda:any(row.get('event')=='turn/queued' for row in self.trace(second)),
+                  'second message queued')
+        time.sleep(.3)
         second_trace=self.trace(second)
+        assert not self.outputs_after(second), 'queued message must wait silently'
         assert not any(row.get('event')=='dsh/dispatched' for row in second_trace),second_trace
         assert (self.model_count()==models_blocked and models_blocked>=models_before), \
             'queued message must not dispatch a model while the first foreground tool is blocked'
-        assert any(row.get('event')=='send/start' and row.get('send_kind')=='control'
-                   for row in second_trace),second_trace
-        receipt_ids={str(row.get('message_id')) for row in second_trace if row.get('event')=='send/receipt'}
-        assert str(notice['message_id']) in receipt_ids,'busy receipt must have an exact simulated QQ send receipt'
-        assert any(row['message_id']==str(notice['message_id']) for row in self.rows()), \
-            'busy receipt must be recorded in the canonical Journal'
-        assert len([row for row in self.outputs_after(second) if notice_text in json.dumps(row,ensure_ascii=False)])==1
+        assert not any(row.get('event')=='send/start' for row in second_trace),second_trace
 
         release.touch()
         self.wait(lambda:any(row.get('event')=='turn/completed' for row in self.trace(first)),
@@ -106,9 +100,11 @@ class Check(helper.Check):
         assert any('FOREGROUND_BLOCK_COMPLETED' in json.dumps(row) for row in first_outputs),first_outputs
         assert any('FOREGROUND_RESPONSIVE' in json.dumps(row) for row in second_outputs),second_outputs
         self.wait(lambda:all(str(row['message_id']) in {r['message_id'] for r in self.rows()}
-            for row in second_outputs),'busy and normal response are canonical')
-        return {'program_control_send':True,'simulated_qq_receipt_and_journal':True,
-                'new_sender_mentioned':True,'no_early_model_dispatch':True,'normal_reply_after_release':True,
+            for row in second_outputs),'normal response is canonical')
+        # Both final replies occur after the queued inbound message.
+        assert len(second_outputs)==2,second_outputs
+        return {'silent_while_queued':True,'normal_reply_canonical':True,
+                'no_early_model_dispatch':True,'normal_reply_after_release':True,
                 'foreground_tool_result_preserved':True}
 
     def parallel_isolation(self):
@@ -201,7 +197,7 @@ class Check(helper.Check):
             for key,sender in [('group:91000','90001'),('private:90009','90009'),('private:90002','90002')]:
                 self.case(key+'-background-with-responsive-foreground',lambda k=key,s=sender:self.exercise(k,s))
             self.case('same-parent-parallel-child-isolation',self.parallel_isolation)
-            self.case('busy-receipt-during-blocked-foreground-turn',self.busy_receipt)
+            self.case('silent-queue-during-blocked-foreground-turn',self.silent_queue)
             self.case('reset-discards-old-background',self.reset)
         except Exception as error:
             self.results.append({'case':'fatal','passed':False,'error_type':type(error).__name__,'error':str(error)})

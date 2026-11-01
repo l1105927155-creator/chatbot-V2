@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import os
 import sys
 from contextlib import AsyncExitStack
 from pathlib import Path
@@ -15,7 +16,9 @@ from mcp.client.streamable_http import streamablehttp_client
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "astrbot-plugins/v2_dsh_router"))
+ROUTER_DIR = Path(os.environ.get(
+    "V2_ROUTER_STAGE", ROOT / "astrbot-plugins/v2_dsh_router")).resolve()
+sys.path.insert(0, str(ROUTER_DIR))
 
 
 def load(name, path):
@@ -28,7 +31,7 @@ def load(name, path):
 
 
 journal = load("v2_mcp_journal_contract", "astrbot-plugins/v2_journal/journal.py")
-mcp_module = load("v2_mcp_server_contract", "astrbot-plugins/v2_dsh_router/mcp_server.py")
+mcp_module = load("v2_mcp_server_contract", str(ROUTER_DIR / "mcp_server.py"))
 
 
 def append(store, conv, message_id, text, *, direction="inbound"):
@@ -131,6 +134,51 @@ async def test_loopback_health_is_metadata_only_and_does_not_grant_mcp_access(tm
 
 
 @pytest.mark.asyncio
+async def test_qq_file_send_accepts_text_or_scoped_path_in_current_turn(tmp_path):
+    service = mcp_module.McpServer(journal.JournalStore(tmp_path / "journal.sqlite3"))
+    await service.start(0)
+    origin = journal.Conversation("qq-test", "10", "group:30")
+    calls = []
+
+    class Files:
+        async def send_text(self, content, name):
+            calls.append(("text", content, name))
+            return {"submitted": True, "name": name or "output.md"}
+
+        async def send_file(self, path, name):
+            calls.append(("path", path, name))
+            return {"submitted": True, "name": name}
+
+    try:
+        async with service.turn(origin, lambda _: None, files=Files()) as declarations:
+            headers = {item["name"]: item["value"] for item in declarations[0]["headers"]}
+            stack, client = await connect(service.url, headers)
+            try:
+                tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+                schema = tools["qq_file_send"].inputSchema
+                assert set(schema["properties"]) == {"path", "content", "name"}
+                assert schema.get("required", []) == []
+                assert "不写入工作区" in tools["qq_file_send"].description
+
+                text_result = await client.call_tool("qq_file_send", {"content": "# 新文档"})
+                path_result = await client.call_tool("qq_file_send", {"path": "/workspace/existing.pdf"})
+                assert not text_result.isError
+                assert not path_result.isError
+                invalid = await client.call_tool("qq_file_send", {
+                    "path": "/workspace/existing.pdf", "content": "text",
+                })
+                assert invalid.isError
+                assert calls == [
+                    ("text", "# 新文档", None),
+                    ("path", "/workspace/existing.pdf", None),
+                ]
+            finally:
+                await stack.aclose()
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
 async def test_history_search_tools_and_send_are_scoped_to_active_origin(tmp_path):
     store = journal.JournalStore(tmp_path / "journal.sqlite3")
     origin = journal.Conversation("qq-test", "10", "group:30")
@@ -156,7 +204,9 @@ async def test_history_search_tools_and_send_are_scoped_to_active_origin(tmp_pat
                 listed = await client.list_tools()
                 assert {tool.name for tool in listed.tools} == {
                     "history_recent", "history_before", "history_search",
-                    "history_read_image",
+                    "memory_search", "memory_sources", "task_list", "task_manage", "group_maintenance",
+                    "history_read_image", "history_read_forward", "history_read_forward_image",
+                    "qq_send_forward",
                     "current_group_info", "current_group_members", "qq_prepare_reply",
                     "qq_send_origin", "qq_file_receive", "qq_file_send",
                     'meme_categories', 'meme_list', 'meme_send', 'plugin_status', 'bili_dynamics', 'bili_subscribe', 'bili_subscriptions', 'bili_unsubscribe', 'twitter_subscribe', 'twitter_subscriptions', 'twitter_unsubscribe',

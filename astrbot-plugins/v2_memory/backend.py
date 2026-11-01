@@ -1,0 +1,947 @@
+"""Group-bound memory interpretation, with no chat or execution tools."""
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import importlib.util
+import json
+import os
+import re
+import threading
+import time
+import uuid
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from .batching import BatchCapacityError, plan_batch
+from .store import MemoryStore
+
+
+class MemoryUnavailable(RuntimeError):
+    """A memory operation cannot safely proceed in the current group."""
+
+
+def _module(path, name):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _entry(row):
+    message = row.message
+    return {"journal_id": row.journal_id, "actor_id": message.actor_id,
+            "platform_id": message.platform_id, "bot_id": message.bot_id,
+            "conversation_key": message.conversation_key,
+            "actor_name": message.actor_name, "direction": message.direction,
+            "created_at": message.created_at, "message_id": message.message_id,
+            "content": message.content}
+
+
+def _diagnostic_text(value, limit):
+    return value[:limit] if isinstance(value, str) else ""
+
+
+def _safe_diagnostic_content(value, *, depth=0):
+    """Copy JSON content while excluding binary and oversized payload fields."""
+    if depth > 12:
+        return "[omitted: nesting limit]"
+    if isinstance(value, dict):
+        result = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                continue
+            normalized_key = key.lower().replace("-", "_")
+            if any(part in normalized_key for part in ("base64", "binary", "blob", "payload", "raw_bytes")):
+                continue
+            result[key] = _safe_diagnostic_content(item, depth=depth + 1)
+        return result
+    if isinstance(value, list):
+        return [_safe_diagnostic_content(item, depth=depth + 1) for item in value]
+    if isinstance(value, str):
+        if value.startswith(("base64://", "data:")) or len(value) > 4096:
+            return "[omitted: binary or oversized value]"
+        return value
+    if value is None or type(value) in (bool, int, float):
+        return value
+    return "[omitted: non-JSON value]"
+
+
+def _content_diagnostic(content):
+    content = content if isinstance(content, dict) else {}
+    original_json = json.dumps(content, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    safe_content = _safe_diagnostic_content(content)
+    preview_json = json.dumps(safe_content, ensure_ascii=False, separators=(",", ":"))
+    return {"content_sha256": hashlib.sha256(original_json.encode("utf-8")).hexdigest(),
+            "content_preview": preview_json[:768]}
+
+
+def _content_quote_paths(content, quote, *, max_paths=8):
+    """Find same-value quote matches in safe JSON fields without retaining values."""
+    if not isinstance(quote, str) or not quote:
+        return []
+    matches = []
+    excluded = ("base64", "binary", "blob", "payload", "raw_bytes")
+
+    def visit(value, path, depth):
+        if depth > 12 or len(matches) >= max_paths:
+            return
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if not isinstance(key, str) or any(part in key.lower() for part in excluded):
+                    continue
+                safe_key = re.sub(r"[^A-Za-z0-9_.-]", "_", key)[:64]
+                visit(child, f"{path}.{safe_key}" if path else safe_key, depth + 1)
+                if len(matches) >= max_paths:
+                    return
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                visit(child, f"{path}[{index}]", depth + 1)
+                if len(matches) >= max_paths:
+                    return
+        elif isinstance(value, str) and len(value) <= 4096 and not value.startswith(("base64://", "data:")):
+            if quote in value and path:
+                matches.append(path[:240])
+
+    visit(content, "", 0)
+    return matches
+
+
+def _diagnostic_source(text, file_names, content=None):
+    text = text if isinstance(text, str) else ""
+    names = [name for name in file_names if isinstance(name, str)] if isinstance(file_names, list) else []
+    names_digest = json.dumps(names, ensure_ascii=False, separators=(",", ":"))
+    return {
+        "text_preview": _diagnostic_text(text, 320),
+        "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        "file_names_count": len(names),
+        "file_names_sha256": hashlib.sha256(names_digest.encode("utf-8")).hexdigest(),
+        "file_names": [{"preview": _diagnostic_text(name, 120),
+                        "sha256": hashlib.sha256(name.encode("utf-8")).hexdigest()}
+                       for name in names[:3]],
+        **_content_diagnostic(content),
+    }
+
+
+def _model_visible_source_context(prompt_data):
+    """Bounded private snapshot of what the model could cite in this batch."""
+    context = {}
+    for row in prompt_data.get("messages", []):
+        if not isinstance(row, dict) or type(row.get("journal_id")) is not int:
+            continue
+        content = row.get("content")
+        content = content if isinstance(content, dict) else {}
+        segments = content.get("segments")
+        names = ([segment.get("name") for segment in segments
+                  if isinstance(segment, dict) and segment.get("type") == "file"
+                  and isinstance(segment.get("name"), str)] if isinstance(segments, list) else [])
+        value = context.setdefault(row["journal_id"], {
+            "kinds": [], "batch_journal": None, "prior_memory_references": []})
+        value["kinds"].append("batch_journal")
+        value["batch_journal"] = _diagnostic_source(content.get("text", ""), names, content)
+        value["content_for_validation"] = content
+    for memory in prompt_data.get("existing_memories", []):
+        if not isinstance(memory, dict):
+            continue
+        for claim in memory.get("claims") or []:
+            if not isinstance(claim, dict):
+                continue
+            for source in claim.get("sources") or []:
+                if not isinstance(source, dict) or type(source.get("journal_id")) is not int:
+                    continue
+                quote = source.get("quote") if isinstance(source.get("quote"), str) else ""
+                value = context.setdefault(source["journal_id"], {
+                    "kinds": [], "batch_journal": None, "prior_memory_references": []})
+                if "prior_memory_reference" not in value["kinds"]:
+                    value["kinds"].append("prior_memory_reference")
+                reference = {
+                    "quote_preview": _diagnostic_text(quote, 320),
+                    "quote_sha256": hashlib.sha256(quote.encode("utf-8")).hexdigest(),
+                }
+                if reference not in value["prior_memory_references"] and len(value["prior_memory_references"]) < 3:
+                    value["prior_memory_references"].append(reference)
+    return context
+
+
+def _memory_projection(item):
+    """Keep tool/model input bounded while the store retains every source."""
+    sources = item["source_ids"]
+    claims = item.get("claims")
+    projected_claims = None
+    if claims is not None:
+        projected_claims = []
+        for claim in claims[:12]:
+            projected_claims.append({"text": claim["text"], "sources": [
+                {"journal_id": source["journal_id"], "quote": source["quote"],
+                 "actor_id": source["actor_id"], "direction": source["direction"]}
+                for source in claim["sources"][:3]]})
+    return {**item, "claims": projected_claims,
+            "source_ids": sorted(set(sources[:20] + sources[-20:])),
+            "source_count": len(sources),
+            "claims_truncated": claims is not None and (
+                len(claims) > 12 or any(len(claim["sources"]) > 3 for claim in claims[:12]))}
+
+
+class GroupMemoryBackend:
+    def __init__(self, conversation, journal, service, workspace: Path, volume_module,
+                 repo: Path, router, logger):
+        self.conversation = conversation
+        self.identity = (conversation.platform_id, conversation.bot_id, conversation.key)
+        self.journal, self.service = journal, service
+        self.workspace, self.volume = Path(workspace), volume_module
+        self.router, self.logger = router, logger
+        self.repo = Path(repo)
+        helpers = self.repo / "dsh/plugins/agent-profile"
+        self.files = _module(helpers / "workspace_file_io.py", "v2_memory_workspace_files")
+        self.locks = _module(helpers / "workspace_lock.py", "v2_memory_workspace_lock")
+        self._lock = asyncio.Lock()
+        self._closed = False
+        self._initialized = False
+        self._tasks = set()
+        self._workers = set()
+        self.last_run = None
+        self.last_plan = None
+        self._progress_lock = threading.RLock()
+        self._progress_generation = 0
+        self._progress = self._empty_progress(available=True)
+
+    @staticmethod
+    def _empty_progress(*, available):
+        return {
+            "available": available,
+            "active": False,
+            "run_id": None,
+            "phase": "idle",
+            "run_elapsed_ms": 0,
+            "batch_index": 0,
+            "batch_message_count": 0,
+            "completed_batches": 0,
+            "committed_messages": 0,
+            "committed_cursor": None,
+            "target_cursor": None,
+            "event_count": 0,
+            "text_bytes": 0,
+            "reasoning_bytes": 0,
+            "idle_ms": 0,
+            "host_last_seen_age_ms": None,
+            "heartbeat": False,
+            "error_category": None,
+        }
+
+    def progress_snapshot(self):
+        """Return safe lifecycle counters only; model and Journal text are never retained."""
+        with self._progress_lock:
+            value = dict(self._progress)
+            started = value.pop("_started_monotonic", None)
+            if started is not None and value["active"]:
+                value["run_elapsed_ms"] = max(0, int((time.monotonic() - started) * 1000))
+            seen = value.pop("_host_last_seen_monotonic", None)
+            if seen is not None:
+                value["host_last_seen_age_ms"] = max(0, int((time.monotonic() - seen) * 1000))
+            return value
+
+    def _start_progress(self, cursor, target_cursor):
+        with self._progress_lock:
+            self._progress_generation += 1
+            generation = self._progress_generation
+            state = self._empty_progress(available=True)
+            state.update(active=True, run_id=str(uuid.uuid4()), phase="preparing", committed_cursor=cursor,
+                         target_cursor=target_cursor, _started_monotonic=time.monotonic())
+            self._progress = state
+            return generation
+
+    def _update_progress(self, generation, **fields):
+        # The callback runs in a worker thread. Generation matching prevents late events
+        # from a cancelled call from contaminating a later run.
+        safe = {}
+        allowed = {"phase", "event_count", "text_bytes", "reasoning_bytes", "idle_ms", "heartbeat"}
+        for key, value in fields.items():
+            if key not in allowed:
+                continue
+            if key == "phase":
+                if value in {"preparing", "waiting_model", "reasoning", "generating", "finishing"}:
+                    safe[key] = value
+            elif key == "heartbeat":
+                if type(value) is bool:
+                    safe[key] = value
+            elif type(value) is int and value >= 0:
+                safe[key] = value
+        with self._progress_lock:
+            if generation != self._progress_generation or not self._progress.get("active"):
+                return
+            self._progress.update(safe)
+            now = time.monotonic()
+            self._progress["_host_last_seen_monotonic"] = now
+            self._progress["run_elapsed_ms"] = max(
+                0, int((now - self._progress.get("_started_monotonic", now)) * 1000))
+
+    def _on_model_progress(self, generation, event):
+        if not isinstance(event, dict):
+            return
+        self._update_progress(generation, **event)
+
+    def _finish_progress(self, generation, *, phase, error_category=None):
+        with self._progress_lock:
+            if generation != self._progress_generation:
+                return
+            state = dict(self._progress)
+            started = state.pop("_started_monotonic", time.monotonic())
+            state["run_elapsed_ms"] = max(0, int((time.monotonic() - started) * 1000))
+            state["active"] = False
+            state["phase"] = phase
+            state["error_category"] = error_category
+            self._progress = state
+
+    def _admitted(self, *, check_enabled=True):
+        if (self._closed or getattr(self.router, "_closing", True)
+                or self.conversation.key not in self.router.allowed_conversations
+                or self.service not in self.router.services.values()):
+            raise MemoryUnavailable("memory group unavailable")
+        matched = False
+        for name, runtime in getattr(self.router, "_group_runtimes", {}).items():
+            if ((runtime.get("platform_id"), runtime.get("bot_id"), "group:" + runtime.get("group_id", ""))
+                    == self.identity and self.router.services.get(name) is self.service
+                    and Path(runtime.get("workspace", "")) == self.workspace
+                    and runtime.get("volume_module") is self.volume):
+                matched = True
+                break
+        if not matched:
+            raise MemoryUnavailable("memory runtime binding changed")
+        if check_enabled and self.identity in getattr(self.service, "_disabled_identities", set()):
+            raise MemoryUnavailable("group agent disabled")
+        console = getattr(self.router, "console_store", None)
+        if check_enabled and console is not None:
+            settings = self._settings(console)
+            if settings.get("enabled") is not True:
+                raise MemoryUnavailable("group agent disabled")
+
+    def _settings(self, console):
+        from data.plugins.v2_dsh_router.console_settings import session_settings
+        return session_settings(console, self.conversation)
+
+    def _verify(self):
+        descriptor = self.volume.verified_group_workspace(self.workspace)
+        os.close(descriptor)
+
+    def _sync(self, action, *args, **kwargs):
+        """A short operation pins the verified mount and cooperates with tools."""
+        with self.locks.workspace_lock(self.workspace.parent / ".workspace-file.lock"):
+            root = self.volume.verified_group_workspace(self.workspace)
+            try:
+                directory = Path(f"/proc/self/fd/{root}") / ".v2-memory"
+                path = directory / "state.sqlite3"
+                if self._initialized and not path.exists():
+                    raise MemoryUnavailable("memory workspace was removed")
+                if action == "persona":
+                    value = self.files._read(root, "persona.md", 24_000)
+                    return value["text"] if value else ""
+                store = MemoryStore(path, self.identity, self._verify)
+                if action == "record_validation_diagnostic":
+                    diagnostic = args[0]
+                    encoded = json.dumps(diagnostic, ensure_ascii=False, separators=(",", ":"))
+                    if len(encoded.encode("utf-8")) > 16_384:
+                        raise ValueError("memory diagnostic exceeds size limit")
+                    with store._db() as db:
+                        db.execute("CREATE TABLE IF NOT EXISTS validation_diagnostics ("
+                                   "id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, "
+                                   "after_id INTEGER NOT NULL, through_id INTEGER NOT NULL, "
+                                   "diagnostic_json TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
+                        db.execute("INSERT INTO validation_diagnostics "
+                                   "(run_id,after_id,through_id,diagnostic_json) VALUES(?,?,?,?)",
+                                   (diagnostic["run_id"], diagnostic["after_id"],
+                                    diagnostic["through_id"], encoded))
+                        db.execute("DELETE FROM validation_diagnostics WHERE id NOT IN "
+                                   "(SELECT id FROM validation_diagnostics ORDER BY id DESC LIMIT 32)")
+                    return True
+                return getattr(store, action)(*args, **kwargs)
+            finally:
+                os.close(root)
+
+    async def _io(self, action, *args, _during_shutdown=False, **kwargs):
+        # Shutdown drains the active model before releasing its group mount.
+        # Its cancellation handler must still persist the uncommitted range.
+        if (self._closed and action not in {"record_run", "record_validation_diagnostic"}
+                and not (_during_shutdown and action in {"snapshot", "block_incremental"})):
+            raise MemoryUnavailable("memory backend closed")
+        task = asyncio.create_task(asyncio.to_thread(self._sync, action, *args, **kwargs))
+        self._workers.add(task)
+        task.add_done_callback(self._workers.discard)
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            # Synchronous SQLite writes must finish before unload releases mounts.
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:  # noqa: BLE001 -- retrieve below without leaking provider content
+                    break
+            if not task.cancelled():
+                task.exception()
+            raise
+
+    async def initialize(self):
+        self._admitted(check_enabled=False)
+        high = await asyncio.to_thread(self.journal.high_watermark, self.conversation)
+        await self._io("initialize", high)
+        self._initialized = True
+        self.last_run = await self._io("last_run")
+        if self.last_run and self.last_run["status"] == "running":
+            old = self.last_run
+            cursor = (await self._io("snapshot"))["cursor"]
+            if old["through_id"] is not None and old["through_id"] > cursor:
+                await self._io("block_incremental", cursor, old["through_id"], "PROCESS_INTERRUPTED")
+            self.last_run = await self._io("record_run", "interrupted", old["after_id"],
+                                           old["through_id"], old["duration_ms"], old["model"],
+                                           None, "ProcessInterrupted")
+        if self.last_run and self.last_run["status"] in {"failed", "cancelled", "interrupted"}:
+            error_code = self.last_run["error_code"] or "PREVIOUS_RUN_INCOMPLETE"
+            if error_code == "ProcessInterrupted":
+                error_code = "PROCESS_INTERRUPTED"
+            through_id = self.last_run["through_id"]
+        else:
+            through_id, error_code = None, None
+        await self._io("seed_incremental_failure", through_id, error_code)
+
+    @asynccontextmanager
+    async def guard(self, conversation):
+        self._check_conversation(conversation)
+        async with self._lock:
+            yield
+
+    def _check_conversation(self, conversation):
+        if (conversation.platform_id, conversation.bot_id, conversation.key) != self.identity:
+            raise MemoryUnavailable("memory identity mismatch")
+
+    async def cursor(self, conversation):
+        self._check_conversation(conversation)
+        self._admitted()
+        return (await self._io("snapshot"))["cursor"]
+
+    async def snapshot(self):
+        return await self._io("snapshot")
+
+    async def incremental_state(self):
+        self._admitted(check_enabled=False)
+        return await self._io("incremental_state")
+
+    async def configure_incremental(self, expected_revision, enabled,
+                                    min_messages=99, max_wait_seconds=1800):
+        self._admitted(check_enabled=False)
+        return await self._io("configure_incremental", expected_revision, enabled,
+                              min_messages, max_wait_seconds)
+
+    async def resume_incremental(self, expected_revision):
+        self._admitted(check_enabled=False)
+        return await self._io("resume_incremental", expected_revision)
+
+    async def _readable(self):
+        self._admitted()
+        snapshot = await self._io("snapshot")
+        if snapshot["enabled"] is not True:
+            raise MemoryUnavailable("group memory disabled")
+        return snapshot
+
+    async def search(self, query, limit=10, member=None, before_time=None):
+        await self._readable()
+        result = await self._io("search", query, limit, member, before_time)
+        await self._readable()
+        return [_memory_projection(item) for item in result]
+
+    async def sources(self, memory_id, limit=20, offset=0):
+        if type(limit) is not int or not 1 <= limit <= 20:
+            raise ValueError("source limit must be 1..20")
+        if type(offset) is not int or not 0 <= offset <= 1_000_000:
+            raise ValueError("source offset must be 0..1000000")
+        await self._readable()
+        item = await self._io("get", memory_id)
+        if item is None:
+            raise ValueError("memory not found")
+        # No raw Journal ID supplied by the caller reaches this lookup.
+        result = []
+        end = max(0, len(item["source_ids"]) - offset)
+        page = item["source_ids"][max(0, end - limit):end]
+        for source_id in page:
+            row = await asyncio.to_thread(self.journal.by_journal_id, self.conversation, source_id)
+            if row is None:
+                raise MemoryUnavailable("memory source unavailable")
+            value = _entry(row)
+            if len(json.dumps(value, ensure_ascii=False).encode()) > 32_000:
+                value["content"] = {"text": "[原消息超过单条返回上限]", "truncated": True}
+            result.append(value)
+        await self._readable()
+        current = await self._io("get", memory_id)
+        if current is None or current["source_ids"] != item["source_ids"]:
+            raise MemoryUnavailable("memory changed during source lookup")
+        return {"memory_id": memory_id, "entries": result,
+                "total_sources": len(item["source_ids"]),
+                "next_offset": offset + len(page) if end > limit else None}
+
+    def _route(self):
+        console = getattr(self.router, "console_store", None)
+        if console is not None:
+            model = self._settings(console)["model"]
+            return model["provider"], model["model"]
+        state = self.service.state
+        route = state.get_model_route(*self.identity) if hasattr(state, "get_model_route") else None
+        return route or (self.service.dsh.settings["provider"], self.service.dsh.settings["model"])
+
+    async def _host_call(self, operation, **arguments):
+        cancellation = threading.Event()
+        task = asyncio.create_task(asyncio.to_thread(
+            operation, **arguments, cancel_event=cancellation))
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            cancellation.set()
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    cancellation.set()
+                except Exception:  # noqa: BLE001 -- worker errors remain private
+                    break
+            if not task.cancelled():
+                task.exception()
+            raise
+
+    async def _model(self, *, provider, model, system, prompt, expected_capacity, on_progress):
+        return await self._host_call(self.service.dsh.consolidate_memory,
+                                     provider=provider, model=model, system=system, prompt=prompt,
+                                     expected_capacity=expected_capacity, on_progress=on_progress)
+
+    async def _capacity(self, route):
+        lookup = getattr(self.service.dsh, "memory_capacity", None)
+        if not callable(lookup):
+            raise BatchCapacityError("native model capacity is unavailable",
+                                     error_code="MEMORY_CAPACITY_UNKNOWN")
+        return await self._host_call(lookup, provider=route[0], model=route[1])
+
+    async def prepare_reset(self, *, conversation, through_journal_id, session_id=None):
+        async with self.guard(conversation):
+            after = await self.cursor(conversation)
+            return await self.consolidate(conversation, after_journal_id=after,
+                                          through_journal_id=through_journal_id)
+
+    async def consolidate(self, conversation, *, after_journal_id, through_journal_id):
+        self._check_conversation(conversation)
+        if (type(after_journal_id) is not int or type(through_journal_id) is not int
+                or after_journal_id < 0 or through_journal_id < 0):
+            raise ValueError("invalid memory range")
+        current_task = asyncio.current_task()
+        self._tasks.add(current_task)
+        started = time.monotonic()
+        progress_generation = self._start_progress(after_journal_id, through_journal_id)
+        route = None
+        last_usage = None
+        usage_missing = False
+        completed_batches = 0
+        committed_messages = 0
+        current_batch = None
+        guide_hash = None
+        try:
+            snapshot = await self._readable()
+            # A reset may already have covered the scheduled upper bound.
+            if through_journal_id <= snapshot["cursor"]:
+                self._finish_progress(progress_generation, phase="completed")
+                return True
+            if snapshot["cursor"] != after_journal_id:
+                raise MemoryUnavailable("memory cursor changed")
+            high = await asyncio.to_thread(self.journal.high_watermark, conversation)
+            if through_journal_id > high:
+                raise ValueError("memory range exceeds Journal")
+            await self._record("running", after_journal_id, through_journal_id, started, route, None)
+            while snapshot["cursor"] < through_journal_id:
+                self._admitted()
+                health = await asyncio.to_thread(self.journal.capture_status)
+                if health.get("available") is not True or health.get("degraded") is not False:
+                    raise MemoryUnavailable("Journal capture degraded")
+                rows = await asyncio.to_thread(self.journal.bounded_range, conversation,
+                                              snapshot["cursor"], through_journal_id, 100)
+                if not rows:
+                    raise MemoryUnavailable("memory source range unavailable")
+                persona = await self._io("persona")
+                guide = (self.repo / "dsh/plugins/agent-profile/memory-guide.md").read_text()
+                guide_hash = hashlib.sha256(guide.encode("utf-8")).hexdigest()
+                system = guide + "\n\n当前人格：\n" + persona
+                route = await asyncio.to_thread(self._route)
+                capacity = await self._capacity(route)
+                # Retrieval order wins; significant entries are additional candidates.
+                significant = sorted(snapshot["memories"], key=lambda value: (
+                    -value["weight"], value["updated_at"]))[:60]
+                text = " ".join(str(row.message.content.get("text", ""))[:100] for row in rows)
+                candidates = await self._io("search", text[:256] or "群聊", 20)
+                candidates.extend(item for item in significant
+                                  if item["id"] not in {value["id"] for value in candidates})
+                plan = plan_batch(system=system, provider=route[0], model=route[1],
+                                  capacity=capacity, messages=[_entry(row) for row in rows],
+                                  memories=[_memory_projection(item) for item in candidates])
+                rows = rows[:plan["message_count"]]
+                prompt_data = json.loads(plan["prompt"])
+                source_context = _model_visible_source_context(prompt_data)
+                current_batch = {"after_id": snapshot["cursor"], "through_id": rows[-1].journal_id,
+                                 "source_context": source_context, "batch_index": completed_batches + 1,
+                                 "route": "/".join(route), "guide_sha256": guide_hash}
+                with self._progress_lock:
+                    if progress_generation == self._progress_generation:
+                        self._progress.update(batch_index=completed_batches + 1,
+                                              batch_message_count=len(rows), phase="waiting_model",
+                                              event_count=0, text_bytes=0, reasoning_bytes=0,
+                                              idle_ms=0, heartbeat=False)
+                memories = plan["memories"]
+                self.last_plan = {key: plan[key] for key in (
+                    "message_count", "input_bytes", "wire_bytes", "input_allowance", "capacity_source")}
+                self.last_plan.update(selected_memories=len(memories), candidate_memories=len(candidates),
+                                      context_window=capacity["contextWindow"],
+                                      native_output_cap=capacity["defaultMaxTokens"])
+                log = getattr(self.logger, "info", None)
+                if callable(log):
+                    log("V2 memory batch capacity: %s", json.dumps(self.last_plan, sort_keys=True))
+                response = await self._model(provider=route[0], model=route[1],
+                                             system=system, prompt=plan["prompt"],
+                                             expected_capacity={"contextWindow": capacity["contextWindow"],
+                                                                "defaultMaxTokens": capacity["defaultMaxTokens"]},
+                                             on_progress=lambda event: self._on_model_progress(
+                                                 progress_generation, event))
+                changes = _changes(response["text"])
+                visible = {row.journal_id for row in rows}
+                for item in memories:
+                    projection = _memory_projection(item)
+                    visible.update(projection["source_ids"])
+                    for claim in projection.get("claims") or []:
+                        visible.update(source["journal_id"] for source in claim["sources"])
+                for change_index, change in enumerate(changes):
+                    ids = change.get("source_ids")
+                    if not isinstance(ids, list) or any(type(value) is not int or value not in visible for value in ids):
+                        raise ValueError("model returned unknown source")
+                    for source_id in ids:
+                        if await asyncio.to_thread(self.journal.by_journal_id, conversation, source_id) is None:
+                            raise ValueError("model returned invalid source")
+                    change["claims"] = await self._bind_claims(change["claims"], conversation, visible,
+                                                                source_context, change_index=change_index)
+                    change["source_ids"] = _include_claim_source_ids(ids, change["claims"])
+                    if change.get("id") and change["id"] not in {item["id"] for item in memories}:
+                        raise ValueError("model updated an unseen memory")
+                self._admitted()
+                if persona != await self._io("persona") or tuple(route) != tuple(await asyncio.to_thread(self._route)):
+                    raise MemoryUnavailable("persona or model changed during consolidation")
+                health = await asyncio.to_thread(self.journal.capture_status)
+                if health.get("available") is not True or health.get("degraded") is not False:
+                    raise MemoryUnavailable("Journal capture degraded during consolidation")
+                if current_task.cancelling():
+                    raise asyncio.CancelledError
+                # CAS rejects concurrent Owner edits or disabling during generation.
+                batch_usage = _usage(response.get("usage"))
+                if batch_usage is None:
+                    usage_missing = True
+                if batch_usage is not None:
+                    last_usage = last_usage or {}
+                    for key, value in batch_usage.items():
+                        last_usage[key] = last_usage.get(key, 0) + value
+                upper = rows[-1].journal_id
+                snapshot = await self._io("commit", snapshot["revision"], snapshot["cursor"], upper,
+                                          changes, {"persona_hash": hashlib.sha256(persona.encode()).hexdigest(),
+                                                    "model": "/".join(route), "usage": batch_usage})
+                completed_batches += 1
+                committed_messages += len(rows)
+                current_batch = None
+                with self._progress_lock:
+                    if progress_generation == self._progress_generation:
+                        self._progress.update(completed_batches=completed_batches,
+                                              committed_messages=committed_messages,
+                                              committed_cursor=snapshot["cursor"], phase="preparing")
+            await self._record("completed", after_journal_id, through_journal_id, started, route,
+                               None if usage_missing else last_usage)
+            self._finish_progress(progress_generation, phase="completed")
+            return True
+        except asyncio.CancelledError:
+            await self._record("cancelled", after_journal_id, through_journal_id, started, route, None,
+                               "CancelledError")
+            await self._block_failed_incremental(through_journal_id, "CANCELLED")
+            self._finish_progress(progress_generation, phase="cancelled", error_category="CANCELLED")
+            raise
+        except Exception as error:
+            code = getattr(error, "error_code", None)
+            if isinstance(error, ValueError):
+                # These validators emit fixed messages, never rejected model
+                # text. Retain the reason so a real failed batch is diagnosable.
+                self.logger.warning("memory validation failed: %s", str(error))
+            if not isinstance(code, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", code):
+                code = "MEMORY_CONSOLIDATION_FAILED"
+            diagnostic = getattr(error, "diagnostic", None)
+            if isinstance(diagnostic, dict) and current_batch:
+                safe_diagnostic = {
+                    "run_id": self.progress_snapshot().get("run_id") or str(uuid.uuid4()),
+                    "after_id": current_batch["after_id"],
+                    "through_id": current_batch["through_id"],
+                    "batch_index": current_batch["batch_index"],
+                    "route": current_batch["route"],
+                    "guide_sha256": current_batch["guide_sha256"],
+                    "category": getattr(error, "diagnostic_category", "SOURCE_VALIDATION_FAILED"),
+                    **diagnostic,
+                }
+                try:
+                    _, diagnostic_cancelled = await self._await_despite_cancellation(
+                        self._io("record_validation_diagnostic", safe_diagnostic,
+                                 _during_shutdown=True))
+                except Exception as diagnostic_error:  # diagnostic failure must not replace run failure
+                    diagnostic_cancelled = getattr(
+                        diagnostic_error, "_cancelled_while_waiting", False)
+                    self.logger.warning("memory validation diagnostic unavailable")
+            else:
+                diagnostic_cancelled = False
+
+            async def finalize_failure():
+                await self._record("failed", after_journal_id, through_journal_id, started, route,
+                                   None, code)
+                await self._block_failed_incremental(through_journal_id, code)
+                self._finish_progress(progress_generation, phase="failed", error_category=code)
+
+            _, cleanup_cancelled = await self._await_despite_cancellation(finalize_failure())
+            if diagnostic_cancelled or cleanup_cancelled:
+                raise asyncio.CancelledError
+            raise
+        finally:
+            self._tasks.discard(current_task)
+
+    @staticmethod
+    async def _await_despite_cancellation(awaitable):
+        """Finish a persistence operation, then let the caller propagate cancellation."""
+        task = asyncio.create_task(awaitable)
+        cancelled = False
+        while True:
+            try:
+                return await asyncio.shield(task), cancelled
+            except asyncio.CancelledError:
+                cancelled = True
+                if task.done():
+                    try:
+                        return task.result(), cancelled
+                    except BaseException as error:
+                        # Preserve cancellation metadata even when the protected
+                        # operation itself completed with an error at the same time.
+                        error._cancelled_while_waiting = True
+                        raise
+            except BaseException as error:
+                if cancelled:
+                    error._cancelled_while_waiting = True
+                raise
+
+    async def _block_failed_incremental(self, through_id, error_code):
+        try:
+            cursor = (await self._io("snapshot", _during_shutdown=True))["cursor"]
+            if type(through_id) is int and through_id > cursor:
+                await self._io("block_incremental", cursor, through_id, error_code, _during_shutdown=True)
+        except Exception:  # noqa: BLE001 -- run failure remains primary; no host fallback
+            self.logger.warning("memory pending range unavailable")
+
+    async def _record(self, status, after, through, started, route, usage, error=None):
+        try:
+            self.last_run = await self._io("record_run", status, after, through,
+                                           int((time.monotonic() - started) * 1000),
+                                           "/".join(route) if route else None, usage, error)
+        except Exception:  # noqa: BLE001 -- an unavailable volume must not create a host fallback
+            self.logger.warning("memory run status unavailable")
+
+    async def _bind_claims(self, claims, conversation, visible, source_context=None, *, change_index=0):
+        if not isinstance(claims, list) or not 1 <= len(claims) <= 20:
+            raise ValueError("model returned invalid claims")
+        bound = []
+        for claim_index, claim in enumerate(claims):
+            if not isinstance(claim, dict) or set(claim) != {"text", "sources"}:
+                raise ValueError("model returned invalid claim fields")
+            sources = claim["sources"]
+            if not isinstance(sources, list) or not 1 <= len(sources) <= 5:
+                raise ValueError("model returned invalid claim sources")
+            checked = []
+            for source_index, source in enumerate(sources):
+                if not isinstance(source, dict) or set(source) != {"journal_id", "quote"}:
+                    raise ValueError("model returned invalid claim source fields")
+                source_id, quote = source["journal_id"], source["quote"]
+                if type(source_id) is not int or source_id not in visible:
+                    raise ValueError("model returned unknown claim source")
+                if not isinstance(quote, str) or not quote.strip() or len(quote) > 320:
+                    raise ValueError("model returned invalid source quote")
+                row = await asyncio.to_thread(self.journal.by_journal_id, conversation, source_id)
+                content = row.message.content if row else {}
+                text = content.get("text", "") if isinstance(content, dict) else ""
+                # Journal normalizes OneBot segments before persistence. A file
+                # segment's bounded `name` is visible evidence for upload
+                # events even when the message has no text body. Do not search
+                # IDs, URLs, paths, sizes, or any other metadata for quotes.
+                file_names = []
+                segments = content.get("segments", []) if isinstance(content, dict) else []
+                if isinstance(segments, list):
+                    file_names = [segment["name"] for segment in segments
+                                  if isinstance(segment, dict)
+                                  and segment.get("type") == "file"
+                                  and isinstance(segment.get("name"), str)
+                                  and segment["name"]]
+                if not (isinstance(text, str) and quote in text) and not any(
+                        quote in name for name in file_names):
+                    model_source = (source_context or {}).get(source_id, {})
+                    current_source = _diagnostic_source(text, file_names, content)
+                    model_batch = model_source.get("batch_journal") or {}
+                    model_content = model_source.get("content_for_validation")
+                    model_content_paths = (_content_quote_paths(model_content, quote)
+                                           if isinstance(model_content, dict) else None)
+                    model_visible_diagnostic = {key: value for key, value in model_source.items()
+                                                if key != "content_for_validation"}
+                    error = ValueError("model source quote does not match Journal")
+                    error.diagnostic_category = "SOURCE_QUOTE_MISMATCH"
+                    visible_kinds = model_source.get("kinds", [])
+                    error.diagnostic = {
+                        "change_index": change_index,
+                        "claim_index": claim_index,
+                        "source_index": source_index,
+                        "journal_id": source_id,
+                        "source_kind": (visible_kinds[0] if len(visible_kinds) == 1 else
+                                        "multiple_visible_source_kinds" if visible_kinds
+                                        else "unclassified_visible_source"),
+                        "quote": _diagnostic_text(quote, 320),
+                        "quote_sha256": hashlib.sha256(quote.encode("utf-8")).hexdigest(),
+                        "quote_matches_journal_text": isinstance(text, str) and quote in text,
+                        "quote_matches_journal_file_name": any(quote in name for name in file_names),
+                        "quote_matches_searchable_model_fields": (
+                            bool(model_content_paths) if model_content_paths is not None else None),
+                        "model_content_search_scope": "non-binary string fields up to 4096 characters, 12 levels, 8 paths",
+                        "model_visible_content_match_paths": model_content_paths,
+                        "batch_text_changed_since_prompt": (
+                            model_batch.get("text_sha256") != current_source["text_sha256"]
+                            if model_batch else None),
+                        "batch_file_names_changed_since_prompt": (
+                            model_batch.get("file_names_sha256") != current_source["file_names_sha256"]
+                            if model_batch else None),
+                        "batch_content_changed_since_prompt": (
+                            model_batch.get("content_sha256") != current_source["content_sha256"]
+                            if model_batch else None),
+                        "model_visible": model_visible_diagnostic,
+                        "journal_at_validation": current_source,
+                    }
+                    raise error
+                checked.append({"journal_id": source_id, "quote": quote,
+                                "actor_id": row.message.actor_id,
+                                "direction": row.message.direction})
+            bound.append({"text": claim["text"], "sources": checked})
+        return bound
+
+    async def manage(self, action, payload):
+        snapshot = await self.snapshot()
+        if action == "list":
+            if payload.get("query"):
+                entries = await self._io("search", payload["query"], min(payload.get("limit", 20), 20))
+            else:
+                entries = await self._io("list_entries", payload.get("limit", 50), payload.get("offset", 0))
+            return {"revision": snapshot["revision"],
+                    "entries": [_memory_projection(item) for item in entries]}
+        if action == "get":
+            item = await self._io("get", payload["id"])
+            if item is None:
+                raise ValueError("memory not found")
+            markers = []
+            for source_id in item["source_ids"][-20:]:
+                row = await asyncio.to_thread(self.journal.by_journal_id, self.conversation, source_id)
+                markers.append({"platform_id": self.identity[0], "bot_id": self.identity[1],
+                                "conversation_key": self.identity[2], "journal_id": source_id,
+                                "message_id": row.message.message_id if row else None,
+                                "available": row is not None})
+            return {"revision": snapshot["revision"], "entry": item,
+                    "sources": markers, "revisions": await self._io("history", item["id"])}
+        if action == "export":
+            return {"data": await self._io("export")}
+        if action == "edit":
+            old = await self._io("get", payload["id"])
+            if old is None:
+                raise ValueError("memory not found")
+            change = {key: payload[key] for key in ("id", "content", "members", "weight", "status")}
+            change["source_ids"] = old["source_ids"]
+            change["claims_review_required"] = True
+            await self._io("update", payload["expected_revision"], [change], {"actor": "dashboard_owner"})
+        elif action == "enable":
+            await self._io("set_enabled", payload["enabled"], payload["expected_revision"])
+        elif action == "cancel":
+            expected_run = payload.get("run_id")
+            if expected_run is not None and expected_run != self.progress_snapshot()["run_id"]:
+                raise ValueError("memory run changed; refresh before cancelling")
+            pending = [task for task in tuple(self._tasks)
+                       if task is not asyncio.current_task() and not task.done()]
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+            return {"ok": True, "cancelled": bool(pending)}
+        elif action == "clear":
+            await self._io("clear", payload["expected_revision"])
+        else:
+            raise ValueError("unsupported memory action")
+        return {"ok": True}
+
+    async def close(self):
+        self._closed = True
+        current = asyncio.current_task()
+        pending = [task for task in self._tasks if task is not current]
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        while self._workers:
+            await asyncio.gather(*tuple(self._workers), return_exceptions=True)
+
+
+def _changes(text):
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate model JSON key")
+            result[key] = value
+        return result
+    value = json.loads(text, object_pairs_hook=unique)
+    if (not isinstance(value, dict) or set(value) != {"changes"}
+            or not isinstance(value["changes"], list) or len(value["changes"]) > 100
+            or any(not isinstance(change, dict) for change in value["changes"])):
+        raise ValueError("invalid memory model output")
+    return value["changes"]
+
+
+def _include_claim_source_ids(source_ids, claims):
+    """Persist every rigorously bound claim source without weakening ID checks."""
+    merged = list(dict.fromkeys(source_ids))
+    if len(merged) > 200:
+        raise ValueError("model returned too many source IDs")
+    seen = set(merged)
+    for claim in claims:
+        for source in claim["sources"]:
+            source_id = source["journal_id"]
+            if source_id not in seen:
+                seen.add(source_id)
+                merged.append(source_id)
+                if len(merged) > 200:
+                    raise ValueError("model returned too many source IDs")
+    return merged
+
+
+def _usage(value):
+    """Map actual provider counters only; missing measurements remain null."""
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise TypeError("invalid model usage")
+    aliases = {"inputTokens": "input_tokens", "outputTokens": "output_tokens",
+               "totalTokens": "total_tokens", "cacheReadTokens": "cache_read_tokens",
+               "cacheWriteTokens": "cache_write_tokens", "reasoningTokens": "reasoning_tokens"}
+    result = {}
+    for source, target in aliases.items():
+        if source in value and value[source] is not None:
+            count = value[source]
+            if type(count) is not int or not 0 <= count <= 10_000_000:
+                raise ValueError("invalid model usage counter")
+            result[target] = count
+    for key in aliases.values():
+        if key in value and value[key] is not None:
+            count = value[key]
+            if type(count) is not int or not 0 <= count <= 10_000_000:
+                raise ValueError("invalid model usage counter")
+            result[key] = count
+    return result or None

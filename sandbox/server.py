@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import ipaddress
 import json
 import logging
@@ -422,6 +423,21 @@ class SandboxApp:
         for _domain, path in self.evidence.state_sources():
             rows = self.evidence._db_rows(path, "SELECT conversation_key FROM conversation_state WHERE session_id=?", (str(session_id),))
             keys.update(row["conversation_key"] for row in rows)
+        # Scheduled Sessions deliberately never enter foreground state. Resolve
+        # their active host-published source for synthetic probe/script routing.
+        filename = hashlib.sha256(str(session_id).encode()).hexdigest() + ".json"
+        for path in (self.evidence.root / "repo/.runtime").glob(
+                "dsh-home-group-*/v2-turn-sources/*/" + filename):
+            try:
+                if path.is_symlink() or path.stat().st_size > 65536:
+                    continue
+                source = json.loads(path.read_text())
+                if (source.get("session_id") == session_id
+                        and source.get("kind") == "scheduled"
+                        and source.get("conversation_key") in self.control.scenario()["admitted"]):
+                    keys.add(source["conversation_key"])
+            except (OSError, ValueError, TypeError):
+                continue
         return next(iter(keys)) if len(keys) == 1 else None
 
     async def api_claim(self, request):

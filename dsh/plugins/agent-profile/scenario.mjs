@@ -57,6 +57,7 @@ export function skillsForScene(scene, ownerSkills = false) {
   if (ownerSkills === true) {
     visible.add('filesystem')
     visible.add('development')
+    visible.add('group-capability-promotion')
   }
   return visible
 }

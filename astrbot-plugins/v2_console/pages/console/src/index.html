@@ -23,6 +23,7 @@
           <button class="nav-button active" data-view="session">会话与工作区</button>
           <button class="nav-button" data-view="defaults">默认设置</button>
           <button class="nav-button" data-view="templates">工作区模板</button>
+          <button class="nav-button" data-view="tasks">自动任务</button>
         </aside>
 
         <section class="content">
@@ -73,6 +74,8 @@
             <div class="view-heading"><div><div class="eyebrow">初始化工作区的文件模板</div><h1>工作区模板</h1><div class="muted">创建会话时复制模板；编辑模板不会改动已有工作区。</div></div><button id="add-template" class="button primary">新建模板</button></div>
             <div class="template-layout"><div id="template-list" class="card template-list"></div><section class="card workspace-card"><div class="card-heading"><div><h2 id="template-title">选择模板</h2><p>模板只包含初始文件，不携带成员数据或权限。</p></div><div class="file-actions"><button id="rename-template" class="button secondary">重命名</button><button id="delete-template" class="button secondary">删除模板</button></div></div><div class="editor-layout"><div class="file-tree-pane"><div class="tree-toolbar"><button id="template-up-directory" class="link-button">↑ 上级</button><span id="template-current-path">/</span></div><div id="template-file-tree" class="file-tree"></div><div class="compact-actions"><button id="template-new-file" class="button secondary">新建文件</button><button id="template-new-directory" class="button secondary">新建目录</button><button id="template-upload-file" class="button secondary">上传</button></div></div><div class="editor-pane"><div class="editor-toolbar"><span id="template-editor-file-name">未选择文件</span><span id="template-file-version" class="muted"></span></div><div id="template-editor"></div><div class="template-save"><button id="template-rename-file" class="button secondary">重命名</button><button id="template-delete-file" class="button secondary">删除</button><button id="template-download-file" class="button secondary">下载</button><button id="template-save-file" class="button primary">保存文件</button></div></div></div></section></div>
           </section>
+
+          <section id="view-tasks" class="view hidden"></section>
         </section>
       </main>
       <dialog id="add-group-dialog"><form method="dialog" id="add-group-form"><div class="dialog-heading"><h2>添加群</h2><button class="icon-button" value="cancel" aria-label="关闭">×</button></div><p class="muted">只提交群号、平台标识和机器人标识；服务端负责同步准入及初始化工作区。</p><label class="field"><span>Platform ID</span><input name="platform_id" required value="napcat" /></label><label class="field"><span>Bot ID</span><input name="bot_id" required autocomplete="off" /></label><label class="field"><span>Group ID</span><input name="group_id" required inputmode="numeric" autocomplete="off" /></label><label class="field"><span>Workspace 模板</span><select name="template_id" required></select></label><div class="dialog-actions"><button class="button secondary" value="cancel">取消</button><button id="create-group" class="button primary" value="default">创建并同步</button></div></form></dialog>

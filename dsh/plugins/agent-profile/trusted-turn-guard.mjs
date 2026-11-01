@@ -11,6 +11,7 @@ export const TURN_SOURCE_FIELDS = Object.freeze([
   'inbound_message_id', 'epoch', 'session_id', 'nonce', 'prompt_sha256',
 ])
 const OPTIONAL_SOURCE_FIELDS = Object.freeze(['image_manifest'])
+const SCHEDULED_SOURCE_FIELDS = Object.freeze(['kind', 'task_id', 'run_id'])
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 
 const text = value => typeof value === 'string' && value.length > 0
@@ -53,12 +54,21 @@ export function readTurnSource(sourceRoot, epoch, sessionId) {
   }
   const keys = Object.keys(source ?? {}).sort().join(',')
   const requiredKeys = [...TURN_SOURCE_FIELDS].sort().join(',')
+  const scheduledFields = [...TURN_SOURCE_FIELDS, ...SCHEDULED_SOURCE_FIELDS].sort()
   const imageKeys = [...TURN_SOURCE_FIELDS, ...OPTIONAL_SOURCE_FIELDS].sort().join(',')
-  if (!source || (keys !== requiredKeys && keys !== imageKeys)
+  const scheduledKeys = scheduledFields.join(',')
+  const scheduledImageKeys = [...scheduledFields, ...OPTIONAL_SOURCE_FIELDS].sort().join(',')
+  const scheduled = keys === scheduledKeys || keys === scheduledImageKeys
+  if (!source || (keys !== requiredKeys && keys !== imageKeys && !scheduled)
     || !Object.values(source).every(text)
     || source.epoch !== epoch || source.session_id !== sessionId
     || !/^[a-f0-9]{64}$/.test(source.prompt_sha256)) {
     throw new Error('invalid current turn source')
+  }
+  if (scheduled && (source.kind !== 'scheduled'
+      || !/^[A-Za-z0-9:._-]{1,128}$/.test(source.task_id)
+      || !/^[A-Za-z0-9:._-]{1,128}$/.test(source.run_id))) {
+    throw new Error('invalid scheduled turn identity')
   }
   return Object.freeze(source)
 }
@@ -101,8 +111,22 @@ function parseImageManifest(source) {
 }
 
 export function sameTurnSource(left, right) {
-  return TURN_SOURCE_FIELDS.every(field => left[field] === right[field])
-    && left.image_manifest === right.image_manifest
+  return [...TURN_SOURCE_FIELDS, ...SCHEDULED_SOURCE_FIELDS, 'image_manifest']
+    .every(field => left[field] === right[field])
+}
+
+const SCHEDULED_ALLOWED_TOOLS = new Set([
+    'bash', 'skill', 'web_search', 'web_fetch', 'mcp__astrbot__qq_send_origin', 'mcp__astrbot__qq_file_send', 'mcp__astrbot__history_recent',
+    'mcp__astrbot__history_before', 'mcp__astrbot__history_search',
+    'mcp__astrbot__history_read_image', 'mcp__astrbot__memory_search',
+    'mcp__astrbot__memory_sources', 'mcp__astrbot__current_group_info',
+    'mcp__astrbot__current_group_members', 'mcp__astrbot__plugin_status',
+    'mcp__astrbot__bili_dynamics', 'mcp__astrbot__meme_categories',
+    'mcp__astrbot__meme_list', 'mcp__astrbot__task_list',
+])
+
+export function scheduledToolAllowed(name) {
+  return SCHEDULED_ALLOWED_TOOLS.has(name)
 }
 
 /** Verify private raw proofs synchronously before each tool authorization. */

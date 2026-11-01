@@ -20,6 +20,7 @@ SOURCE_FIELDS = (
     "requester_id",
     "inbound_message_id",
 )
+SCHEDULED_SOURCE_FIELDS = ("kind", "task_id", "run_id")
 IMAGE_MEDIA_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
 
 
@@ -45,14 +46,28 @@ class TurnSourcePublisher:
 
     @staticmethod
     def _source_values(source: dict) -> dict[str, str]:
-        if not isinstance(source, dict) or set(source) != set(SOURCE_FIELDS):
-            raise ValueError("trusted source must contain only the five required source facts")
+        if not isinstance(source, dict):
+            raise ValueError("trusted source must be an object")
+        keys = set(source)
+        base = set(SOURCE_FIELDS)
+        scheduled = set(SCHEDULED_SOURCE_FIELDS)
+        if frozenset(keys) not in {frozenset(base), frozenset(base | scheduled)}:
+            if keys & scheduled:
+                raise ValueError("scheduled trusted source identity must be complete")
+            raise ValueError("trusted source must contain the five facts and an optional scheduled identity")
         values = {}
-        for field in SOURCE_FIELDS:
+        fields = SOURCE_FIELDS + (SCHEDULED_SOURCE_FIELDS if keys == base | scheduled else ())
+        for field in fields:
             value = source[field]
-            if not isinstance(value, str) or not value or value != value.strip() or any(ord(ch) < 32 for ch in value):
+            if (not isinstance(value, str) or not value or value != value.strip()
+                    or any(ord(ch) < 32 or ord(ch) == 127 for ch in value)):
                 raise ValueError(f"trusted source {field} must be a non-empty string")
             values[field] = value
+        if SCHEDULED_SOURCE_FIELDS[0] in values:
+            if (values["kind"] != "scheduled"
+                    or any(not re.fullmatch(r"[A-Za-z0-9:._-]{1,128}", values[field])
+                           for field in ("task_id", "run_id"))):
+                raise ValueError("scheduled trusted source identity is invalid")
         return values
 
     def publish(self, session_id: str, trusted_source: dict, journal_delta: str,

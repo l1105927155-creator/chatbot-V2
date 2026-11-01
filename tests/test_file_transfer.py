@@ -519,6 +519,55 @@ async def test_send_fails_once_and_always_cleans_snapshot(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_send_text_creates_private_utf8_snapshot_without_workspace_write(tmp_path):
+    store = journal.JournalStore(tmp_path / "journal.sqlite3")
+    conversation = journal.Conversation("qq", "10", "group:30")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    spool = tmp_path / "spool"
+    observed = []
+
+    async def send(path, name):
+        observed.append((Path(path).read_bytes(), name, Path(path).parent.stat().st_mode & 0o777))
+
+    transfer = make_transfer(store, conversation, workspace, send=send, spool_dir=spool)
+    content = "# 测试标题\n\n正文 <tag> & emoji 😀\n"
+    result = await transfer.send_text(content)
+    expected = content.encode("utf-8")
+    assert result == {
+        "submitted": True, "platform_confirmed": False, "name": "output.md",
+        "size": len(expected), "sha256": hashlib.sha256(expected).hexdigest(),
+    }
+    assert observed == [(expected, "output.md", 0o700)]
+    assert list(workspace.iterdir()) == []
+    assert list(spool.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_send_text_enforces_limit_and_cleans_failed_snapshot(tmp_path):
+    store = journal.JournalStore(tmp_path / "journal.sqlite3")
+    conversation = journal.Conversation("qq", "10", "group:30")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    spool = tmp_path / "spool"
+    attempts = []
+
+    async def fail(path, name):
+        attempts.append((Path(path).read_bytes(), name))
+        raise OSError("OneBot rejected file")
+
+    transfer = make_transfer(store, conversation, workspace, send=fail,
+                             spool_dir=spool, max_bytes=5)
+    with pytest.raises(ValueError, match="size limit"):
+        await transfer.send_text("六个字")
+    assert attempts == []
+    with pytest.raises(OSError, match="rejected"):
+        await transfer.send_text("okay", "../report")
+    assert attempts == [(b"okay", "report.md")]
+    assert list(spool.iterdir()) == []
+
+
+@pytest.mark.asyncio
 async def test_send_rejects_source_changed_while_snapshot_is_copied(tmp_path, monkeypatch):
     store = journal.JournalStore(tmp_path / "journal.sqlite3")
     conversation = journal.Conversation("qq", "10", "group:30")

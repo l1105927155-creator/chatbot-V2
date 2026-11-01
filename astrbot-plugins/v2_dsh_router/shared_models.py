@@ -34,7 +34,7 @@ class SharedModels:
                     # Recheck after reading the publication to avoid pairing a
                     # replacement source with an old acknowledgement.
                     if self.profile.read_bytes() == raw:
-                        return fingerprint, catalog
+                        return fingerprint + (':' + status['catalog_sha256'] if status.get('catalog_sha256') else ''), catalog
             except (OSError, ValueError):
                 pass
             if time.monotonic() >= deadline:

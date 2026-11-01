@@ -1,0 +1,26 @@
+{
+  "web_enabled": {
+    "description": "启用本地游戏网页服务",
+    "type": "bool",
+    "default": true,
+    "hint": "关闭后只保留 QQ 命令和排行榜查询，不监听本地端口。"
+  },
+  "listen_port": {
+    "description": "游戏网页监听端口",
+    "type": "int",
+    "default": 6230,
+    "hint": "只监听 127.0.0.1；Tailscale Serve/Funnel 指向该端口。修改后需重载插件。"
+  },
+  "public_base_url": {
+    "description": "公开游戏地址",
+    "type": "string",
+    "default": "",
+    "hint": "例如 https://<节点>.tail3a495b.ts.net:8443；用于 QQ 群入口链接。留空时只提示尚未配置。"
+  },
+  "leaderboard_limit": {
+    "description": "网页排行榜默认条数",
+    "type": "int",
+    "default": 20,
+    "hint": "1-50。"
+  }
+}

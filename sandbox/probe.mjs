@@ -118,7 +118,8 @@ function inModelContext(iterable, invocation) {
 class ScriptedAdapter extends LlmAdapter {
   constructor(ctx, probe) { super(); this.ctx = ctx; this.probe = probe; this.afterTool = new Map(); this.issuedScripts = new Set() }
   listModels(provider) { return Promise.resolve(['scripted', 'scripted-alt'].map(id => ({ provider, id, name: id, inputModalities: ['text', 'image'] }))) }
-  resolveModel(provider, model) { return Promise.resolve({ provider, id: model, name: model, inputModalities: ['text', 'image'] }) }
+  resolveModel(provider, model) { return Promise.resolve({ provider, id: model, name: model, inputModalities: ['text', 'image'],
+    context: { contextWindow: 1_000_000 }, defaultMaxTokens: 256_000 }) }
   endTurn(sessionId, turnId) {
     const key = `${sessionId}:${turnId}`
     this.issuedScripts.delete(key)

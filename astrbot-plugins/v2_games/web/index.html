@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>V2 小游戏</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <main>
+    <div id="landing">
+      <header class="topbar">
+        <div>
+          <h1>V2 小游戏</h1>
+          <p class="muted">本机运行的游戏入口；成绩由插件记录并按群排行。</p>
+        </div>
+      </header>
+      <div id="landing-notice" class="muted" role="status"></div>
+      <section>
+        <h2>游戏列表</h2>
+        <div id="landing-games" class="games"></div>
+      </section>
+    </div>
+
+    <div id="hub" hidden>
+      <header class="topbar">
+        <div>
+          <h1>本群游戏</h1>
+          <p class="muted">成绩按“本群 + QQ”记录；公开榜只显示掩码 QQ。</p>
+        </div>
+        <a class="button secondary" href="/">全部游戏</a>
+      </header>
+      <div id="notice" class="muted" role="status"></div>
+
+      <section id="identity-section">
+        <h2>玩家身份</h2>
+        <form id="identity-form" class="row" autocomplete="off">
+          <label for="qq">QQ 号</label>
+          <input id="qq" name="qq" inputmode="numeric" pattern="[0-9]*"
+                 maxlength="12" placeholder="输入 5-12 位 QQ 号" required>
+          <button type="submit" class="button">保存身份</button>
+          <span class="muted">自助申报，未验证 QQ 归属；首次保存后由本浏览器 cookie 锁定。</span>
+        </form>
+        <div id="identity-current" class="row" hidden>
+          <span>当前身份：<strong id="identity-label">—</strong></span>
+          <span id="best-label" class="muted"></span>
+          <button id="change-identity" type="button" class="button secondary">更换 QQ</button>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <h2>本群排行榜</h2>
+          <div class="row">
+            <label for="period">周期</label>
+            <select id="period">
+              <option value="all">总榜</option>
+              <option value="week">周榜</option>
+            </select>
+            <label for="kind">类型</label>
+            <select id="kind">
+              <option value="human">人类</option>
+              <option value="bot">Bot</option>
+              <option value="all">全部</option>
+            </select>
+            <button id="refresh" type="button" class="button secondary">刷新</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>排名</th><th>玩家</th><th>分数</th><th>最大块</th><th>时间</th></tr>
+            </thead>
+            <tbody id="leaderboard-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2>选择游戏</h2>
+        <div id="games-list" class="games"></div>
+      </section>
+    </div>
+  </main>
+  <script src="/assets/hub.js"></script>
+</body>
+</html>

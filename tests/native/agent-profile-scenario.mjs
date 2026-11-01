@@ -33,6 +33,7 @@ skill('web-research', 'Research instructions')
 skill('background-research', 'Background research instructions')
 skill('filesystem', 'Workspace filesystem instructions')
 skill('development', 'Development instructions')
+skill('group-capability-promotion', 'Promotion instructions')
 const nativeList = FileSystemSkillProvider.prototype.list
 const seenProviders = new Set()
 FileSystemSkillProvider.prototype.list = async function (...args) {
@@ -98,7 +99,7 @@ const load = (agent, name, id) => ctx.tools.execute({
 try {
   assert.deepEqual([...Scenario.skillsForScene('casual-chat')].sort(), ['background-research', 'chat-history', 'web-research'])
   assert.deepEqual([...Scenario.skillsForScene('casual-chat', true)].sort(), [
-    'background-research', 'chat-history', 'development', 'filesystem', 'web-research',
+    'background-research', 'chat-history', 'development', 'filesystem', 'group-capability-promotion', 'web-research',
   ])
   await mount(SystemPrompt, { includeRuntimeContext: false, includeHarnessIdentity: false })
   await mount(ToolRuntime)
@@ -194,16 +195,17 @@ try {
   assert.deepEqual(await names(first), [])
   assert.deepEqual(await names(second), [])
   await mount(Scenario, { stateRoot, skillsDir, ownerSkills: true })
-  assert.deepEqual(await names(first), ['background-research', 'chat-history', 'development', 'filesystem', 'web-research'])
-  assert.deepEqual(await names(second), ['background-research', 'chat-history', 'development', 'filesystem', 'web-research'])
+  assert.deepEqual(await names(first), ['background-research', 'chat-history', 'development', 'filesystem', 'group-capability-promotion', 'web-research'])
+  assert.deepEqual(await names(second), ['background-research', 'chat-history', 'development', 'filesystem', 'group-capability-promotion', 'web-research'])
   writeScene(first, 'research', 5)
-  await eventually(async () => JSON.stringify(await names(first)) === JSON.stringify(['background-research', 'chat-history', 'development', 'filesystem', 'web-research']))
-  assert.deepEqual(await names(second), ['background-research', 'chat-history', 'development', 'filesystem', 'web-research'])
+  await eventually(async () => JSON.stringify(await names(first)) === JSON.stringify(['background-research', 'chat-history', 'development', 'filesystem', 'group-capability-promotion', 'web-research']))
+  assert.deepEqual(await names(second), ['background-research', 'chat-history', 'development', 'filesystem', 'group-capability-promotion', 'web-research'])
   writeScene(first, 'development', 6)
-  await eventually(async () => JSON.stringify(await names(first)) === JSON.stringify(['background-research', 'chat-history', 'development', 'filesystem', 'web-research']))
+  await eventually(async () => JSON.stringify(await names(first)) === JSON.stringify(['background-research', 'chat-history', 'development', 'filesystem', 'group-capability-promotion', 'web-research']))
   assert.equal((await load(first, 'filesystem', 'scenario-owner-filesystem')).isError, false)
   assert.equal((await load(first, 'development', 'scenario-development')).isError, false)
-  assert.deepEqual(await names(second), ['background-research', 'chat-history', 'development', 'filesystem', 'web-research'])
+  assert.equal((await load(first, 'group-capability-promotion', 'scenario-owner-promotion')).isError, false)
+  assert.deepEqual(await names(second), ['background-research', 'chat-history', 'development', 'filesystem', 'group-capability-promotion', 'web-research'])
   assert.deepEqual(ctx.tools.schemas(first).map(s => s.name), ['skill'], 'development scene cannot grant shell tools')
   console.log(JSON.stringify({
     sameSessionScenarioSwitch: true, scopedAgentIsolation: true,

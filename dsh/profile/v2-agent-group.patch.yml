@@ -35,6 +35,9 @@
       disabled: !!js Boolean(!process.env.V2_SHARED_MODELS_PROFILE)
       config:
         providers: {}
+    - id: v2-subscription-models
+      name: ../plugins/agent-profile/subscription-models.mjs
+      disabled: !!js Boolean(!process.env.V2_SHARED_MODELS_PROFILE)
     - id: v2-model-config-sync
       name: ../plugins/agent-profile/model-config-sync.mjs
       disabled: !!js Boolean(!process.env.V2_SHARED_MODELS_PROFILE)
@@ -105,7 +108,7 @@
         thresholdRatio: 0.8
         headroomTokens: 4096
         retainRatio: 0.16
-        maxTokens: 1024
+        maxTokens: 4096
     - id: v2-console-control
       name: ../plugins/agent-profile/console-control.mjs
     - id: v2-agent-persona

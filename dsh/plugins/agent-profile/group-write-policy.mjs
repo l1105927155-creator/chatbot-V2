@@ -37,6 +37,24 @@ function parseOwners(raw) {
   return owners
 }
 
+function parseOwnerWriteDemotions(raw) {
+  const demotions = JSON.parse(raw ?? '[]')
+  if (!Array.isArray(demotions)) throw new Error('invalid Owner write demotions')
+  const seen = new Set()
+  for (const item of demotions) {
+    if (!item || Object.keys(item).sort().join(',') !== 'bot_id,group_id,platform_id,user_id'
+        || ![item.platform_id, item.bot_id, item.group_id, item.user_id].every(value =>
+          typeof value === 'string' && value.length > 0 && value.trim() === value)
+        || !numericId(item.user_id) || !numericId(item.group_id)) {
+      throw new Error('invalid Owner write demotion identity')
+    }
+    const key = JSON.stringify([item.platform_id, item.bot_id, item.group_id, item.user_id])
+    if (seen.has(key)) throw new Error('duplicate Owner write demotion identity')
+    seen.add(key)
+  }
+  return demotions
+}
+
 /**
  * Read the console's revisioned sessions mapping on each Bash execution.
  * Missing/malformed configured state denies group-member writes. An unset
@@ -45,14 +63,23 @@ function parseOwners(raw) {
 export function canWriteGroupWorkspace(source, {
   stateFile = process.env.V2_CONSOLE_STATE_FILE,
   ownersRaw = process.env.V2_QQ_OWNERS,
+  ownerWriteDemotionsRaw = process.env.V2_GROUP_OWNER_WRITE_DEMOTIONS,
 } = {}) {
-  if (!stateFile) return true
   try {
     const owners = parseOwners(ownersRaw)
-    if (owners.some(owner => owner.platform_id === source.platform_id
-        && owner.bot_id === source.bot_id && owner.user_id === source.requester_id)) return true
     if (!source || !identityFields.every(key => typeof source[key] === 'string')
         || !numericId(source.requester_id) || !/^group:.+/.test(source.conversation_key)) return false
+    const groupId = source.conversation_key.slice('group:'.length)
+    const demotions = parseOwnerWriteDemotions(ownerWriteDemotionsRaw)
+    const isDemotedOwner = demotions.some(item => item.platform_id === source.platform_id
+        && item.bot_id === source.bot_id && item.group_id === groupId
+        && item.user_id === source.requester_id)
+    // An explicit temporary demotion wins over both Owner bypass and editor
+    // membership, so the target behaves as a regular read-only group member.
+    if (isDemotedOwner) return false
+    if (!stateFile) return true
+    if (owners.some(owner => owner.platform_id === source.platform_id
+        && owner.bot_id === source.bot_id && owner.user_id === source.requester_id)) return true
     const state = privateConsoleState(stateFile)
     if (!state || typeof state !== 'object' || !state.sessions || typeof state.sessions !== 'object'
         || Array.isArray(state.sessions)) return false

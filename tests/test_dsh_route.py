@@ -118,7 +118,7 @@ def test_reply_trigger_requires_platform_resolved_bot_sender_and_matching_id():
 
 
 def test_pure_attachments_route_only_when_addressed_in_groups():
-    for kind in ('file', 'image', 'record', 'video'):
+    for kind in ('file', 'image', 'record', 'video', 'forward'):
         attachment = {'type': kind, 'data': {'file_id': 'resource-id'}}
         private = raw('', message_type='private', mention=False)
         private['message'] = [attachment]

@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from copy import deepcopy
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from astrbot.api import star
 from astrbot.api.event import filter
 
-from .journal import JournalStore, message_from_group_upload, message_from_onebot
+from .journal import (
+    JournalStore,
+    message_from_file_send_receipt,
+    message_from_forward_send_receipt,
+    message_from_group_upload,
+    message_from_onebot,
+)
 
 CAPTURE_EVENTS = ("message", "message_sent", "notice.group_upload")
 
@@ -30,6 +37,8 @@ class V2Journal(star.Star):
         self._write_lock = asyncio.Lock()
         self._pending_writes: set[asyncio.Task] = set()
         self._bindings: dict[str, tuple[object, Callable]] = {}
+        self._action_bindings: dict[str, tuple[object, Callable, Callable, dict]] = {}
+        self._bot_ids: dict[str, str] = {}
         status = await asyncio.to_thread(self.store.capture_status)
         self.capture_errors = status["failure_count"]
         self.capture_degraded = status["degraded"]
@@ -70,6 +79,10 @@ class V2Journal(star.Star):
     def _bind_platforms(self) -> None:
         if self._closing:
             return
+        if not hasattr(self, "_action_bindings"):
+            self._action_bindings = {}
+        if not hasattr(self, "_bot_ids"):
+            self._bot_ids = {}
         for platform in self.context.platform_manager.get_insts():
             metadata = platform.meta()
             if metadata.name != "aiocqhttp":
@@ -77,10 +90,13 @@ class V2Journal(star.Star):
             client = platform.get_client()
             existing = self._bindings.get(metadata.id)
             if existing and existing[0] is client:
+                self._bind_file_receipt(metadata.id, client)
                 continue
             if existing:
                 for event_name in CAPTURE_EVENTS:
                     existing[0].unhook_before(event_name, existing[1])
+                self._unbind_file_receipt(metadata.id)
+                self._bot_ids.pop(metadata.id, None)
 
             async def observe(raw, platform_id=metadata.id):
                 is_message = raw.get("post_type") in ("message", "message_sent")
@@ -109,6 +125,9 @@ class V2Journal(star.Star):
                         platform_id, raw.get("message_id"), exc,
                     )
                     return
+                bot_id = str(raw.get("self_id") or "")
+                if bot_id:
+                    self._bot_ids[platform_id] = bot_id
                 try:
                     await self._append(message)
                 except Exception:
@@ -123,7 +142,146 @@ class V2Journal(star.Star):
             for event_name in CAPTURE_EVENTS:
                 client.hook_before(event_name, observe)
             self._bindings[metadata.id] = (client, observe)
+            self._bind_file_receipt(metadata.id, client)
             self.logger.info("V2 journal bound to OneBot messages: %s", metadata.id)
+
+    def _bind_file_receipt(self, platform_id: str, client) -> None:
+        """Capture successful file sends that the adapter does not echo as events."""
+        existing = self._action_bindings.get(platform_id)
+        if existing and existing[0] is client:
+            return
+        if existing:
+            self._unbind_file_receipt(platform_id)
+        original = getattr(client, "call_action", None)
+        if not callable(original):
+            return
+        state = {"active": True}
+
+        async def observed(action, **params):
+            capture_enabled = state["active"] and not self._closing
+            receipt_params = None
+            file_send_candidate = False
+            forward_send_candidate = False
+            receipt_kind = "file"
+            if capture_enabled and action in ("send_group_msg", "send_private_msg"):
+                segments = params.get("message")
+                file_send_candidate = isinstance(segments, list) and any(
+                    isinstance(segment, Mapping) and segment.get("type") == "file"
+                    for segment in segments
+                )
+                if file_send_candidate:
+                    try:
+                        receipt_params = dict(params)
+                        receipt_params["message"] = deepcopy(segments)
+                    except Exception:
+                        receipt_params = None
+            elif capture_enabled and action in ("send_group_forward_msg", "send_private_forward_msg"):
+                forward_send_candidate = True
+                receipt_kind = "forward"
+                try:
+                    receipt_params = dict(params)
+                    nodes = params.get("messages")
+                    if isinstance(nodes, list):
+                        receipt_params["messages"] = deepcopy(nodes)
+                except Exception:
+                    receipt_params = None
+            try:
+                result = await original(action, **params)
+            except BaseException as error:
+                error_result = getattr(error, "result", None)
+                definite_failure = isinstance(error_result, Mapping) and (
+                    error_result.get("status") == "failed"
+                    or error_result.get("retcode") not in (None, 0, "0")
+                )
+                if capture_enabled and (file_send_candidate or forward_send_candidate) and not definite_failure:
+                    await self._mark_capture_failure("receipt_failure")
+                raise
+            if not capture_enabled or not (file_send_candidate or forward_send_candidate):
+                return result
+            if isinstance(result, Mapping):
+                retcode = result.get("retcode")
+                if result.get("status") == "failed" or (
+                    retcode is not None
+                    and (isinstance(retcode, bool) or retcode not in (0, "0"))
+                ):
+                    return result
+                if "message_id" not in result:
+                    await self._mark_capture_failure("receipt_failure")
+                    self.logger.error(
+                        "V2 journal received no message_id for completed %s send platform=%s",
+                        receipt_kind, platform_id,
+                    )
+                    return result
+            else:
+                await self._mark_capture_failure("receipt_failure")
+                self.logger.error(
+                    "V2 journal received no receipt for completed %s send platform=%s",
+                    receipt_kind, platform_id,
+                )
+                return result
+            if receipt_params is None:
+                await self._mark_capture_failure("receipt_failure")
+                self.logger.error(
+                    "V2 journal could not snapshot submitted %s message platform=%s",
+                    receipt_kind, platform_id,
+                )
+                return result
+            bot_id = self._bot_ids.get(platform_id)
+            supplied_bot_id = receipt_params.get("self_id")
+            if supplied_bot_id is not None:
+                supplied_bot_id = str(supplied_bot_id) if not isinstance(supplied_bot_id, bool) else supplied_bot_id
+                if bot_id is not None and supplied_bot_id != bot_id:
+                    await self._mark_capture_failure("receipt_failure")
+                    self.logger.error(
+                        "V2 journal skipped %s send receipt with mismatched bot id platform=%s",
+                        receipt_kind, platform_id,
+                    )
+                    return result
+                bot_id = supplied_bot_id
+            if not bot_id:
+                await self._mark_capture_failure("receipt_failure")
+                self.logger.error(
+                    "V2 journal skipped %s send receipt without known bot id platform=%s",
+                    receipt_kind, platform_id,
+                )
+                return result
+            try:
+                builder = (message_from_forward_send_receipt if forward_send_candidate
+                           else message_from_file_send_receipt)
+                message = builder(platform_id, bot_id, action, receipt_params, result)
+            except ValueError as exc:
+                # Missing or malformed receipts are not evidence that QQ sent
+                # the message, so they do not create a journal row.
+                kind = "receipt_failure" if "message_id" in str(exc) else "append_failure"
+                await self._mark_capture_failure(kind)
+                self.logger.error(
+                    "V2 journal rejected %s send receipt platform=%s: %s",
+                    receipt_kind, platform_id, exc,
+                )
+                return result
+            try:
+                await self._append(message)
+            except Exception:
+                await self._mark_capture_failure("append_failure")
+                self.logger.exception(
+                    "V2 journal storage failure platform=%s id=%s; history is incomplete",
+                    platform_id, message.message_id,
+                )
+            return result
+
+        client.call_action = observed
+        self._action_bindings[platform_id] = (client, original, observed, state)
+
+    def _unbind_file_receipt(self, platform_id: str) -> None:
+        binding = self._action_bindings.pop(platform_id, None)
+        if not binding:
+            return
+        client, original, observed, state = binding
+        state["active"] = False
+        # Preserve wrappers installed by other plugins. If one wraps ours, it
+        # will continue to delegate through this now inert pass-through layer.
+        if getattr(client, "call_action", None) is observed:
+            client.call_action = original
 
     async def _mark_capture_failure(self, kind: str) -> None:
         # Set the in-process latch first so a failing SQLite write cannot hide
@@ -197,6 +355,8 @@ class V2Journal(star.Star):
             for event_name in CAPTURE_EVENTS:
                 client.unhook_before(event_name, callback)
         self._bindings.clear()
+        for platform_id in tuple(getattr(self, "_action_bindings", {})):
+            self._unbind_file_receipt(platform_id)
         if self._pending_writes:
             draining = asyncio.gather(*tuple(self._pending_writes), return_exceptions=True)
             cancelled = False

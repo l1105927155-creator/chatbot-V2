@@ -37,6 +37,25 @@ def test_publish_atomic_private_payload_and_nonce_matched_cleanup(tmp_path):
     assert publisher.cleanup('session-id', nonce) is True
     assert not target.exists()
     publisher.close()
+
+
+def test_legacy_five_facts_remain_valid_and_scheduled_identity_is_atomic(tmp_path):
+    publisher = module.TurnSourcePublisher(tmp_path)
+    nonce = publisher.publish("legacy-session", FACTS, "legacy prompt")
+    assert nonce
+    scheduled = {**FACTS, "kind": "scheduled", "task_id": "diary", "run_id": "run-1"}
+    nonce = publisher.publish("scheduled-session", scheduled, "scheduled prompt")
+    payload = json.loads((publisher.directory /
+                          module.TurnSourcePublisher.filename("scheduled-session")).read_text())
+    assert {key: payload[key] for key in scheduled} == scheduled
+    assert nonce == payload["nonce"]
+    with pytest.raises(ValueError, match="scheduled trusted source identity"):
+        publisher.publish("forged-session", {**FACTS, "kind": "scheduled"}, "forged")
+    with pytest.raises(ValueError, match="scheduled trusted source identity"):
+        publisher.publish("forged-session-2", {
+            **FACTS, "kind": "owner", "task_id": "diary", "run_id": "run-1",
+        }, "forged")
+    publisher.close()
     assert not publisher.directory.exists()
 
 

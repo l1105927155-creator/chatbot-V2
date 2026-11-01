@@ -83,6 +83,33 @@ def components(chain):
     return chain.chain
 
 
+def test_member_profiles_include_only_relevant_members_and_bot():
+    async def run():
+        event = make_event()
+        async def call_action(action, **params):
+            assert action == "get_group_member_list" and params == {"group_id": 5000, "self_id": 9000}
+            return [{"user_id": 42, "level": "100", "title": "爱美的美", "qq_level": 7, "role": "owner"},
+                    {"user_id": 9000, "level": "3", "title": "", "role": "admin"},
+                    {"user_id": 43, "role": "member"}, {"user_id": 44, "role": ["owner"]},
+                    {"user_id": 99, "level": "9", "title": "other", "role": "owner"}]
+        event.bot = NS(call_action=call_action)
+        profiles = await QQMessaging(event, FakeJournal([]), CONVERSATION).member_profiles({"42", "43", "44", "9000"})
+        assert profiles == {"42": {"group_role": "群主", "group_level": 100, "group_title": "爱美的美"},
+                            "9000": {"group_role": "管理员", "group_level": 3},
+                            "43": {"group_role": "普通成员"}}
+    asyncio.run(run())
+
+
+def test_member_profiles_failure_does_not_block_chat():
+    async def run():
+        event = make_event()
+        async def call_action(*args, **kwargs):
+            raise RuntimeError("unavailable")
+        event.bot = NS(call_action=call_action)
+        assert await QQMessaging(event, FakeJournal([]), CONVERSATION).member_profiles({"42"}) == {}
+    asyncio.run(run())
+
+
 def test_choose_b_and_send_native_reply_at_plain_and_preserve_user_text():
     async def run():
         journal = FakeJournal([row(11, "platform-11")])

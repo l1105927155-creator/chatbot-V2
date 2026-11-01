@@ -11,6 +11,7 @@ import "monaco-editor/esm/vs/basic-languages/css/css.contribution";
 import "monaco-editor/esm/vs/basic-languages/shell/shell.contribution";
 import "monaco-editor/esm/vs/language/json/monaco.contribution";
 import "./style.css";
+import { createTasksView } from "./tasks.js";
 
 self.MonacoEnvironment = { getWorker: (_moduleId, label) => label === "json" ? new jsonWorker() : new editorWorker() };
 
@@ -83,6 +84,7 @@ const state = {
   editorDirty: false,
   templateEditorDirty: false,
 };
+const tasksView = createTasksView({ root: $("view-tasks"), api, notice, confirmAction });
 
 async function api(action, payload = {}) {
   const bridge = window.AstrBotPluginPage;
@@ -93,6 +95,8 @@ async function api(action, payload = {}) {
   if (response?.status === "error") {
     const error = new Error(response.message || "请求失败");
     error.serverResponse = true;
+    error.error_type = response.error_type || response.type || null;
+    error.response = response;
     throw error;
   }
   // Pinned Dashboard bridge unwraps ApiEnvelope.data and rejects errors.
@@ -748,6 +752,7 @@ function bindNavigation() {
   document.querySelectorAll(".nav-button").forEach((button) => button.addEventListener("click", async () => {
     showView(button.dataset.view);
     if (button.dataset.view === "defaults") loadModels(state.selectedConversation).then(renderSettings).catch(() => {});
+    if (button.dataset.view === "tasks") tasksView.show().catch((error) => notice(`自动任务加载失败：${error.message || error}`, "error"));
   }));
 }
 

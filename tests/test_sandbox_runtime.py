@@ -52,6 +52,8 @@ def test_prepare_builds_isolated_default_config_and_plugin_snapshot(tmp_path: Pa
     assert stat.S_IMODE(token.stat().st_mode) == 0o600
     assert (data / "astrbot/data/plugins/v2_journal").is_symlink()
     assert not (data / "astrbot/data/plugins/v2_dsh_router").exists()
+    assert not (data / "astrbot/data/plugins/v2_tasks").exists()
+    assert not (data / "astrbot/data/plugins/v2_memory").exists()
     assert (data / "astrbot/data/plugins/v2_sandbox_fixture").is_symlink()
     for plugin in ("v2_ai_gate", "v2_phase1_probe"):
         assert (data / "astrbot/data/plugins" / plugin).is_symlink()
@@ -94,6 +96,55 @@ def test_prepare_is_idempotent_for_its_own_plugin_links(tmp_path: Path) -> None:
         link = data / "astrbot/data/plugins" / plugin
         assert link.is_symlink()
         assert link.resolve() == (data / "repo/astrbot-plugins" / plugin).resolve()
+
+
+@pytest.mark.parametrize(("plugin_name", "page_name"), [("v2_tasks", "tasks"), ("v2_memory", "memory")])
+def test_task_plugin_snapshot_supports_native_page_discovery(tmp_path: Path, plugin_name, page_name) -> None:
+    data = tmp_path / "sandbox"
+    ports = _free_ports()
+    runtime.prepare(data, ASTRBOT, ports, "scripted", owner_id="90003")
+    runtime.prepare(data, ASTRBOT, ports, "scripted", owner_id="90003")
+    plugin_root = data / "astrbot/data/plugins" / plugin_name
+    assert plugin_root.is_dir() and not plugin_root.is_symlink()
+    assert (plugin_root / "pages" / page_name / "index.html").is_file()
+    script = r'''
+import asyncio
+from pathlib import Path
+import sys
+from types import SimpleNamespace as NS
+from astrbot.dashboard.services.plugin_page_service import PluginPageService
+manager=NS(plugin_store_path=sys.argv[1],reserved_plugin_path=sys.argv[1])
+service=PluginPageService(manager)
+plugin=NS(root_dir_name=sys.argv[2],reserved=False)
+root=service.get_plugin_root_dir(plugin)
+assert root.is_relative_to(Path(sys.argv[1]).resolve())
+pages=asyncio.run(service.discover_plugin_pages(plugin))
+assert [page.name for page in pages]==[sys.argv[3]],pages
+print('native plugin page discovery: passed')
+'''
+    import os
+    result = subprocess.run(
+        [str(ASTRBOT / ".venv/bin/python"), "-c", script, str(plugin_root.parent), plugin_name, page_name],
+        cwd=ASTRBOT, env={**os.environ, "ASTRBOT_ROOT": str(tmp_path / "page-data")},
+        capture_output=True, text=True, timeout=20,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    (plugin_root / ".v2-sandbox-snapshot").unlink()
+    with pytest.raises(RuntimeError, match="unrelated task plugin"):
+        runtime.prepare(data, ASTRBOT, ports, "scripted", owner_id="90003")
+
+
+def test_task_plugin_is_removed_when_sandbox_dsh_is_disabled(tmp_path: Path) -> None:
+    data = tmp_path / "sandbox"
+    ports = _free_ports()
+    runtime.prepare(data, ASTRBOT, ports, "scripted")
+    plugin = data / "astrbot/data/plugins/v2_tasks"
+    memory_plugin = data / "astrbot/data/plugins/v2_memory"
+    assert plugin.is_dir() and not plugin.is_symlink()
+    assert memory_plugin.is_dir() and not memory_plugin.is_symlink()
+    runtime.prepare(data, ASTRBOT, ports, "disabled")
+    assert not plugin.exists()
+    assert not memory_plugin.exists()
 
 
 def test_prepare_updates_only_legacy_bare_mention_waiter_setting(tmp_path: Path) -> None:

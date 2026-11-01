@@ -37,21 +37,27 @@ class ConsoleController:
             raise KeyError("会话不存在。")
         return row
 
-    async def dispatch(self, payload):
+    async def dispatch(self, payload, *, reload_pipeline_scheduler=None):
         if not isinstance(payload, dict):
             raise ValueError("JSON object required")
         if payload.get("action") in {"group.add", "restart", "template.create", "template.delete"}:
             async with self.lock:
-                return await self._dispatch(payload)
-        return await self._dispatch(payload)
+                return await self._dispatch(
+                    payload, reload_pipeline_scheduler=reload_pipeline_scheduler
+                )
+        return await self._dispatch(
+            payload, reload_pipeline_scheduler=reload_pipeline_scheduler
+        )
 
-    async def _dispatch(self, payload):
+    async def _dispatch(self, payload, *, reload_pipeline_scheduler=None):
         action = payload.get("action")
         if action == "snapshot":
             await self.runtime.discover(self.store)
             snapshot = self.snapshot()
             snapshot["health"] = await self.runtime.health()
             return snapshot
+        if action in {"tasks.snapshot", "tasks.policy", "tasks.manage", "tasks.run", "tasks.cancel"}:
+            return await self.runtime.tasks(action.removeprefix("tasks."), payload)
         if action == "defaults.save":
             await self.runtime.validate_model(payload["settings"]["model"])
             self.store.update_defaults(payload["settings"], expected_revision=payload["expected_revision"])
@@ -70,7 +76,10 @@ class ConsoleController:
             await self.runtime.update(row, settings, payload["expected_revision"], self.store)
             return self.snapshot()
         if action == "group.add":
-            await self.runtime.add_group(payload, self.store, self.templates_root)
+            await self.runtime.add_group(
+                payload, self.store, self.templates_root,
+                reload_pipeline_scheduler=reload_pipeline_scheduler,
+            )
             return self.snapshot()
         if action == "template.create":
             result = self.store.create_template(payload["name"], expected_revision=payload["expected_revision"])
