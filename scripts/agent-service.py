@@ -26,7 +26,7 @@ ASTRBOT = ROOT / ".runtime/astrbot"
 DSH = ROOT / ".runtime/dsh-runtime/node_modules/.bin/dsh"
 CONFIG_KEYS = {"version", "execution_contract", "provider", "model", "allowed_conversations", "owners",
                "mcp_port", "credential_env_file", "owner_workdir", "group_sandbox"}
-OPTIONAL_CONFIG_KEYS = {"group_storage_policy", "shared_models_home"}
+OPTIONAL_CONFIG_KEYS = {"group_storage_policy", "shared_models_home", "subscription_proxy_url"}
 GROUP_STORAGE_POLICY_DEFAULT = {"total_mib": 5120, "min_free_mib": 1024, "inactive_data": "retain"}
 GROUP_SANDBOX_KEYS = {"storage_mib", "memory_mib", "tasks", "cpu_quota", "max_command_seconds", "network"}
 GROUP_SANDBOX_CONTRACT = {
@@ -90,6 +90,10 @@ def _load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
     shared_home = data.get("shared_models_home")
     if shared_home is not None and (not isinstance(shared_home, str) or not Path(shared_home).is_absolute()):
         raise ValueError("shared_models_home must be an absolute path")
+    proxy = data.get("subscription_proxy_url")
+    if proxy is not None and (not isinstance(proxy, str) or not re.fullmatch(r"http://127\.0\.0\.1:[0-9]{1,5}", proxy)
+                              or not 1 <= int(proxy.rsplit(":", 1)[1]) <= 65535):
+        raise ValueError("subscription_proxy_url must be an HTTP loopback proxy URL")
     group_sandbox = data["group_sandbox"]
     if not isinstance(group_sandbox, dict) or set(group_sandbox) != GROUP_SANDBOX_KEYS:
         raise ValueError("group_sandbox must match the verified execution contract")
@@ -141,8 +145,10 @@ def _prepare(config: dict[str, Any]) -> None:
 
 def _runtime_env(config: dict[str, Any]) -> dict[str, str]:
     env = dict(os.environ)
-    for key in ("V2_SHARED_MODELS_PROFILE", "V2_SHARED_MODELS_CREDENTIALS"):
+    for key in ("V2_SHARED_MODELS_PROFILE", "V2_SHARED_MODELS_CREDENTIALS", "V2_SUBSCRIPTION_PROXY_URL"):
         env.pop(key, None)
+    if config.get("subscription_proxy_url"):
+        env["V2_SUBSCRIPTION_PROXY_URL"] = config["subscription_proxy_url"]
     if config.get("shared_models_home"):
         shared = Path(config["shared_models_home"])
         env["V2_SHARED_MODELS_PROFILE"] = str(shared / "profiles/web/cordis.patch.yml")

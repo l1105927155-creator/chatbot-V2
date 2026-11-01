@@ -110,6 +110,8 @@ class AcpRuntime:
             env.update({"V2_BACKGROUND_CALLBACK_URL": background_callback_url,
                         "V2_BACKGROUND_CALLBACK_TOKEN": background_callback_token})
         self.shared_models = None
+        if os.environ.get('V2_SUBSCRIPTION_PROXY_URL'):
+            env['V2_SUBSCRIPTION_PROXY_URL'] = os.environ['V2_SUBSCRIPTION_PROXY_URL']
         if os.environ.get('V2_SHARED_MODELS_PROFILE'):
             status = Path(dsh_home).resolve() / '.model-catalog-sync.json'
             epoch = secrets.token_hex(16)

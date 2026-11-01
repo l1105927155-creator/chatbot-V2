@@ -69,6 +69,19 @@ def test_shared_model_source_is_explicit_and_keeps_session_configuration(tmp_pat
     assert "V2_SHARED_MODELS_PROFILE" not in agent_service._runtime_env(loaded)
 
 
+def test_subscription_proxy_is_explicit_and_local(tmp_path, monkeypatch):
+    credential = private_file(tmp_path / "key.env", "DEEPSEEK_API_KEY=secret\n")
+    monkeypatch.setenv("V2_SUBSCRIPTION_PROXY_URL", "http://inherited.invalid:1234")
+    path = config(tmp_path / "config.json", credential)
+    assert "V2_SUBSCRIPTION_PROXY_URL" not in agent_service._runtime_env(agent_service._load_config(path))
+    path = config(tmp_path / "config.json", credential, subscription_proxy_url="http://127.0.0.1:7897")
+    assert agent_service._runtime_env(agent_service._load_config(path))["V2_SUBSCRIPTION_PROXY_URL"] == "http://127.0.0.1:7897"
+    for value in ("http://example.com:7897", "http://127.0.0.1:0", "http://127.0.0.1:65536", "http://127.0.0.1:7897/path", "http://user@127.0.0.1:7897"):
+        path = config(tmp_path / "config.json", credential, subscription_proxy_url=value)
+        with pytest.raises(ValueError, match="subscription_proxy_url"):
+            agent_service._load_config(path)
+
+
 @pytest.mark.parametrize("override", [
     {"storage_mib": 2048}, {"memory_mib": 1024}, {"tasks": 65},
     {"cpu_quota": 200}, {"max_command_seconds": 61}, {"network": True},

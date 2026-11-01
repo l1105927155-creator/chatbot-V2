@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { MockAgent } from '../../dsh/node_modules/undici/index.js'
 import { PiAiAdapter } from '../../dsh/node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/index.js'
 import LlmRuntime from '../../dsh/node_modules/@deepseek-ai/dsh-llm/lib/index.js'
 import { openaiCodexProvider } from '../../dsh/node_modules/@earendil-works/pi-ai/dist/providers/openai-codex.js'
@@ -56,6 +57,71 @@ assert.ok(descriptor, 'pinned pi-ai supplies the native Codex descriptor')
 const model = (id, name = descriptor.name, overrides = {}) => ({ ...structuredClone(descriptor), ...overrides, id, name })
 const scope = _subscriptionModelInternals.accountScope(_subscriptionModelInternals.activeAccount(record))
 const snapshot = models => ({ version: 1, provider: 'openai-codex', models, accountScope: scope })
+assert.equal(_subscriptionModelInternals.subscriptionProxyUrl(undefined), undefined, 'subscription proxy defaults to disabled')
+assert.equal(_subscriptionModelInternals.subscriptionProxyUrl('http://127.0.0.1:7897'), 'http://127.0.0.1:7897/')
+for (const unsafeProxy of ['https://127.0.0.1:7897', 'http://example.com:7897', 'socks5://127.0.0.1:7897', 'http://user:pass@127.0.0.1:7897', 'http://127.0.0.1:7897/path']) {
+  assert.throws(() => _subscriptionModelInternals.subscriptionProxyUrl(unsafeProxy), /HTTP loopback proxy URL/, `reject unsafe proxy ${unsafeProxy}`)
+}
+const accessToken = accountId => `header.${Buffer.from(JSON.stringify({ 'https://api.openai.com/auth': { chatgpt_account_id: accountId } })).toString('base64url')}.signature`
+const oauthFetchCalls = []
+const oauth = _subscriptionModelInternals.subscriptionOAuth(openaiCodexProvider().auth.oauth, async (url, init) => {
+  oauthFetchCalls.push({ url, init })
+  return Response.json({ access_token: accessToken('acct-a'), refresh_token: 'rotated-refresh', expires_in: 3600 })
+})
+const rotated = await oauth.refresh(account.credential, new AbortController().signal)
+assert.equal(rotated.type, 'oauth')
+assert.equal(rotated.accountId, 'acct-a')
+assert.equal(rotated.refresh, 'rotated-refresh')
+assert.ok(rotated.expires > Date.now())
+assert.equal(oauthFetchCalls[0].url, 'https://auth.openai.com/oauth/token', 'OAuth refresh uses pinned upstream endpoint')
+assert.equal(new URLSearchParams(oauthFetchCalls[0].init.body).get('refresh_token'), account.credential.refresh, 'OAuth refresh uses existing token without logging or replacing its credential shape')
+assert.equal(oauthFetchCalls[0].init.signal.aborted, false, 'OAuth refresh receives caller cancellation signal')
+const mismatchedOAuth = _subscriptionModelInternals.subscriptionOAuth(openaiCodexProvider().auth.oauth, async () => Response.json({ access_token: accessToken('acct-other'), refresh_token: 'rotated', expires_in: 3600 }))
+await assert.rejects(mismatchedOAuth.refresh(account.credential, new AbortController().signal), /subscription-account-changed/)
+const damagedOAuth = _subscriptionModelInternals.subscriptionOAuth(openaiCodexProvider().auth.oauth, async () => Response.json({ access_token: accessToken('acct-a'), expires_in: 3600 }))
+await assert.rejects(damagedOAuth.refresh(account.credential, new AbortController().signal), /invalid-subscription-token-response/)
+const abortedController = new AbortController()
+abortedController.abort()
+const abortedOAuth = _subscriptionModelInternals.subscriptionOAuth(openaiCodexProvider().auth.oauth, async (_url, init) => { assert.equal(init.signal, abortedController.signal); throw new Error('transport detail must not escape') })
+await assert.rejects(abortedOAuth.refresh(account.credential, abortedController.signal), /subscription-token-refresh-aborted/)
+const scopedFetchArgs = []
+const testDispatcher = { id: 'subscription-only-dispatcher' }
+const scopedFetch = _subscriptionModelInternals.subscriptionFetch(testDispatcher, async (input, init) => { scopedFetchArgs.push({ input: String(input), init }); return new Response('ok') })
+await scopedFetch('https://chatgpt.com/backend-api/codex/responses', { method: 'POST' })
+assert.equal(scopedFetchArgs[0].init.dispatcher, testDispatcher)
+assert.equal(scopedFetchArgs[0].init.redirect, 'error', 'subscription requests never follow redirects with credentials')
+await assert.rejects(scopedFetch('https://evil.invalid/', {}), /subscription request target rejected/, 'scoped fetch cannot proxy arbitrary/non-subscription traffic')
+const originalFetch = globalThis.fetch
+const mockAgent = new MockAgent()
+mockAgent.disableNetConnect()
+mockAgent.get('https://chatgpt.com').intercept({ path: '/backend-api/mock-proxy-test', method: 'GET' }).reply(200, 'mocked-through-undici')
+try {
+  globalThis.fetch = async () => { throw new Error('global fetch must not be used by subscription proxy') }
+  const undiciScopedFetch = _subscriptionModelInternals.subscriptionFetch(mockAgent)
+  const response = await undiciScopedFetch('https://chatgpt.com/backend-api/mock-proxy-test')
+  assert.equal(await response.text(), 'mocked-through-undici', 'default scoped fetch uses same undici implementation as MockAgent dispatcher')
+} finally {
+  globalThis.fetch = originalFetch
+  await mockAgent.close()
+}
+const disabledProfile = _subscriptionModelInternals.profileFor([model('gpt-5.4')])
+assert.equal(disabledProfile.piProvider.streamSimple.name, 'streamSimple', 'without proxy the original native stream function is retained')
+let actualStreamOptions
+const proxiedFetch = _subscriptionModelInternals.subscriptionFetch(testDispatcher, async (_url, options) => {
+  actualStreamOptions = options
+  return new Response('upstream unavailable', { status: 502 })
+})
+const proxiedProfile = _subscriptionModelInternals.profileFor([model('gpt-5.4')], { proxyFetch: proxiedFetch })
+assert.notEqual(proxiedProfile.piProvider.streamSimple, disabledProfile.piProvider.streamSimple, 'only the subscription provider receives the scoped proxy transport')
+const proxiedEvents = proxiedProfile.piProvider.streamSimple(model('gpt-5.4'), { messages: [], tools: [], systemPrompt: 'test' }, { apiKey: accessToken('acct-a') })
+const proxiedOutput = []
+for await (const event of proxiedEvents) proxiedOutput.push(event)
+assert.ok(proxiedOutput.some(event => event.type === 'error'), JSON.stringify(proxiedOutput))
+assert.ok(actualStreamOptions, JSON.stringify(proxiedOutput))
+assert.equal(typeof actualStreamOptions, 'object', 'Codex SSE call reaches the scoped fetch')
+assert.equal(actualStreamOptions.method, 'POST')
+assert.equal(actualStreamOptions.redirect, 'error')
+assert.equal(globalThis.fetch, originalFetch, 'subscription setup never replaces global fetch')
 async function writeSnapshot(value) {
   await writeFile(catalogPath, `${JSON.stringify(value)}\n`, { mode: 0o600 })
 }
