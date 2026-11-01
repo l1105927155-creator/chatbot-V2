@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PiAiAdapter } from '../../dsh/node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/index.js'
+import LlmRuntime from '../../dsh/node_modules/@deepseek-ai/dsh-llm/lib/index.js'
 import { openaiCodexProvider } from '../../dsh/node_modules/@earendil-works/pi-ai/dist/providers/openai-codex.js'
 import { Context, Service } from '../../dsh/node_modules/@deepseek-ai/cordis/lib/index.js'
 import { LocalCredentialProvider } from '../../dsh/node_modules/@deepseek-ai/dsh-credentials-local/lib/index.js'
@@ -52,7 +53,7 @@ const ctx = {
 const builtin = openaiCodexProvider().getModels()
 const descriptor = builtin.find(model => model.id === 'gpt-5.4')
 assert.ok(descriptor, 'pinned pi-ai supplies the native Codex descriptor')
-const model = (id, name = descriptor.name) => ({ ...structuredClone(descriptor), id, name })
+const model = (id, name = descriptor.name, overrides = {}) => ({ ...structuredClone(descriptor), ...overrides, id, name })
 const scope = _subscriptionModelInternals.accountScope(_subscriptionModelInternals.activeAccount(record))
 const snapshot = models => ({ version: 1, provider: 'openai-codex', models, accountScope: scope })
 async function writeSnapshot(value) {
@@ -85,10 +86,50 @@ try {
   assert.ok(adapter.current instanceof PiAiAdapter)
   assert.deepEqual((await adapter.listModels('openai-codex')).map(item => item.id), ['gpt-5.4'])
 
-  await writeSnapshot(snapshot([model('gpt-5.4', 'Renamed GPT'), model('gpt-5.5')]))
+  await writeSnapshot(snapshot([model('gpt-5.4', 'Renamed GPT'), model('gpt-5.5'), model('gpt-6.1-terra')]))
   await delay()
   await installed.flush()
-  assert.deepEqual((await adapter.listModels('openai-codex')).map(item => item.name), ['Renamed GPT', model('gpt-5.5').name])
+  assert.deepEqual((await adapter.listModels('openai-codex')).map(item => item.name), ['Renamed GPT', model('gpt-5.5').name, model('gpt-6.1-terra').name])
+  const terraInfo = await adapter.resolveModel('openai-codex', 'gpt-6.1-terra')
+  assert.equal(terraInfo.reasoning.defaultEffort, 'medium', 'Terra advertises medium as its adapter default')
+  const preparedTerra = await adapter.prepareCall('openai-codex', 'gpt-6.1-terra')
+  assert.equal(preparedTerra.model.reasoning.defaultEffort, 'medium', 'prepared calls retain the model-specific default')
+  assert.equal((await adapter.resolveModel('openai-codex', 'gpt-5.5')).reasoning.defaultEffort, undefined, 'other subscription models keep their existing default')
+  const llmContext = new Context()
+  const llm = new LlmRuntime(llmContext)
+  const disposeAdapter = llm.registerAdapter(['openai-codex'], adapter)
+  const nativePrepared = adapter.current.prepareCall
+  const dispatchedEfforts = []
+  adapter.current.prepareCall = async (provider, modelId, signal) => {
+    const resolvedPrepared = await nativePrepared.call(adapter.current, provider, modelId, signal)
+    return {
+      model: resolvedPrepared.model,
+      stream: options => {
+        dispatchedEfforts.push(options.reasoningEffort)
+        return (async function* () {})()
+      },
+    }
+  }
+  const defaultLlmCall = await llm.prepareCall({ provider: 'openai-codex', model: 'gpt-6.1-terra' })
+  assert.equal(defaultLlmCall.config.reasoningEffort, 'medium', 'LlmRuntime materializes Terra medium as the call default')
+  for await (const _chunk of defaultLlmCall.stream({ ...defaultLlmCall.config, messages: [] })) {}
+  assert.equal(dispatchedEfforts.at(-1), 'medium', 'the prepared native stream receives default medium')
+  const explicitLlmCall = await llm.prepareCall({ provider: 'openai-codex', model: 'gpt-6.1-terra', reasoningEffort: 'high' })
+  assert.equal(explicitLlmCall.config.reasoningEffort, 'high', 'LlmRuntime preserves explicit ACP high')
+  for await (const _chunk of explicitLlmCall.stream({ ...explicitLlmCall.config, messages: [] })) {}
+  assert.equal(dispatchedEfforts.at(-1), 'high', 'the prepared native stream receives explicit high')
+  adapter.current.prepareCall = nativePrepared
+  disposeAdapter()
+  const actualInner = adapter.current
+  adapter.current = { resolveModel: async () => ({ reasoning: { efforts: [{ id: 'low', name: 'Low' }] } }) }
+  await assert.rejects(adapter.resolveModel('openai-codex', 'gpt-6.1-terra'), /does not support required default reasoning effort "medium"/, 'Terra must fail clearly if medium is unavailable')
+  adapter.current = actualInner
+  const previousStream = adapter.current.stream
+  let streamedOptions
+  adapter.current.stream = options => { streamedOptions = options; return (async function* () {})() }
+  for await (const _chunk of adapter.stream({ provider: 'openai-codex', model: 'gpt-6.1-terra', reasoningEffort: 'high', messages: [] })) {}
+  assert.equal(streamedOptions.reasoningEffort, 'high', 'an explicit ACP effort reaches PiAiAdapter unchanged')
+  adapter.current.stream = previousStream
 
   const scopedStore = _subscriptionModelInternals.credentialRecordStore(credentials, scope)
   await Promise.all([
@@ -108,6 +149,7 @@ try {
   record.payload.activeId = 'account-a'
   await installed.flush()
   assert.deepEqual(registeredRoutes, ['openai-codex'])
+  assert.equal((await adapter.resolveModel('openai-codex', 'gpt-5.4')).reasoning?.defaultEffort, undefined, 'catalog rebuild removes Terra-only default')
 
   await writeSnapshot(snapshot([]))
   await delay()

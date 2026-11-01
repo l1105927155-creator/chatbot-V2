@@ -15,6 +15,7 @@ const API = 'openai-codex-responses'
 const BASE_URL = 'https://chatgpt.com/backend-api'
 const RECORD_KEY = credentialKey('codex-subscription', 'accounts')
 const MAX_BYTES = 2 * 1024 * 1024
+const DEFAULT_REASONING_MODEL = 'gpt-6.1-terra'
 const MODEL_FIELDS = new Set(['id', 'name', 'api', 'provider', 'baseUrl', 'reasoning', 'input', 'cost', 'contextWindow', 'maxTokens', 'thinkingLevelMap', 'compat'])
 
 function object(value) { return !!value && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype }
@@ -162,17 +163,25 @@ function credentialRecordStore(credentials, expectedScope) {
 // whose credential facade remains bound to the accountScope it was created for.
 class ScopedSubscriptionAdapter extends LlmAdapter {
   current
+  withModelDefault(provider, model, info) {
+    if (provider !== PROVIDER || model !== DEFAULT_REASONING_MODEL) return info
+    if (!info?.reasoning?.efforts?.some(effort => effort.id === 'medium')) throw new Error(`subscription model "${model}" does not support required default reasoning effort "medium"`)
+    return { ...info, reasoning: { ...info.reasoning, defaultEffort: 'medium' } }
+  }
   providerInfo(provider) { return this.current?.providerInfo(provider) ?? { id: provider, name: 'ChatGPT Codex subscription' } }
   providerRetryPolicy(provider) { return this.current?.providerRetryPolicy(provider) }
   imageRequestPricing(provider, model) { return this.current?.imageRequestPricing(provider, model) }
   listModels(provider) { return this.current?.listModels(provider) ?? Promise.resolve([]) }
   resolveModel(provider, model, signal) {
     if (!this.current) return Promise.reject(new Error('Codex subscription is unavailable'))
-    return this.current.resolveModel(provider, model, signal)
+    return this.current.resolveModel(provider, model, signal).then(info => this.withModelDefault(provider, model, info))
   }
   prepareCall(provider, model, signal) {
     if (!this.current) return Promise.reject(new Error('Codex subscription is unavailable'))
-    return this.current.prepareCall(provider, model, signal)
+    return this.current.prepareCall(provider, model, signal).then(prepared => ({
+      ...prepared,
+      model: this.withModelDefault(provider, model, prepared.model),
+    }))
   }
   stream(options) {
     if (!this.current) throw new Error('Codex subscription is unavailable')
