@@ -87,6 +87,45 @@ def blind_file_metadata(info):
     return {k: info.get(k) for k in ("kind", "sha256", "bytes")}
 
 
+def bubble_texts(result):
+    """Keep all user-visible payloads, including actual sent forward nodes.
+
+    A forward is resolved only through the matching simulator message receipt;
+    an unavailable payload stays explicit rather than becoming an empty bubble.
+    """
+    actions = result.get("evidence", {}).get("simulator", {}).get("actions", [])
+
+    def render(segments):
+        parts = []
+        for block in segments:
+            kind, data = block.get("type"), block.get("data", {})
+            if kind == "text":
+                parts.append(data.get("text", ""))
+            elif kind == "node":
+                content = data.get("content", [])
+                author = data.get("user_id", data.get("uin", "未知"))
+                parts.append(f"\n[转发节点：{author} {data.get('nickname', data.get('name', ''))}]\n"
+                             + (content if isinstance(content, str) else render(content)) + "\n")
+            elif kind not in {"at", "reply"}:
+                parts.append(f"[QQ {kind}：非文本内容，需另核正文]")
+        return "".join(parts)
+
+    texts = []
+    for bubble in result["bubbles"]:
+        segments = bubble.get("event", {}).get("message", [])
+        forwards = [b for b in segments if b.get("type") == "forward"]
+        if forwards:
+            matching = [a for a in actions if a.get("action") in {"send_group_forward_msg", "send_private_forward_msg"}
+                        and str(a.get("response", {}).get("data", {}).get("message_id")) == str(bubble["message_id"])
+                        and a.get("status") == "ok"]
+            if len(matching) == 1:
+                texts.append(render([b for b in segments if b.get("type") != "forward"])
+                             + "[合并转发正文]\n" + render(matching[0].get("request", {}).get("messages", [])))
+                continue
+        texts.append(render(segments))
+    return texts
+
+
 def blind_packet(review_id, cell, result, tools, texts):
     # Arbitrary tool output and newly copied files can contain the guide or run ID.
     # Keep them in the private evidence; the blind reviewer gets factual deltas.
@@ -146,7 +185,7 @@ def analyze(manifest_path: Path, output: Path):
         initial_projection = {"matches_manifest": bool(projections) and all(p["matches_manifest"] for p in projections),
                               "snapshots_checked": len(projections),
                               "journal_projection": projections[0] if projections else None}
-        texts = ["".join(b.get("data", {}).get("text", "") for b in e.get("event", {}).get("message", [])) for e in result["bubbles"]]
+        texts = bubble_texts(result)
         review_id = next(k for k, v in key.items() if v == cell["id"])
         save(blind / (review_id + ".json"), blind_packet(review_id, cell, result, tools, texts))
         summary.append({"cell": cell["id"], "status": result["protocol_status"], "review_id": review_id,

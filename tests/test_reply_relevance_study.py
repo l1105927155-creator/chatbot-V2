@@ -226,3 +226,21 @@ def test_blind_packet_withholds_guide_copies_and_raw_error_paths_but_keeps_bubbl
     assert packet["bubbles"] == ["实际用户气泡保留"]
     assert packet["tools"][0]["exit_code"] == 1
     assert packet["changed_files"]["file-001"]["after"]["sha256"] == "HASH"
+
+
+def test_blind_review_preserves_forward_body_and_never_guesses_another_receipt():
+    result = {'bubbles': [{'message_id': 42, 'event': {'message': [{'type': 'forward', 'data': {'id': 'fwd-41'}}]}}],
+              'evidence': {'simulator': {'actions': [{'action': 'send_group_forward_msg', 'status': 'ok',
+                  'response': {'data': {'message_id': 42}}, 'request': {'messages': [
+                      {'type': 'node', 'data': {'content': [{'type': 'text', 'data': {'text': '必须评阅的实际转发正文'}}]}}]}}]}}}
+    assert '必须评阅的实际转发正文' in analysis.bubble_texts(result)[0]
+    result['evidence']['simulator']['actions'][0]['request']['messages'].append(
+        {'type': 'node', 'data': {'user_id': '90002', 'nickname': '另一位成员',
+                                'content': [{'type': 'text', 'data': {'text': '第二个独立观点'}}]}})
+    rendered = analysis.bubble_texts(result)[0]
+    assert '[转发节点：90002 另一位成员]' in rendered and '第二个独立观点' in rendered
+    assert rendered.index('必须评阅的实际转发正文') < rendered.index('[转发节点：90002')
+    result['evidence']['simulator']['actions'][0]['response']['data']['message_id'] = 43
+    text = analysis.bubble_texts(result)[0]
+    assert '必须评阅的实际转发正文' not in text
+    assert '需另核正文' in text

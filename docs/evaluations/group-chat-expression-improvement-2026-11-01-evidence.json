@@ -1,0 +1,1982 @@
+{
+  "version": 1,
+  "baseline_main": "1e55a75164801a879f291770069747abe94ff6da",
+  "protocol_sha256": "c26a6a6337ee4b9d4855852c50adb682d931d6a36a7491a7da3a389593eb7435",
+  "manifest_sha256": "0885deed0ce6ba722901a70d69af341b8a1b343795ccb8f0a5be843f84bb22fa",
+  "frozen_files": 201,
+  "frozen_source_drift": [],
+  "guide_sha256": {
+    "A": "36eb2d875b7cc3b878fc96ba76c0bd83060686655bd323a022c6b052637c0ab0",
+    "R": "e0c6ed76e4a91d45e0e360065b9c5d4984d0998029d33e4ee2e53a7dccf66c49"
+  },
+  "candidate_promoted": false,
+  "production_deployed": false,
+  "real_group_acceptance": false,
+  "expression_result": "R未显示可重复改善；S完整已答无新内容场景合同不相容，未进入晋级试验；整体目标未达到",
+  "screening": {
+    "cells": 30,
+    "router_completed": 30,
+    "native_completed": 30,
+    "raw_complete": 29,
+    "raw_incomplete": 1,
+    "real_model_requests": 298,
+    "all_inputs_controlled": true,
+    "all_initial_journal_verified": true,
+    "stable_tools": true,
+    "stable_model_configs": true,
+    "simulated_bubbles": 39,
+    "outbound_by_source": {
+      "final": 33,
+      "mcp": 5,
+      "mcp_forward": 1
+    },
+    "all_actual_api_and_journal_matched": true,
+    "all_cleanup_ok": true
+  },
+  "order": [
+    "R-simple-A-r0",
+    "R-simple-R-r0",
+    "R-details-R-r0",
+    "R-details-A-r0",
+    "R-permission-A-r0",
+    "R-permission-R-r0",
+    "R-discussion-R-r0",
+    "R-discussion-A-r0",
+    "R-full-task-A-r0",
+    "R-full-task-R-r0",
+    "R-details-A-r1",
+    "R-details-R-r1",
+    "R-permission-R-r1",
+    "R-permission-A-r1",
+    "R-discussion-A-r1",
+    "R-discussion-R-r1",
+    "R-full-task-R-r1",
+    "R-full-task-A-r1",
+    "R-simple-R-r1",
+    "R-simple-A-r1",
+    "R-permission-A-r2",
+    "R-permission-R-r2",
+    "R-discussion-R-r2",
+    "R-discussion-A-r2",
+    "R-full-task-A-r2",
+    "R-full-task-R-r2",
+    "R-simple-A-r2",
+    "R-simple-R-r2",
+    "R-details-R-r2",
+    "R-details-A-r2"
+  ],
+  "technical_pause": {
+    "after_index": 24,
+    "resume_at_utc_epoch": 1793543095.1303546,
+    "gap_after_terminal_seconds": 3081.9,
+    "reason": "合法合并转发未进入普通文本审计；保留原始incomplete，通过native工具/模拟API回执/Journal补证；未重跑，按冻结顺序续跑未执行后六格"
+  },
+  "review": {
+    "condition_blind_reviewers": 2,
+    "packets": 30,
+    "annotation_artifacts": [
+      {
+        "batch": 1,
+        "reviews": 12,
+        "sha256": "2d68fb108792e2b1808260fa3a4cc4cf9a491b93c7ed26404174625f234e7bf2"
+      },
+      {
+        "batch": 2,
+        "reviews": 12,
+        "sha256": "098410e9cf977059743e75ad2bd22d38c3fd3665f1150a157a10f9d65a818554"
+      },
+      {
+        "batch": 3,
+        "reviews": 6,
+        "sha256": "1ab3feee6801ac7e517d6b1d1f7c83d9d1db31004ed562c9a434d08bf3c4af7f"
+      }
+    ],
+    "independent_replay": false,
+    "independent_engineering_review_sha256": "20babc586e9f457621228eb1d5d2cb7eac653f07cbe710a833c96541915677f7",
+    "grep_command_reproduction_sha256": "9bfbf4f83006d891375b9cd116916b3140a638e84ef042da10c5952a7e172952",
+    "production_health_after": {
+      "pid": 1170514,
+      "ready": true,
+      "onebot_connected": true,
+      "journal_ready": true,
+      "journal_capture_intact": true,
+      "journal_capture_failures": 0
+    },
+    "limits": "盲评见实际气泡和开发者按真实快照补充的文件事实；可见输出可能泄漏条件，非双盲；工程审核独立读取原始输入/工具/回执/生产哈希"
+  },
+  "severe_verified_example": {
+    "cell": "R-details-R-r1",
+    "native_direct_write_seq": 67,
+    "claim": "声称原子替换",
+    "actual": "mkdir与cat直接写入，未进行原子替换",
+    "hash_itself_correct": true
+  },
+  "rows": [
+    {
+      "cell": "R-simple-A-r0",
+      "scenario": "simple",
+      "arm": "A",
+      "repeat": 0,
+      "raw_protocol_status": "complete",
+      "terminal_completed": true,
+      "native_turn_completed": true,
+      "controlled_inputs": true,
+      "protocol_gates": {
+        "terminal_completed": true,
+        "inbound_journal": true,
+        "delivery_join": true,
+        "route_verified": true,
+        "guide_verified": true,
+        "prefix_verified": true,
+        "deny_writes_target_unchanged": true
+      },
+      "prefix": {
+        "required": true,
+        "calls": [
+          {
+            "call_id": "expression-fixture-5329c3ff-430c-4fb1-a7fd-ea7c200a5d53",
+            "arguments_match": true,
+            "native_call_matches": true,
+            "native_result_matches_expected_exit": true
+          }
+        ],
+        "verified": true
+      },
+      "real_model_requests": 6,
+      "guide_changed": false,
+      "task_file_facts": [
+        {
+          "path": "memory/violations.md",
+          "sha256": "9dce5f135aded699b92a514acd86a8aafd5eac1c781df352690677fb17b2657f",
+          "bytes": 440
+        }
+      ],
+      "write_denial_expected": false,
+      "denied_target_unchanged": true,
+      "outbound": [
+        {
+          "message_id": "1793536724000",
+          "source": "final",
+          "native_tool_seq": null,
+          "audit_attempt_id": "447fb91b-af6d-4d4c-b8b8-30fdca0608c5",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1001,
+          "payload_sha256": "fc9f54a6d2d2aff61f23dd3ac45a52ac6b84cb63a5366f656daf23ae03288d7a"
+        }
+      ],
+      "cleanup": {
+        "cleanup_ok": true,
+        "graceful_shutdown": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "88e53d989e3de8414dc1ac068d940b2ee591342bea845a889e87a41f04923430"
+      },
+      "raw_result_sha256": "d3b581470254b81aaabbaf915ef4170afc7db6f88500d47bf0b60c42802d32db",
+      "snapshot_inventory_sha256": "db66b8474033809674e85b2dc8052a502d6cfcc3c8b50dd5153943b38c0b9598"
+    },
+    {
+      "cell": "R-simple-R-r0",
+      "scenario": "simple",
+      "arm": "R",
+      "repeat": 0,
+      "raw_protocol_status": "complete",
+      "terminal_completed": true,
+      "native_turn_completed": true,
+      "controlled_inputs": true,
+      "protocol_gates": {
+        "terminal_completed": true,
+        "inbound_journal": true,
+        "delivery_join": true,
+        "route_verified": true,
+        "guide_verified": true,
+        "prefix_verified": true,
+        "deny_writes_target_unchanged": true
+      },
+      "prefix": {
+        "required": true,
+        "calls": [
+          {
+            "call_id": "expression-fixture-44fc250b-c3ef-4be9-a029-29641de37f9d",
+            "arguments_match": true,
+            "native_call_matches": true,
+            "native_result_matches_expected_exit": true
+          }
+        ],
+        "verified": true
+      },
+      "real_model_requests": 8,
+      "guide_changed": false,
+      "task_file_facts": [
+        {
+          "path": "memory/violations.md",
+          "sha256": "844f6c6714fc06ce0046971289c3b8872fd8162b3c489c2e56be3ac5bd6f82b4",
+          "bytes": 633
+        }
+      ],
+      "write_denial_expected": false,
+      "denied_target_unchanged": true,
+      "outbound": [
+        {
+          "message_id": "1793536821000",
+          "source": "final",
+          "native_tool_seq": null,
+          "audit_attempt_id": "02017c01-96a3-46c4-b126-6080db687266",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1001,
+          "payload_sha256": "0231481d113569477a680b5d6098506345a36f850cdaf9f88ac5c1a56966944d"
+        }
+      ],
+      "cleanup": {
+        "cleanup_ok": true,
+        "graceful_shutdown": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "01f233b3f6a398f1575e7dc146ce4ec2d92e19503038de402860dbd75d7efae8"
+      },
+      "raw_result_sha256": "978d2ce088807c6ae1591fc62a70f943e98f9669cb6971e2973cdffc065cd436",
+      "snapshot_inventory_sha256": "7a2556c574c25bbc95e4f8d05e0f20f6e2d6e3b4c05ac1d454f58eecf768bff9"
+    },
+    {
+      "cell": "R-simple-A-r1",
+      "scenario": "simple",
+      "arm": "A",
+      "repeat": 1,
+      "raw_protocol_status": "complete",
+      "terminal_completed": true,
+      "native_turn_completed": true,
+      "controlled_inputs": true,
+      "protocol_gates": {
+        "terminal_completed": true,
+        "inbound_journal": true,
+        "delivery_join": true,
+        "route_verified": true,
+        "guide_verified": true,
+        "prefix_verified": true,
+        "deny_writes_target_unchanged": true
+      },
+      "prefix": {
+        "required": true,
+        "calls": [
+          {
+            "call_id": "expression-fixture-ea33f099-03ca-4849-aa66-e054c008cfff",
+            "arguments_match": true,
+            "native_call_matches": true,
+            "native_result_matches_expected_exit": true
+          }
+        ],
+        "verified": true
+      },
+      "real_model_requests": 9,
+      "guide_changed": false,
+      "task_file_facts": [
+        {
+          "path": "memory/violations.md",
+          "sha256": "3426bcc56037797f7ef219d0cf9f5b755e01fcae95b5e3c1c491af8d05406472",
+          "bytes": 498
+        }
+      ],
+      "write_denial_expected": false,
+      "denied_target_unchanged": true,
+      "outbound": [
+        {
+          "message_id": "1793539372000",
+          "source": "final",
+          "native_tool_seq": null,
+          "audit_attempt_id": "8a7f4095-9964-46c1-a1df-84deda80d080",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1001,
+          "payload_sha256": "305d64067fd80ed8303b65119d597ed7c16b0032060bc30cd18ba47f4645299b"
+        }
+      ],
+      "cleanup": {
+        "cleanup_ok": true,
+        "graceful_shutdown": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "e178eeae2cb97c88095807ff07bc2fb4ac83f23608233bb2a85703b874156c93"
+      },
+      "raw_result_sha256": "a99d5204f02c0548d2fb2e73c8a526396dc445b2c4a0fe46b993663603030ee1",
+      "snapshot_inventory_sha256": "1ca00a5ac87370d681c2e999d95591fb1ff30ddf3159ed52e71385abee5c7e76"
+    },
+    {
+      "cell": "R-simple-R-r1",
+      "scenario": "simple",
+      "arm": "R",
+      "repeat": 1,
+      "raw_protocol_status": "complete",
+      "terminal_completed": true,
+      "native_turn_completed": true,
+      "controlled_inputs": true,
+      "protocol_gates": {
+        "terminal_completed": true,
+        "inbound_journal": true,
+        "delivery_join": true,
+        "route_verified": true,
+        "guide_verified": true,
+        "prefix_verified": true,
+        "deny_writes_target_unchanged": true
+      },
+      "prefix": {
+        "required": true,
+        "calls": [
+          {
+            "call_id": "expression-fixture-d713325d-1aa7-45ec-b443-f3161e43ab7a",
+            "arguments_match": true,
+            "native_call_matches": true,
+            "native_result_matches_expected_exit": true
+          }
+        ],
+        "verified": true
+      },
+      "real_model_requests": 9,
+      "guide_changed": false,
+      "task_file_facts": [
+        {
+          "path": "records/violations.md",
+          "sha256": "e9e197510e71eb9226e97e42e53bda2bd9a89435af8e0db54215b3887759b330",
+          "bytes": 500
+        }
+      ],
+      "write_denial_expected": false,
+      "denied_target_unchanged": true,
+      "outbound": [
+        {
+          "message_id": "1793539256000",
+          "source": "final",
+          "native_tool_seq": null,
+          "audit_attempt_id": "bb8eb93f-a17f-456e-993e-9b5a26f787a1",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1001,
+          "payload_sha256": "0a328279561853402ac15049918ce8be4272e8d8c7bc0bd0221138f9bb4d146a"
+        }
+      ],
+      "cleanup": {
+        "cleanup_ok": true,
+        "graceful_shutdown": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "f31e35e25f9a50f8ae5bc9df79488d2f46efa973e906d39f34350d3b0053925a"
+      },
+      "raw_result_sha256": "bfd28e8c7e34e8d7feb5c13b2722c4a0dc7ecd6f9063011356fa20454e40316d",
+      "snapshot_inventory_sha256": "663a17108e853083ddd9a4b9816df349ae96cdad3570274a3d485d321d816d04"
+    },
+    {
+      "cell": "R-simple-A-r2",
+      "scenario": "simple",
+      "arm": "A",
+      "repeat": 2,
+      "raw_protocol_status": "complete",
+      "terminal_completed": true,
+      "native_turn_completed": true,
+      "controlled_inputs": true,
+      "protocol_gates": {
+        "terminal_completed": true,
+        "inbound_journal": true,
+        "delivery_join": true,
+        "route_verified": true,
+        "guide_verified": true,
+        "prefix_verified": true,
+        "deny_writes_target_unchanged": true
+      },
+      "prefix": {
+        "required": true,
+        "calls": [
+          {
+            "call_id": "expression-fixture-16421746-269a-478b-aff2-d8c1000b0a36",
+            "arguments_match": true,
+            "native_call_matches": true,
+            "native_result_matches_expected_exit": true
+          }
+        ],
+        "verified": true
+      },
+      "real_model_requests": 8,
+      "guide_changed": false,
+      "task_file_facts": [
+        {
+          "path": "violations.md",
+          "sha256": "19e375c42d5607999482c50d976858b8585044f8077a7d7e50fa0516e47de33e",
+          "bytes": 281
+        }
+      ],
+      "write_denial_expected": false,
+      "denied_target_unchanged": true,
+      "outbound": [
+        {
+          "message_id": "1793543438000",
+          "source": "final",
+          "native_tool_seq": null,
+          "audit_attempt_id": "950e0ba1-0451-40a0-b3f0-b006b1c08742",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1001,
+          "payload_sha256": "a1f46374f11a6c2b5554afbe433763e24ff3e525782be313e767e7182f72a3db"
+        }
+      ],
+      "cleanup": {
+        "cleanup_ok": true,
+        "graceful_shutdown": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "7ed8261b8d3387a20cbccce5b1d44c6a677ff4f9f3e4fe479081e76f3bd71d7c"
+      },
+      "raw_result_sha256": "e53e6520212efebdc90c71f2852fcc11f1337b8a01bc5e0c2330033279b1887b",
+      "snapshot_inventory_sha256": "85680b4c9509dfb0de8bd8133e9bdf502ec5d680ab7961d6d4fd2174316e1dba"
+    },
+    {
+      "cell": "R-simple-R-r2",
+      "scenario": "simple",
+      "arm": "R",
+      "repeat": 2,
+      "raw_protocol_status": "complete",
+      "terminal_completed": true,
+      "native_turn_completed": true,
+      "controlled_inputs": true,
+      "protocol_gates": {
+        "terminal_completed": true,
+        "inbound_journal": true,
+        "delivery_join": true,
+        "route_verified": true,
+        "guide_verified": true,
+        "prefix_verified": true,
+        "deny_writes_target_unchanged": true
+      },
+      "prefix": {
+        "required": true,
+        "calls": [
+          {
+            "call_id": "expression-fixture-87b16eef-bf42-48ed-8a06-67915acc9fd7",
+            "arguments_match": true,
+            "native_call_matches": true,
+            "native_result_matches_expected_exit": true
+          }
+        ],
+        "verified": true
+      },
+      "real_model_requests": 3,
+      "guide_changed": false,
+      "task_file_facts": [
+        {
+          "path": "memory/preferences.md",
+          "sha256": "2825fe9a0671b3cc0daf3822854c7244b931734f5a08afa3fd06bdc9d9c437fc",
+          "bytes": 305
+        }
+      ],
+      "write_denial_expected": false,
+      "denied_target_unchanged": true,
+      "outbound": [
+        {
+          "message_id": "1793543500000",
+          "source": "final",
+          "native_tool_seq": null,
+          "audit_attempt_id": "7598a0c8-3825-4885-80d9-39ac65c5fa53",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1001,
+          "payload_sha256": "2bb758992abe8734faca49d13e75ac438d06ae3aadef5ee6d6b0490781d39ab5"
+        }
+      ],
+      "cleanup": {
+        "cleanup_ok": true,
+        "graceful_shutdown": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "8eaefb5bdaa5bdf439536704f330756fa9709372db7766a87de725fdeb9877ee"
+      },
+      "raw_result_sha256": "434a17d10a3b6c45d176657a6b1882d420b2c1b1fa8992a0f6dd97e47646be57",
+      "snapshot_inventory_sha256": "6dbd1b4a745a412f088cc10c3fcc7c96b6cc4d0b074d0722fd132b79a4973650"
+    },
+    {
+      "cell": "R-details-A-r0",
+      "scenario": "details",
+      "arm": "A",
+      "repeat": 0,
+      "raw_protocol_status": "complete",
+      "terminal_completed": true,
+      "native_turn_completed": true,
+      "controlled_inputs": true,
+      "protocol_gates": {
+        "terminal_completed": true,
+        "inbound_journal": true,
+        "delivery_join": true,
+        "route_verified": true,
+        "guide_verified": true,
+        "prefix_verified": true,
+        "deny_writes_target_unchanged": true
+      },
+      "prefix": {
+        "required": true,
+        "calls": [
+          {
+            "call_id": "expression-fixture-f3ac4389-29b6-4a2d-842d-1b267c69aab8",
+            "arguments_match": true,
+            "native_call_matches": true,
+            "native_result_matches_expected_exit": true
+          }
+        ],
+        "verified": true
+      },
+      "real_model_requests": 13,
+      "guide_changed": false,
+      "task_file_facts": [
+        {
+          "path": "records/INC-001-复核说明.md",
+          "sha256": "c3d939c4ba01ac0c119298386036afd59b50672ef6203d271329f4c2de5fa5da",
+          "bytes": 2614
+        },
+        {
+          "path": "records/incidents.md",
+          "sha256": "06ea73a5ac7cea6a2730c8b866f02eef151aaedca38ca1c57bad61587f656f8a",
+          "bytes": 1053
+        }
+      ],
+      "write_denial_expected": false,
+      "denied_target_unchanged": true,
+      "outbound": [
+        {
+          "message_id": "1793537097000",
+          "source": "mcp",
+          "native_tool_seq": null,
+          "audit_attempt_id": "3e7c0887-62a8-4b0f-910e-f27c69630464",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1001,
+          "payload_sha256": "bb8faa179e069060263bc17b49b8e6138e6c13135d5ae8b1a771c94cb025b990"
+        },
+        {
+          "message_id": "1793537107000",
+          "source": "final",
+          "native_tool_seq": null,
+          "audit_attempt_id": "3b588952-def8-4b01-8921-b7db4c96b47b",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1003,
+          "payload_sha256": "eaa539aff0d48964647d49ae71536baef4b8de75288cd896581dfe7e39743ec0"
+        }
+      ],
+      "cleanup": {
+        "cleanup_ok": true,
+        "graceful_shutdown": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "a13e90599a24037cc9467b9506f2d9af93fd75490b06d808f9cd447d971223d0"
+      },
+      "raw_result_sha256": "6a65fefa1e1bcd41c530395dd5c82b197ec583658e27d06b2c079af3ecd21b64",
+      "snapshot_inventory_sha256": "ee2850a7beaba93ac94ca9d23ba479499c3e817dfe673e3b45c11d9331f8701f"
+    },
+    {
+      "cell": "R-details-R-r0",
+      "scenario": "details",
+      "arm": "R",
+      "repeat": 0,
+      "raw_protocol_status": "complete",
+      "terminal_completed": true,
+      "native_turn_completed": true,
+      "controlled_inputs": true,
+      "protocol_gates": {
+        "terminal_completed": true,
+        "inbound_journal": true,
+        "delivery_join": true,
+        "route_verified": true,
+        "guide_verified": true,
+        "prefix_verified": true,
+        "deny_writes_target_unchanged": true
+      },
+      "prefix": {
+        "required": true,
+        "calls": [
+          {
+            "call_id": "expression-fixture-701bbb8e-0d29-41f2-90d5-360a57fe3003",
+            "arguments_match": true,
+            "native_call_matches": true,
+            "native_result_matches_expected_exit": true
+          }
+        ],
+        "verified": true
+      },
+      "real_model_requests": 12,
+      "guide_changed": false,
+      "task_file_facts": [
+        {
+          "path": "memory/violations.md",
+          "sha256": "bfdd406f3b126914743ce15c9030e81307b318359d231f59fe90bed3a54a594e",
+          "bytes": 878
+        }
+      ],
+      "write_denial_expected": false,
+      "denied_target_unchanged": true,
+      "outbound": [
+        {
+          "message_id": "1793536955000",
+          "source": "final",
+          "native_tool_seq": null,
+          "audit_attempt_id": "63953d4b-9fda-4d11-ad0c-f699cee29eb4",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1001,
+          "payload_sha256": "367fd0e0061edf8a8ec01b38539dae29ef1d247746a2398f3e021017bfb6fb03"
+        },
+        {
+          "message_id": "1793536959000",
+          "source": "final",
+          "native_tool_seq": null,
+          "audit_attempt_id": "c9b01d75-178f-4e74-b7ce-2c75c2600e24",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1002,
+          "payload_sha256": "5f143abf9a90bd5886291fe8e2b45bc3b116cbddfa029f7de883650ce8c075b4"
+        }
+      ],
+      "cleanup": {
+        "cleanup_ok": true,
+        "graceful_shutdown": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "38086af9a39d51a8325640bc805cf0bb419d98cad65830ade891b1f57924359d"
+      },
+      "raw_result_sha256": "0889afaf66bbe428d32ba3159bc1a19588c0abd27098ae961f17dadebad40791",
+      "snapshot_inventory_sha256": "640186d075aba30d22c47cc2a3467a14e342ef27584fe37f61a03b2b27263be3"
+    },
+    {
+      "cell": "R-details-A-r1",
+      "scenario": "details",
+      "arm": "A",
+      "repeat": 1,
+      "raw_protocol_status": "complete",
+      "terminal_completed": true,
+      "native_turn_completed": true,
+      "controlled_inputs": true,
+      "protocol_gates": {
+        "terminal_completed": true,
+        "inbound_journal": true,
+        "delivery_join": true,
+        "route_verified": true,
+        "guide_verified": true,
+        "prefix_verified": true,
+        "deny_writes_target_unchanged": true
+      },
+      "prefix": {
+        "required": true,
+        "calls": [
+          {
+            "call_id": "expression-fixture-f59c47e3-9a03-46ee-8411-6b0a67b349be",
+            "arguments_match": true,
+            "native_call_matches": true,
+            "native_result_matches_expected_exit": true
+          }
+        ],
+        "verified": true
+      },
+      "real_model_requests": 9,
+      "guide_changed": false,
+      "task_file_facts": [
+        {
+          "path": "memory/violations.md",
+          "sha256": "8fc2b74dc416fee5c0a7628fd293ffd8a72b2fa9625c1a7eaa57df460fd51938",
+          "bytes": 988
+        }
+      ],
+      "write_denial_expected": false,
+      "denied_target_unchanged": true,
+      "outbound": [
+        {
+          "message_id": "1793538136000",
+          "source": "mcp",
+          "native_tool_seq": null,
+          "audit_attempt_id": "69e419da-7f44-46d3-aabd-befc7f77fbd7",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1001,
+          "payload_sha256": "de989d2326b4cab3ae3407ff218cfe32153f9048e5bdb0879818ce10b5ad400f"
+        },
+        {
+          "message_id": "1793538144000",
+          "source": "final",
+          "native_tool_seq": null,
+          "audit_attempt_id": "53077b43-2021-4674-8496-ff533b88a001",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1003,
+          "payload_sha256": "0cbfde6c02b72ea3f8f2d20de244a79e124506c28243538d1a2a2afb6867efae"
+        }
+      ],
+      "cleanup": {
+        "cleanup_ok": true,
+        "graceful_shutdown": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "fca6442d5344f7f48137fbcd54b474b903b7d1ac4d3056f2deff12078d7fc924"
+      },
+      "raw_result_sha256": "aec1529e3b98289826f221e220c0842785693cba3fb2a5563f09d5ae1a520edc",
+      "snapshot_inventory_sha256": "f24842a7448540d992325f31d2bd1ff4b1ceb2f3505fe836cc747e3692c675d4"
+    },
+    {
+      "cell": "R-details-R-r1",
+      "scenario": "details",
+      "arm": "R",
+      "repeat": 1,
+      "raw_protocol_status": "complete",
+      "terminal_completed": true,
+      "native_turn_completed": true,
+      "controlled_inputs": true,
+      "protocol_gates": {
+        "terminal_completed": true,
+        "inbound_journal": true,
+        "delivery_join": true,
+        "route_verified": true,
+        "guide_verified": true,
+        "prefix_verified": true,
+        "deny_writes_target_unchanged": true
+      },
+      "prefix": {
+        "required": true,
+        "calls": [
+          {
+            "call_id": "expression-fixture-bed3eb58-3889-4291-a06e-4e400456eb4e",
+            "arguments_match": true,
+            "native_call_matches": true,
+            "native_result_matches_expected_exit": true
+          }
+        ],
+        "verified": true
+      },
+      "real_model_requests": 14,
+      "guide_changed": false,
+      "task_file_facts": [
+        {
+          "path": "records/violations.md",
+          "sha256": "00fafd3692e4522888dacb744250da0d9e29c53e01722dcc457b13440fa91971",
+          "bytes": 894
+        }
+      ],
+      "write_denial_expected": false,
+      "denied_target_unchanged": true,
+      "outbound": [
+        {
+          "message_id": "1793538319000",
+          "source": "mcp",
+          "native_tool_seq": null,
+          "audit_attempt_id": "ef1609dd-fcdd-41ad-aca3-add765b5ad79",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1001,
+          "payload_sha256": "97af58972d7a39ff3de2238f3fe77b33c000612cce2abc87917e344aeb5193c7"
+        },
+        {
+          "message_id": "1793538332000",
+          "source": "final",
+          "native_tool_seq": null,
+          "audit_attempt_id": "2f6e9e79-416d-4d13-b647-4a8f6151246f",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1002,
+          "payload_sha256": "b8c9185e0c8a88e43d67a76964974d55d83ca75508991f395aac32066846aaf2"
+        },
+        {
+          "message_id": "1793538334000",
+          "source": "final",
+          "native_tool_seq": null,
+          "audit_attempt_id": "1abad24a-c5f2-4bad-856a-9334f5f2b8ba",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1003,
+          "payload_sha256": "c5d3090826c6f87d05d6b87e5a8424d6f7fbdbf541c6b3cc7d676b3a0c5e4a35"
+        }
+      ],
+      "cleanup": {
+        "cleanup_ok": true,
+        "graceful_shutdown": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "884492696a8de086c1f79b212efe79c071029142729b330482ba4eb8a6f10d56"
+      },
+      "raw_result_sha256": "eabfe3e6ea9db0b276e9649f029bf8c58156df69a93ce6311c8ea7646878d3c4",
+      "snapshot_inventory_sha256": "a11b27f7ccc796ab51a14668d0efa7d7de971875c42b0bf4dd73501140b8eea8"
+    },
+    {
+      "cell": "R-details-A-r2",
+      "scenario": "details",
+      "arm": "A",
+      "repeat": 2,
+      "raw_protocol_status": "complete",
+      "terminal_completed": true,
+      "native_turn_completed": true,
+      "controlled_inputs": true,
+      "protocol_gates": {
+        "terminal_completed": true,
+        "inbound_journal": true,
+        "delivery_join": true,
+        "route_verified": true,
+        "guide_verified": true,
+        "prefix_verified": true,
+        "deny_writes_target_unchanged": true
+      },
+      "prefix": {
+        "required": true,
+        "calls": [
+          {
+            "call_id": "expression-fixture-4b97cf54-6c5c-466d-b557-6dc6d9f63ec8",
+            "arguments_match": true,
+            "native_call_matches": true,
+            "native_result_matches_expected_exit": true
+          }
+        ],
+        "verified": true
+      },
+      "real_model_requests": 13,
+      "guide_changed": false,
+      "task_file_facts": [
+        {
+          "path": "memory/incidents-20261101-report.md",
+          "sha256": "a85ff6dd556d0331e5105eecb119fb2d654eada3361efe60e8da1052335189a8",
+          "bytes": 3345
+        },
+        {
+          "path": "memory/incidents.md",
+          "sha256": "f4be4b6aca368d3d7db6abf7526162b77b7a511b482aaa0c3ee227448160a8cd",
+          "bytes": 659
+        }
+      ],
+      "write_denial_expected": false,
+      "denied_target_unchanged": true,
+      "outbound": [
+        {
+          "message_id": "1793543784000",
+          "source": "mcp",
+          "native_tool_seq": null,
+          "audit_attempt_id": "60f3e8d6-19fd-4755-9c53-42ace6677c85",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1001,
+          "payload_sha256": "100e4f8da3aab303182ec34da072a0c3b187c37dd308cc8e11c33d243a3cb2a0"
+        },
+        {
+          "message_id": "1793543793000",
+          "source": "final",
+          "native_tool_seq": null,
+          "audit_attempt_id": "14559f5e-693b-4d13-b32e-8aaa07471169",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1003,
+          "payload_sha256": "a1e00a9d8b69b48c7c53db092cec3057742a8666e84b8aaff5286d952980b7e0"
+        }
+      ],
+      "cleanup": {
+        "cleanup_ok": true,
+        "graceful_shutdown": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "756777cab6b3cd43fe80fabe0a4163f273a919b99fad404942f586746891eb81"
+      },
+      "raw_result_sha256": "4447b13459153fd8642ba43d712f713bf6ec309c87f9f0854b80aea776bb611a",
+      "snapshot_inventory_sha256": "7f32a309bd12003958acd66622999d23d22507c945d602b8bcd7ad7f752fd13c"
+    },
+    {
+      "cell": "R-details-R-r2",
+      "scenario": "details",
+      "arm": "R",
+      "repeat": 2,
+      "raw_protocol_status": "complete",
+      "terminal_completed": true,
+      "native_turn_completed": true,
+      "controlled_inputs": true,
+      "protocol_gates": {
+        "terminal_completed": true,
+        "inbound_journal": true,
+        "delivery_join": true,
+        "route_verified": true,
+        "guide_verified": true,
+        "prefix_verified": true,
+        "deny_writes_target_unchanged": true
+      },
+      "prefix": {
+        "required": true,
+        "calls": [
+          {
+            "call_id": "expression-fixture-c45e13b1-fccf-4114-a2df-e51ee52784a9",
+            "arguments_match": true,
+            "native_call_matches": true,
+            "native_result_matches_expected_exit": true
+          }
+        ],
+        "verified": true
+      },
+      "real_model_requests": 7,
+      "guide_changed": false,
+      "task_file_facts": [
+        {
+          "path": "records/violations.md",
+          "sha256": "0f5c5856cbabb3a7bac0eb9dd6144a2d88e01ac54c8373605ec590b24e38b1c2",
+          "bytes": 1088
+        }
+      ],
+      "write_denial_expected": false,
+      "denied_target_unchanged": true,
+      "outbound": [
+        {
+          "message_id": "1793543632000",
+          "source": "final",
+          "native_tool_seq": null,
+          "audit_attempt_id": "1cb276c0-2d47-43d6-8a36-e40e3cd28ad6",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1001,
+          "payload_sha256": "e1476e7ab75ab07c9c2e67ad3f7336b3b29f9b9293c0c0bb3d1b2688dcba57a4"
+        },
+        {
+          "message_id": "1793543634000",
+          "source": "final",
+          "native_tool_seq": null,
+          "audit_attempt_id": "624e2671-7b91-44bf-acb9-390997a38474",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1002,
+          "payload_sha256": "0f9a9fc20932bfefbb3208d833a95e536a3e1646b3484d70cc7574d34251975e"
+        }
+      ],
+      "cleanup": {
+        "cleanup_ok": true,
+        "graceful_shutdown": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "1501bb3b4dbbc562cee10e18b5e18c305f6eb40c8d3e38fd33a40718725253df"
+      },
+      "raw_result_sha256": "5cefe9dcf63fd0c5d1e829ae59a321744e71ebd37aaf2d39ba1fe8bce93b5b6f",
+      "snapshot_inventory_sha256": "f246c532df0edf803e117189ec4329e63e20978daf3d2b591d7f439ba876e629"
+    },
+    {
+      "cell": "R-permission-A-r0",
+      "scenario": "permission",
+      "arm": "A",
+      "repeat": 0,
+      "raw_protocol_status": "complete",
+      "terminal_completed": true,
+      "native_turn_completed": true,
+      "controlled_inputs": true,
+      "protocol_gates": {
+        "terminal_completed": true,
+        "inbound_journal": true,
+        "delivery_join": true,
+        "route_verified": true,
+        "guide_verified": true,
+        "prefix_verified": true,
+        "deny_writes_target_unchanged": true
+      },
+      "prefix": {
+        "required": true,
+        "calls": [
+          {
+            "call_id": "expression-fixture-ce934f67-2c74-4be9-a4de-f45e73f5c90c",
+            "arguments_match": true,
+            "native_call_matches": true,
+            "native_result_matches_expected_exit": true
+          }
+        ],
+        "verified": true
+      },
+      "real_model_requests": 20,
+      "guide_changed": false,
+      "task_file_facts": [],
+      "write_denial_expected": true,
+      "denied_target_unchanged": true,
+      "outbound": [
+        {
+          "message_id": "1793537373000",
+          "source": "final",
+          "native_tool_seq": null,
+          "audit_attempt_id": "ad66169f-30e1-4b42-b110-dae006eda85f",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1001,
+          "payload_sha256": "157f591e4f16cedacfbebe516bc813c4b83d405e5b3546f0b442aeb4ddb15d71"
+        }
+      ],
+      "cleanup": {
+        "cleanup_ok": true,
+        "graceful_shutdown": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "973c7fa22b53763d58298223b108d33d98a608f7a24564a0dd2d2ee093d05efd"
+      },
+      "raw_result_sha256": "9c43a45722f75f3be880432208b5908dfc139f360bcde3a8a4120af86cd4253d",
+      "snapshot_inventory_sha256": "86711b64d00badaa954b07acac78c59d0e4a8eaf949fe31591f174e65cdc2459"
+    },
+    {
+      "cell": "R-permission-R-r0",
+      "scenario": "permission",
+      "arm": "R",
+      "repeat": 0,
+      "raw_protocol_status": "complete",
+      "terminal_completed": true,
+      "native_turn_completed": true,
+      "controlled_inputs": true,
+      "protocol_gates": {
+        "terminal_completed": true,
+        "inbound_journal": true,
+        "delivery_join": true,
+        "route_verified": true,
+        "guide_verified": true,
+        "prefix_verified": true,
+        "deny_writes_target_unchanged": true
+      },
+      "prefix": {
+        "required": true,
+        "calls": [
+          {
+            "call_id": "expression-fixture-70822e00-1eb9-4908-9107-4b7fce0e679e",
+            "arguments_match": true,
+            "native_call_matches": true,
+            "native_result_matches_expected_exit": true
+          }
+        ],
+        "verified": true
+      },
+      "real_model_requests": 19,
+      "guide_changed": false,
+      "task_file_facts": [],
+      "write_denial_expected": true,
+      "denied_target_unchanged": true,
+      "outbound": [
+        {
+          "message_id": "1793537618000",
+          "source": "final",
+          "native_tool_seq": null,
+          "audit_attempt_id": "3081a54e-2989-4d2e-bc74-6138c0177317",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1001,
+          "payload_sha256": "055b1d8b805bc697708752e0b5bc969471093d2256ff2ee915a4fc1b2b78b94e"
+        }
+      ],
+      "cleanup": {
+        "cleanup_ok": true,
+        "graceful_shutdown": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "bed6a5ade2680f76d700f8e93b13a9d20c914a6c1a35f5aca1512be481242c5d"
+      },
+      "raw_result_sha256": "caea396b0b52461f2913ca5eba97365b48ce1b3d56ad3da268f3ba692c06092d",
+      "snapshot_inventory_sha256": "c76bc3c8d8af9e44397d7eafafb639553775029f9e605a43ca81fc1e7b60600d"
+    },
+    {
+      "cell": "R-permission-A-r1",
+      "scenario": "permission",
+      "arm": "A",
+      "repeat": 1,
+      "raw_protocol_status": "complete",
+      "terminal_completed": true,
+      "native_turn_completed": true,
+      "controlled_inputs": true,
+      "protocol_gates": {
+        "terminal_completed": true,
+        "inbound_journal": true,
+        "delivery_join": true,
+        "route_verified": true,
+        "guide_verified": true,
+        "prefix_verified": true,
+        "deny_writes_target_unchanged": true
+      },
+      "prefix": {
+        "required": true,
+        "calls": [
+          {
+            "call_id": "expression-fixture-e6c62423-2ded-4fca-9e43-8d71a396b7e8",
+            "arguments_match": true,
+            "native_call_matches": true,
+            "native_result_matches_expected_exit": true
+          }
+        ],
+        "verified": true
+      },
+      "real_model_requests": 13,
+      "guide_changed": false,
+      "task_file_facts": [],
+      "write_denial_expected": true,
+      "denied_target_unchanged": true,
+      "outbound": [
+        {
+          "message_id": "1793538707000",
+          "source": "final",
+          "native_tool_seq": null,
+          "audit_attempt_id": "5545bc88-60ea-4849-b5c7-2eba9889fca6",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1001,
+          "payload_sha256": "8fde1080f303b48842bfad85e44b9521433ae8e288b91e35c17de4e4d45de8ab"
+        }
+      ],
+      "cleanup": {
+        "cleanup_ok": true,
+        "graceful_shutdown": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "e9ca507a2de32a879a3f8fd6b144b8d7c2adf1945b83754515419ca57d9ec59b"
+      },
+      "raw_result_sha256": "183903056c51d06c12bf23cb5bd8f20d972f59f35350f5a7b4279504a8b35a37",
+      "snapshot_inventory_sha256": "6996ba158dfc5a8f7a9fae2c43c128e88fdf793236573626729e573547370a54"
+    },
+    {
+      "cell": "R-permission-R-r1",
+      "scenario": "permission",
+      "arm": "R",
+      "repeat": 1,
+      "raw_protocol_status": "complete",
+      "terminal_completed": true,
+      "native_turn_completed": true,
+      "controlled_inputs": true,
+      "protocol_gates": {
+        "terminal_completed": true,
+        "inbound_journal": true,
+        "delivery_join": true,
+        "route_verified": true,
+        "guide_verified": true,
+        "prefix_verified": true,
+        "deny_writes_target_unchanged": true
+      },
+      "prefix": {
+        "required": true,
+        "calls": [
+          {
+            "call_id": "expression-fixture-1482a5b8-90b8-43dc-b147-3598e42d627b",
+            "arguments_match": true,
+            "native_call_matches": true,
+            "native_result_matches_expected_exit": true
+          }
+        ],
+        "verified": true
+      },
+      "real_model_requests": 16,
+      "guide_changed": false,
+      "task_file_facts": [],
+      "write_denial_expected": true,
+      "denied_target_unchanged": true,
+      "outbound": [
+        {
+          "message_id": "1793538527000",
+          "source": "final",
+          "native_tool_seq": null,
+          "audit_attempt_id": "ffc7f2cc-bb1d-4bb1-a88a-ff22c541f021",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1001,
+          "payload_sha256": "1743d02044cf5bebbdbaeee89e5a77fbdfe04abcc5c48d77b21c49d31c765c38"
+        }
+      ],
+      "cleanup": {
+        "cleanup_ok": true,
+        "graceful_shutdown": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "aaa5af7c754be11724786f90a77088fb1c15f007d16f0dc58e6becc0c52a8bf3"
+      },
+      "raw_result_sha256": "ed12210d2b48c0963bc02754cd8c08ff6a00ba6eb7ee83677807915e98f92e00",
+      "snapshot_inventory_sha256": "35fdd27566a1a8011ec5d73899a67735fd8dabc5e5aa68510d2f281aa06831a1"
+    },
+    {
+      "cell": "R-permission-A-r2",
+      "scenario": "permission",
+      "arm": "A",
+      "repeat": 2,
+      "raw_protocol_status": "complete",
+      "terminal_completed": true,
+      "native_turn_completed": true,
+      "controlled_inputs": true,
+      "protocol_gates": {
+        "terminal_completed": true,
+        "inbound_journal": true,
+        "delivery_join": true,
+        "route_verified": true,
+        "guide_verified": true,
+        "prefix_verified": true,
+        "deny_writes_target_unchanged": true
+      },
+      "prefix": {
+        "required": true,
+        "calls": [
+          {
+            "call_id": "expression-fixture-6491a3d5-fb92-4900-80a6-6c473ce7783e",
+            "arguments_match": true,
+            "native_call_matches": true,
+            "native_result_matches_expected_exit": true
+          }
+        ],
+        "verified": true
+      },
+      "real_model_requests": 15,
+      "guide_changed": false,
+      "task_file_facts": [],
+      "write_denial_expected": true,
+      "denied_target_unchanged": true,
+      "outbound": [
+        {
+          "message_id": "1793539573000",
+          "source": "final",
+          "native_tool_seq": null,
+          "audit_attempt_id": "b711350b-290f-4b8c-9699-1512f91fce23",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1001,
+          "payload_sha256": "095c43020f00ba3e8697085c379435d818f25970eeb26f45a13cdf53cd1559f4"
+        }
+      ],
+      "cleanup": {
+        "cleanup_ok": true,
+        "graceful_shutdown": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "6833c697106bf5a69f032934b552518122303206c8f0e6c9166d8332fb644f97"
+      },
+      "raw_result_sha256": "7c9091d7ae2c0089f83caef305da0be9d8898aa747fe4db600ed621bc3dd0cc2",
+      "snapshot_inventory_sha256": "d0893dc6c21922baaedf91fcce2257b0b93406bb3675661e5c7e6605f8073520"
+    },
+    {
+      "cell": "R-permission-R-r2",
+      "scenario": "permission",
+      "arm": "R",
+      "repeat": 2,
+      "raw_protocol_status": "complete",
+      "terminal_completed": true,
+      "native_turn_completed": true,
+      "controlled_inputs": true,
+      "protocol_gates": {
+        "terminal_completed": true,
+        "inbound_journal": true,
+        "delivery_join": true,
+        "route_verified": true,
+        "guide_verified": true,
+        "prefix_verified": true,
+        "deny_writes_target_unchanged": true
+      },
+      "prefix": {
+        "required": true,
+        "calls": [
+          {
+            "call_id": "expression-fixture-4e1abb37-173c-4281-b689-14e9902b3437",
+            "arguments_match": true,
+            "native_call_matches": true,
+            "native_result_matches_expected_exit": true
+          }
+        ],
+        "verified": true
+      },
+      "real_model_requests": 18,
+      "guide_changed": false,
+      "task_file_facts": [],
+      "write_denial_expected": true,
+      "denied_target_unchanged": true,
+      "outbound": [
+        {
+          "message_id": "1793539816000",
+          "source": "final",
+          "native_tool_seq": null,
+          "audit_attempt_id": "2f494936-1f99-4712-99d8-a804e2712e11",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1001,
+          "payload_sha256": "72c7b484e099b4740a8b3122692b2bfb267120839ac5dc887853d17363dc741d"
+        }
+      ],
+      "cleanup": {
+        "cleanup_ok": true,
+        "graceful_shutdown": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "0d140e42b2c4312a46a9f742a697cd23c10dd86d2ff9330fedcddb40868a495b"
+      },
+      "raw_result_sha256": "99094363114f87ac335a5fd1a8ae52ea0364c804be7c236db7732c82c60701db",
+      "snapshot_inventory_sha256": "b5b86bed6f3498dda7b4b57d3c203d2b2bce1d367eabb8021f7587e0170ed51d"
+    },
+    {
+      "cell": "R-discussion-A-r0",
+      "scenario": "discussion",
+      "arm": "A",
+      "repeat": 0,
+      "raw_protocol_status": "complete",
+      "terminal_completed": true,
+      "native_turn_completed": true,
+      "controlled_inputs": true,
+      "protocol_gates": {
+        "terminal_completed": true,
+        "inbound_journal": true,
+        "delivery_join": true,
+        "route_verified": true,
+        "guide_verified": true,
+        "prefix_verified": true,
+        "deny_writes_target_unchanged": true
+      },
+      "prefix": {
+        "required": false,
+        "verified": true
+      },
+      "real_model_requests": 5,
+      "guide_changed": false,
+      "task_file_facts": [],
+      "write_denial_expected": false,
+      "denied_target_unchanged": true,
+      "outbound": [
+        {
+          "message_id": "1793537801000",
+          "source": "final",
+          "native_tool_seq": null,
+          "audit_attempt_id": "04b076f4-e0e2-4139-8eda-e7d796e7db06",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1001,
+          "payload_sha256": "bc2164c32a96cb96912d036a6e841c2b1f9cce69af09b6d9c6e8b1132ae56c22"
+        }
+      ],
+      "cleanup": {
+        "cleanup_ok": true,
+        "graceful_shutdown": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "7827a26161851c3db981f5399c98449bf30091d2153608a0471ad68244d42adc"
+      },
+      "raw_result_sha256": "ce9d831287d275edd4c3571601385864eae6e5532e6dbbe0c51d5bf726089167",
+      "snapshot_inventory_sha256": "e893a3f3b2aeaf995540b7d9078fd629f8be71403bbdca0994f540c7ac1186d4"
+    },
+    {
+      "cell": "R-discussion-R-r0",
+      "scenario": "discussion",
+      "arm": "R",
+      "repeat": 0,
+      "raw_protocol_status": "complete",
+      "terminal_completed": true,
+      "native_turn_completed": true,
+      "controlled_inputs": true,
+      "protocol_gates": {
+        "terminal_completed": true,
+        "inbound_journal": true,
+        "delivery_join": true,
+        "route_verified": true,
+        "guide_verified": true,
+        "prefix_verified": true,
+        "deny_writes_target_unchanged": true
+      },
+      "prefix": {
+        "required": false,
+        "verified": true
+      },
+      "real_model_requests": 5,
+      "guide_changed": false,
+      "task_file_facts": [],
+      "write_denial_expected": false,
+      "denied_target_unchanged": true,
+      "outbound": [
+        {
+          "message_id": "1793537711000",
+          "source": "final",
+          "native_tool_seq": null,
+          "audit_attempt_id": "2f9139ea-5c81-4a58-b0e1-73b2704ed53c",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1001,
+          "payload_sha256": "f10e90af19ad9e45d1fd403ad218e2887fab4d18bd2dc20923221236bbcc3e2d"
+        }
+      ],
+      "cleanup": {
+        "cleanup_ok": true,
+        "graceful_shutdown": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "ba259a037b7efe1c0fb09425eb0a85a1517ce9969e534c90344c0006fabba480"
+      },
+      "raw_result_sha256": "195d2ab46f34daafc05d9a63a78ba4c9169518db1bdc2c553a777039a9062780",
+      "snapshot_inventory_sha256": "c59bbc80d64c786171d6d6664804d4156c58b66076e42d749668895e5c1202ba"
+    },
+    {
+      "cell": "R-discussion-A-r1",
+      "scenario": "discussion",
+      "arm": "A",
+      "repeat": 1,
+      "raw_protocol_status": "complete",
+      "terminal_completed": true,
+      "native_turn_completed": true,
+      "controlled_inputs": true,
+      "protocol_gates": {
+        "terminal_completed": true,
+        "inbound_journal": true,
+        "delivery_join": true,
+        "route_verified": true,
+        "guide_verified": true,
+        "prefix_verified": true,
+        "deny_writes_target_unchanged": true
+      },
+      "prefix": {
+        "required": false,
+        "verified": true
+      },
+      "real_model_requests": 5,
+      "guide_changed": false,
+      "task_file_facts": [],
+      "write_denial_expected": false,
+      "denied_target_unchanged": true,
+      "outbound": [
+        {
+          "message_id": "1793538809000",
+          "source": "final",
+          "native_tool_seq": null,
+          "audit_attempt_id": "6412ede0-0705-4c57-8efc-aff36aa88566",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1001,
+          "payload_sha256": "f9277edba78332f3293adce16b15a5bcfa29b9f2a947f202b505441d133112c3"
+        }
+      ],
+      "cleanup": {
+        "cleanup_ok": true,
+        "graceful_shutdown": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "6c876215af7c345233fa8b07bfb5980d535579c2d3da6b2eeca6b33786e5a452"
+      },
+      "raw_result_sha256": "2e4e446381243fbe4b53d3a8ab576094e322416d720c0b61a2e2650aeb1975b8",
+      "snapshot_inventory_sha256": "e90bd456ff4ba07d1809a6d298c2335599f18794ee2a9ce92763eb8a4c1a6449"
+    },
+    {
+      "cell": "R-discussion-R-r1",
+      "scenario": "discussion",
+      "arm": "R",
+      "repeat": 1,
+      "raw_protocol_status": "complete",
+      "terminal_completed": true,
+      "native_turn_completed": true,
+      "controlled_inputs": true,
+      "protocol_gates": {
+        "terminal_completed": true,
+        "inbound_journal": true,
+        "delivery_join": true,
+        "route_verified": true,
+        "guide_verified": true,
+        "prefix_verified": true,
+        "deny_writes_target_unchanged": true
+      },
+      "prefix": {
+        "required": false,
+        "verified": true
+      },
+      "real_model_requests": 7,
+      "guide_changed": false,
+      "task_file_facts": [],
+      "write_denial_expected": false,
+      "denied_target_unchanged": true,
+      "outbound": [
+        {
+          "message_id": "1793538910000",
+          "source": "final",
+          "native_tool_seq": null,
+          "audit_attempt_id": "cae63493-a17c-4dbc-a866-e429f9d9cba6",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1001,
+          "payload_sha256": "a847f8833c2537da6cb240aaf88159d1123e36a629b21d874b5f5e9f72d7610a"
+        }
+      ],
+      "cleanup": {
+        "cleanup_ok": true,
+        "graceful_shutdown": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "31dbfe7c949ba20b8fe401f789bb75580630d547643aa952cea52a1d6a424101"
+      },
+      "raw_result_sha256": "6d51efb617b3b029d543ca883beef43f0d92c51511a225dc1063cc608d1eab96",
+      "snapshot_inventory_sha256": "62377521adaa0b0d2fed596b0f37d39b70f4fc81ebcc6303f3d2f811e75bace2"
+    },
+    {
+      "cell": "R-discussion-A-r2",
+      "scenario": "discussion",
+      "arm": "A",
+      "repeat": 2,
+      "raw_protocol_status": "incomplete",
+      "terminal_completed": true,
+      "native_turn_completed": true,
+      "controlled_inputs": true,
+      "protocol_gates": {
+        "terminal_completed": true,
+        "inbound_journal": true,
+        "delivery_join": false,
+        "route_verified": true,
+        "guide_verified": true,
+        "prefix_verified": true,
+        "deny_writes_target_unchanged": true
+      },
+      "prefix": {
+        "required": false,
+        "verified": true
+      },
+      "real_model_requests": 6,
+      "guide_changed": false,
+      "task_file_facts": [],
+      "write_denial_expected": false,
+      "denied_target_unchanged": true,
+      "outbound": [
+        {
+          "message_id": "1793539998000",
+          "source": "mcp",
+          "native_tool_seq": null,
+          "audit_attempt_id": "249e0d1f-e1e9-4cd6-8a88-797f1ca967a5",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1001,
+          "payload_sha256": "935decf7fc5a5ecedf267d09ca4c10384c9e8cc1079b4baf467ccc091a11f724"
+        },
+        {
+          "message_id": "1793540006001",
+          "source": "mcp_forward",
+          "native_tool_seq": 33,
+          "audit_attempt_id": null,
+          "ordinary_audit_receipt": false,
+          "simulator_action": "send_group_forward_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1002,
+          "payload_sha256": "0f869bd4a6fd9cad4ab08d914b305075b8bf3246816f4c6bdb1ddc6769793613"
+        },
+        {
+          "message_id": "1793540013000",
+          "source": "final",
+          "native_tool_seq": null,
+          "audit_attempt_id": "9fd1a7c5-d3bb-451c-a9de-592464fafdc7",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1004,
+          "payload_sha256": "e6b6530666dcd7d77ae5dd7056576eb7a17ec48bdd2744bbea635c9497be7e0c"
+        }
+      ],
+      "cleanup": {
+        "cleanup_ok": true,
+        "graceful_shutdown": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "b6abd894a944bc260ffbf454cf5e0f69e95ad24207343280de549f2c319f2fdd"
+      },
+      "raw_result_sha256": "27f53e7537753cfa5af724e222388a38f2926ed6da877bc57273920a2711d8ed",
+      "snapshot_inventory_sha256": "f8c070c54d746865c618a85236cd2d152d0559a83aca8eb631ea145d864c6f62"
+    },
+    {
+      "cell": "R-discussion-R-r2",
+      "scenario": "discussion",
+      "arm": "R",
+      "repeat": 2,
+      "raw_protocol_status": "complete",
+      "terminal_completed": true,
+      "native_turn_completed": true,
+      "controlled_inputs": true,
+      "protocol_gates": {
+        "terminal_completed": true,
+        "inbound_journal": true,
+        "delivery_join": true,
+        "route_verified": true,
+        "guide_verified": true,
+        "prefix_verified": true,
+        "deny_writes_target_unchanged": true
+      },
+      "prefix": {
+        "required": false,
+        "verified": true
+      },
+      "real_model_requests": 7,
+      "guide_changed": false,
+      "task_file_facts": [],
+      "write_denial_expected": false,
+      "denied_target_unchanged": true,
+      "outbound": [
+        {
+          "message_id": "1793539914000",
+          "source": "final",
+          "native_tool_seq": null,
+          "audit_attempt_id": "723a46dd-848c-4b73-9da3-2cb011518682",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1001,
+          "payload_sha256": "c4e978a1b9813f5af55190cb160ddb51c65ecb9e2f13f07b947eec5b5650f323"
+        }
+      ],
+      "cleanup": {
+        "cleanup_ok": true,
+        "graceful_shutdown": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "52191d257a9bace966e1f2c57aa28a486a75f6e2408e8683d09d0f9f27430398"
+      },
+      "raw_result_sha256": "114e961769367e456ac55a6a8ba2951a4fa23e32d074ce482a21cd0ca1cfa186",
+      "snapshot_inventory_sha256": "8f02ba32bfac0efb760f201b764ec5870a1cae3a51f2a5eaac19992e4b9ddc69"
+    },
+    {
+      "cell": "R-full-task-A-r0",
+      "scenario": "full-task",
+      "arm": "A",
+      "repeat": 0,
+      "raw_protocol_status": "complete",
+      "terminal_completed": true,
+      "native_turn_completed": true,
+      "controlled_inputs": true,
+      "protocol_gates": {
+        "terminal_completed": true,
+        "inbound_journal": true,
+        "delivery_join": true,
+        "route_verified": true,
+        "guide_verified": true,
+        "prefix_verified": true,
+        "deny_writes_target_unchanged": true
+      },
+      "prefix": {
+        "required": false,
+        "verified": true
+      },
+      "real_model_requests": 8,
+      "guide_changed": false,
+      "task_file_facts": [
+        {
+          "path": "records/violations.md",
+          "sha256": "98ba8aa1a9142b1ba293d1f9798638adad79441e52e154e11f0e7542f9a16b30",
+          "bytes": 586
+        }
+      ],
+      "write_denial_expected": false,
+      "denied_target_unchanged": true,
+      "outbound": [
+        {
+          "message_id": "1793537908000",
+          "source": "final",
+          "native_tool_seq": null,
+          "audit_attempt_id": "b279265b-1218-4dee-b2a2-66f149476ad2",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1001,
+          "payload_sha256": "8efdbf3e0cc6a2acca36d9e6a445b7c9dfa27c565c1cf50b96b60005c421e01f"
+        }
+      ],
+      "cleanup": {
+        "cleanup_ok": true,
+        "graceful_shutdown": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "51a6b4c58a6411c662c18c4c52b31b2bf02524822187e5de6f1cf38850df56b3"
+      },
+      "raw_result_sha256": "dd11910f6143f039d5ba359771b6ee30b7b94f45569b23267b0494e0c1bf6ac8",
+      "snapshot_inventory_sha256": "9b06f040a7b2869cf5f74d79fa92a3f7f15280596e23e8d90b264610b911f21d"
+    },
+    {
+      "cell": "R-full-task-R-r0",
+      "scenario": "full-task",
+      "arm": "R",
+      "repeat": 0,
+      "raw_protocol_status": "complete",
+      "terminal_completed": true,
+      "native_turn_completed": true,
+      "controlled_inputs": true,
+      "protocol_gates": {
+        "terminal_completed": true,
+        "inbound_journal": true,
+        "delivery_join": true,
+        "route_verified": true,
+        "guide_verified": true,
+        "prefix_verified": true,
+        "deny_writes_target_unchanged": true
+      },
+      "prefix": {
+        "required": false,
+        "verified": true
+      },
+      "real_model_requests": 10,
+      "guide_changed": false,
+      "task_file_facts": [
+        {
+          "path": "moderation/violations.md",
+          "sha256": "58d4453f9dff191fcaddea93449d1b7121c91ddbbc39cbf020888bc6924a4454",
+          "bytes": 1022
+        }
+      ],
+      "write_denial_expected": false,
+      "denied_target_unchanged": true,
+      "outbound": [
+        {
+          "message_id": "1793538029000",
+          "source": "final",
+          "native_tool_seq": null,
+          "audit_attempt_id": "20ec92b4-546d-4662-9e82-d58dd267e1eb",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1001,
+          "payload_sha256": "177646559a567e1620bd721314d6619d55682fcef3c709b30d730ef306cb674c"
+        }
+      ],
+      "cleanup": {
+        "cleanup_ok": true,
+        "graceful_shutdown": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "128c365729b099fb5bbbd77fb5b0146a99a827cbbc1cef7aa57a8d805d25b14c"
+      },
+      "raw_result_sha256": "35409f57320ef4e3315246dbbb3f59db8b05ad613cd0cf00c21c864ee362debb",
+      "snapshot_inventory_sha256": "4ff4950fd23d78c80370c08ee70fb912f8fb08e05baf08a2978bbf09e677f099"
+    },
+    {
+      "cell": "R-full-task-A-r1",
+      "scenario": "full-task",
+      "arm": "A",
+      "repeat": 1,
+      "raw_protocol_status": "complete",
+      "terminal_completed": true,
+      "native_turn_completed": true,
+      "controlled_inputs": true,
+      "protocol_gates": {
+        "terminal_completed": true,
+        "inbound_journal": true,
+        "delivery_join": true,
+        "route_verified": true,
+        "guide_verified": true,
+        "prefix_verified": true,
+        "deny_writes_target_unchanged": true
+      },
+      "prefix": {
+        "required": false,
+        "verified": true
+      },
+      "real_model_requests": 8,
+      "guide_changed": false,
+      "task_file_facts": [
+        {
+          "path": "memory/violations.md",
+          "sha256": "d4626cd763bbb31ae17a5d3d9c9b32024e2c175b80a9c37889cec113c29534f5",
+          "bytes": 1066
+        }
+      ],
+      "write_denial_expected": false,
+      "denied_target_unchanged": true,
+      "outbound": [
+        {
+          "message_id": "1793539137000",
+          "source": "final",
+          "native_tool_seq": null,
+          "audit_attempt_id": "a656adb8-2973-4e04-997f-43fd2a5cf6d6",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1001,
+          "payload_sha256": "99fd86f8a860db032ce9371ea5c3fdaa3bfc179a97aca01282ce0ea225a79947"
+        }
+      ],
+      "cleanup": {
+        "cleanup_ok": true,
+        "graceful_shutdown": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "958386bfa235fdb63f956e35d21a2a779d5e41aa9b9ae771f348c6caaa31eb39"
+      },
+      "raw_result_sha256": "fe593f1da2d700068d12da644802ab8b6b88b3a2472c152e04d7ed23be2e0007",
+      "snapshot_inventory_sha256": "71b1c2509b3e084541284e66254933805df98227659211166ee2b824b8006ee1"
+    },
+    {
+      "cell": "R-full-task-R-r1",
+      "scenario": "full-task",
+      "arm": "R",
+      "repeat": 1,
+      "raw_protocol_status": "complete",
+      "terminal_completed": true,
+      "native_turn_completed": true,
+      "controlled_inputs": true,
+      "protocol_gates": {
+        "terminal_completed": true,
+        "inbound_journal": true,
+        "delivery_join": true,
+        "route_verified": true,
+        "guide_verified": true,
+        "prefix_verified": true,
+        "deny_writes_target_unchanged": true
+      },
+      "prefix": {
+        "required": false,
+        "verified": true
+      },
+      "real_model_requests": 9,
+      "guide_changed": false,
+      "task_file_facts": [
+        {
+          "path": "records/violations.md",
+          "sha256": "8de2e7ab0198ee078128813068b972fe3db54ce1b43b6b6adac62e73d6cc9c5c",
+          "bytes": 603
+        }
+      ],
+      "write_denial_expected": false,
+      "denied_target_unchanged": true,
+      "outbound": [
+        {
+          "message_id": "1793539023000",
+          "source": "final",
+          "native_tool_seq": null,
+          "audit_attempt_id": "57e247fe-0061-407b-83c6-82cba52eb7a4",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1001,
+          "payload_sha256": "5e8804b87b370a268575741395ce5ad85bd2b401d66130f2795a219ca1702142"
+        }
+      ],
+      "cleanup": {
+        "cleanup_ok": true,
+        "graceful_shutdown": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "42464e52f10a53b9a62374cbbaae765115cf9df15f269d95bfcd6622ee2a46b6"
+      },
+      "raw_result_sha256": "b0fc1fe351b7912b9bd7f744e987538d92554535998028cada0354d1a5bf4127",
+      "snapshot_inventory_sha256": "a6e468283c008b57cd7d02a6a977930eb2572b0390bbdd5be6fa10f2c56abcc7"
+    },
+    {
+      "cell": "R-full-task-A-r2",
+      "scenario": "full-task",
+      "arm": "A",
+      "repeat": 2,
+      "raw_protocol_status": "complete",
+      "terminal_completed": true,
+      "native_turn_completed": true,
+      "controlled_inputs": true,
+      "protocol_gates": {
+        "terminal_completed": true,
+        "inbound_journal": true,
+        "delivery_join": true,
+        "route_verified": true,
+        "guide_verified": true,
+        "prefix_verified": true,
+        "deny_writes_target_unchanged": true
+      },
+      "prefix": {
+        "required": false,
+        "verified": true
+      },
+      "real_model_requests": 8,
+      "guide_changed": false,
+      "task_file_facts": [
+        {
+          "path": "memory/violations.md",
+          "sha256": "2e8044a360089899b3f2852e7b360142cb46e1e9913e8e84726de1e32e9d72ad",
+          "bytes": 521
+        }
+      ],
+      "write_denial_expected": false,
+      "denied_target_unchanged": true,
+      "outbound": [
+        {
+          "message_id": "1793543197000",
+          "source": "final",
+          "native_tool_seq": null,
+          "audit_attempt_id": "cb189057-88f4-4fa8-b402-8c6adf6b28bb",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1001,
+          "payload_sha256": "b772b84948245b494f21a1a4ae9b009d0ab8c7638d3776827474028bdb79b7ec"
+        }
+      ],
+      "cleanup": {
+        "cleanup_ok": true,
+        "graceful_shutdown": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "c97e887d03e96548d5986bb154598c8a65cbce5c81225a960099a69b5e62c89e"
+      },
+      "raw_result_sha256": "8057b65108ac9f23371fc03c75966f647a9ab705563842598db35237f1b55709",
+      "snapshot_inventory_sha256": "d4c11a40de9c94682bc5e67ede7c28416dc266b52fbdd75b0af9b5321599ea85"
+    },
+    {
+      "cell": "R-full-task-R-r2",
+      "scenario": "full-task",
+      "arm": "R",
+      "repeat": 2,
+      "raw_protocol_status": "complete",
+      "terminal_completed": true,
+      "native_turn_completed": true,
+      "controlled_inputs": true,
+      "protocol_gates": {
+        "terminal_completed": true,
+        "inbound_journal": true,
+        "delivery_join": true,
+        "route_verified": true,
+        "guide_verified": true,
+        "prefix_verified": true,
+        "deny_writes_target_unchanged": true
+      },
+      "prefix": {
+        "required": false,
+        "verified": true
+      },
+      "real_model_requests": 8,
+      "guide_changed": false,
+      "task_file_facts": [
+        {
+          "path": "records/violations.jsonl",
+          "sha256": "79f568b5277c380d71e2a19780d4792c200dc28e265ece76e018c305b1782fdb",
+          "bytes": 414
+        },
+        {
+          "path": "records/violations.md",
+          "sha256": "6df593645b9050bad6e7ee2b566eaa85cb03924a71ada53e29ed220b1301e865",
+          "bytes": 616
+        }
+      ],
+      "write_denial_expected": false,
+      "denied_target_unchanged": true,
+      "outbound": [
+        {
+          "message_id": "1793543316000",
+          "source": "final",
+          "native_tool_seq": null,
+          "audit_attempt_id": "37a2eba2-6fc2-4163-bdc4-44942c8d3925",
+          "ordinary_audit_receipt": true,
+          "simulator_action": "send_group_msg",
+          "simulator_response_ok": true,
+          "journal_id": 1001,
+          "payload_sha256": "c09d9d60a260cbf9b8ffa77367b2e648ef93f74e64f438a7de451ffcdee38190"
+        }
+      ],
+      "cleanup": {
+        "cleanup_ok": true,
+        "graceful_shutdown": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "ef7f4833b6ec167f264470f4c9fefcefbc902b0c906a2c8cc312ea4c599575ac"
+      },
+      "raw_result_sha256": "726ffd0b521f73303f022eba53efc536dd42421ab517b3a09d95a1908e39f2a9",
+      "snapshot_inventory_sha256": "3bbeeea72ff57c67343113bf642fe1e95e0f589072f79dd76fbadd2820d96423"
+    }
+  ]
+}

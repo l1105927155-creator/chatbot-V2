@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import signal
@@ -164,6 +165,45 @@ def strings_in(value):
             yield from strings_in(child)
 
 
+def native_shell_exit(body: str) -> int | None:
+    # Pinned dsh-tool-bash.renderResult / dsh-shell.parseExitStatus: a clean
+    # exit 0 has no marker; nonzero status is the final line, never a substring.
+    if re.search(r"^\[(?:killed by signal:|timed out after |stopped:)", body, re.MULTILINE):
+        return None
+    marker = re.search(r"(?:^|\n)\[exit code: (-?\d+)\]$", body)
+    return int(marker.group(1)) if marker else 0
+
+
+def verify_prefix(directory: Path, cell: dict, native_paths: list[str]) -> dict:
+    plan = cell.get("prefix_plan", [])
+    if not plan:
+        return {"required": False, "verified": True}
+    log = directory / "prefix-events/expression-task-prefix.jsonl"
+    rows = [json.loads(line) for line in log.read_text().splitlines()] if log.is_file() else []
+    calls = [r for r in rows if r.get("event") == "prefix-tool-call"]
+    events = [json.loads(line) for raw in native_paths
+              for line in (directory / raw).read_text().splitlines()]
+    checks = []
+    for index, entry in enumerate(plan):
+        matching = [r for r in calls if r.get("callIndex") == index]
+        row = matching[0] if len(matching) == 1 else {}
+        expected = hashlib.sha256(json.dumps(entry["arguments"], ensure_ascii=False,
+            separators=(",", ":")).encode()).hexdigest()
+        native_calls = [e for e in events if e.get("type") == "tool/call"
+                        and e.get("data", {}).get("callId") == row.get("callId")]
+        results = [e for e in events if e.get("type") == "tool/result"
+                   and e.get("data", {}).get("message", {}).get("toolCallId") == row.get("callId")]
+        result = results[0].get("data", {}).get("message", {}) if len(results) == 1 else {}
+        body = "\n".join(b.get("text", "") for b in result.get("content", []))
+        checks.append({"call_id": row.get("callId"), "arguments_match": row.get("argumentsSha256") == expected,
+            "native_call_matches": len(native_calls) == 1 and native_calls[0]["data"].get("name") == entry["name"]
+                and json.loads(native_calls[0]["data"].get("arguments", "null")) == entry["arguments"],
+            "native_result_matches_expected_exit": len(results) == 1 and result.get("isError") is False
+                and native_shell_exit(body) == cell.get("prefix_expected_exit", 0)})
+    return {"required": True, "calls": checks, "verified": len(rows) == len(plan) == len(calls)
+            and all(all(v for k, v in row.items() if k != "call_id") for row in checks)}
+
+
 def load_credential_env(path: Path) -> None:
     """Load KEY=VALUE lines without ever copying them into study artifacts."""
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -277,6 +317,19 @@ def stage_frozen(details: dict, manifest: dict, cell: dict, mode: str) -> None:
         "        snapshotMetadata: {studyCell: " + json.dumps(cell["id"]) + "}\n"
         f"        artifactDirectory: {json.dumps(str(Path(manifest['_run_dir']) / 'request-snapshots'))}\n"
     )
+    if cell.get("prefix_plan"):
+        prefix = workspace / "sandbox/expression-task-prefix.mjs"
+        shutil.copy2(ROOT / "sandbox/expression-task-prefix.mjs", prefix)
+        text += (
+            "\n- insert:\n"
+            "    - id: v2-expression-task-prefix\n"
+            f"      name: {json.dumps(str(prefix))}\n"
+            "      config:\n"
+            "        controlUrl: !!js process.env.SANDBOX_CONTROL_URL\n"
+            "        token: !!js process.env.SANDBOX_CONTROL_TOKEN\n"
+            f"        plan: {json.dumps(cell['prefix_plan'], ensure_ascii=False)}\n"
+            f"        artifactDirectory: {json.dumps(str(Path(manifest['_run_dir']) / 'prefix-events'))}\n"
+        )
     group_patch.write_text(text, encoding="utf-8")
 
 
@@ -523,9 +576,11 @@ class Cell(load_live_owner()):
         guide_verified = source_verification["guide_verified_in_native_snapshot"]
         route_verified = source_verification["all_routes_match"]
         denial_verified = not cell["deny_writes"] or before.get(cell["record_file"]) == after.get(cell["record_file"])
-        controlled_inputs = route_verified and guide_verified and denial_verified and not guide_changed
+        prefix_verification = verify_prefix(self.directory, cell, native_copy)
+        controlled_inputs = (route_verified and guide_verified and denial_verified and not guide_changed
+                             and prefix_verification["verified"])
         protocol_complete = (terminal.get("event") == "turn/completed" and inbound_row and delivery_complete
-                             and route_verified and guide_verified and denial_verified)
+                             and route_verified and guide_verified and denial_verified and prefix_verification["verified"])
         status = "complete" if protocol_complete else "incomplete"
         result = {"cell_id": cell["id"], "mode": self.mode, "protocol_status": status,
             "terminal": terminal, "request_event": event, "request_journal": inbound_row,
@@ -533,10 +588,12 @@ class Cell(load_live_owner()):
             "before_files": before, "after_files": after, "changed_paths": changed_paths,
             "guide_changed_during_turn": guide_changed,
             "controlled_inputs": controlled_inputs,
+            "prefix_verification": prefix_verification,
             "primary_contrast_eligible": status == "complete" and controlled_inputs,
             "protocol_gates": {"terminal_completed": terminal.get("event") == "turn/completed",
                 "inbound_journal": bool(inbound_row), "delivery_join": delivery_complete,
                 "route_verified": route_verified, "guide_verified": guide_verified,
+                "prefix_verified": prefix_verification["verified"],
                 "deny_writes_target_unchanged": denial_verified},
             "guide_change_interpretation": ("AGENTS.md changed during this turn; this is endogenous turn behavior, "
                 "not a pre-existing A/B input difference and does not automatically invalidate the cell"
@@ -559,7 +616,8 @@ def choose_cell(manifest, cell_id):
     if len(matches) != 1:
         raise ValueError(f"manifest must contain exactly one cell id {cell_id!r}")
     cell = matches[0]
-    if cell.get("study") not in {"P0", "P1"} or cell.get("arm") not in {"A", "B"}:
+    if (cell.get("study"), cell.get("arm")) not in {
+            ("P0", "A"), ("P0", "B"), ("P1", "B"), ("R", "A"), ("R", "R")}:
         raise ValueError("invalid study or arm")
     if not isinstance(cell.get("repeat"), int) or cell["repeat"] < 0:
         raise ValueError("cell repeat must be a non-negative integer")
