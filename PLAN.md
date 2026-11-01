@@ -1,5 +1,7 @@
 # 当前实施入口（QQ 交流表达阶段）
 
+下一轮优先任务：[群聊回复相关性：P0 完整任务对照、P1 无关话题归因、P2 发送职责验证](docs/phases/group-chat-reply-relevance-next-round-2026-11-01.md)。先补取证工具状态语义，再开展隔离 A/B；不设字数／消息数上限，不直接部署候选。首轮取证和阴性结果仍以现有实施记录为准，后续由代码审查与用户实测分别验收。
+
 当前实施：[群聊回复相关性与双阶段验收](docs/phases/group-chat-reply-relevance-2026-11-01.md)。以最新文档为准重新取证，旧假设和实验仅保留为历史线索。本案四条出站已按原生 Session、audit 回执与 Journal 关联；现群指南最小候选、只读取证工具和隔离对照见[本轮实施记录](docs/evaluations/group-chat-reply-relevance-2026-11-01.md)。候选未部署，代码机制检查与用户真实群效果验收分别报告，尚未声称修复。
 
 当前追加：[小游戏入口与2048排行榜](docs/phases/games-leaderboard-2026-10-29.md)。新增 `v2_games` 插件：本机游戏列表、2048 Canvas、群 token 入口、自助 QQ 身份、服务端回放校验、按群+QQ 排行，以及 DSH 文本棋盘逐手游玩工具。30项游戏专项与相关 MCP 回归、standalone HTTP、浏览器真实交互通过；尚未部署到运行中的 AstrBot，Tailscale Funnel/HTTPS 与真实 QQ 群验收待 Owner 配合。
