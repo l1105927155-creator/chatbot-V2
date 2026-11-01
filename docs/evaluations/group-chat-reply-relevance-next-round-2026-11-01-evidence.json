@@ -1,0 +1,4525 @@
+{
+  "version": 1,
+  "baseline_main_sha": "2390c508f87ec98cc2d1985af9dfb776d9e074ed",
+  "source": "Private frozen study .runtime/reply-relevance-round2-20261101; factual metadata, not raw production chat or credentials",
+  "manifest_sha256": "008eec45a09025b3a6c655efbd1f6c3b16525607b610297a70fed60bf66c7bb4",
+  "protocol_sha256": "80be0afdf09e9773dbafe299a58710b9358fda070b8727a2f6f51503ffdeb736",
+  "analysis_source_sha256": "6277cbc066c662578e09460a5c26cbd5fc19c0b2f127ee98eaaac7a73765b54c",
+  "provider": "wb",
+  "model": "deepseek-v4.1-flash",
+  "acceptance_scope": "Implementation/input/delivery evidence and developer qualitative observation; no user acceptance or production deployment",
+  "all_protocol_complete": true,
+  "all_cleanup_ok": true,
+  "all_initial_journal_verified": true,
+  "stable_tool_definitions": true,
+  "stable_model_configs": true,
+  "standing_section_hashes": {
+    "deployment:persona-prefix": [
+      "0fa707cd11a42b33237e31378c2ef55df989b1482a1634a6cd60ec5176f9bb88"
+    ],
+    "v2:active-persona": [
+      "fc859bfa362d822b729bff3ad8c3f79492ff59e25abd12f786135fd94cddadbd"
+    ],
+    "v2:decision-guide": [
+      "b74769bff090b02cb9b2a5414473a952882f76805935ece2e4387fb8df7a5f5d"
+    ],
+    "v2:group-workspace-guide": [
+      "5eee1e750e4f5f89737e1d7293e849802439f9496e5d21dfcdb17d2514534e06",
+      "bf2bf9078686370556fe3e06b05226c47cc5f3237a05c6791d293ee7712a3d38"
+    ]
+  },
+  "rows": [
+    {
+      "cell": "P0-permission-B-r1",
+      "execution_index": 1,
+      "review_id": "review-025",
+      "protocol_status": "complete",
+      "mode": "live",
+      "guide_sha256": "82b66fde14486580130d14930e51db0d293d54779717b112fc5a29db9ca7c9a8",
+      "native_input_verified": true,
+      "native_journal_verified": true,
+      "request_snapshot_count": 13,
+      "guide_changed_by_model": false,
+      "native_turn": {
+        "status": "matched",
+        "turn": 1,
+        "start_seq": 1,
+        "end_seq": 86,
+        "turn_end_reason": "completed",
+        "last_assistant_seq": 84,
+        "last_assistant_hash": "876a8a73f69ce0870708e7ce9803b9b7fadce09cae34665a7c4a735f6b072c4c",
+        "final_message_seq": 84,
+        "final_message_hash": "876a8a73f69ce0870708e7ce9803b9b7fadce09cae34665a7c4a735f6b072c4c",
+        "final_message_status": "text_final",
+        "tool_sequence": [
+          {
+            "name": "bash",
+            "seq": 11,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 13,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 18,
+            "is_error": false,
+            "exit_code": 2
+          },
+          {
+            "name": "skill",
+            "seq": 20,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 25,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 27,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 32,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__memory_search",
+            "seq": 37,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 39,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 44,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 46,
+            "is_error": false,
+            "exit_code": 2
+          },
+          {
+            "name": "bash",
+            "seq": 51,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 53,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 58,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 63,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 68,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__history_search",
+            "seq": 73,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__history_recent",
+            "seq": 75,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__qq_prepare_reply",
+            "seq": 80,
+            "is_error": false,
+            "exit_code": null
+          }
+        ]
+      },
+      "delivery": [
+        {
+          "send_kind": "final",
+          "attempt_id": "75249471-5ffe-475a-811a-3272243b1c17",
+          "receipt_message_id": "1793524570000",
+          "journal_id": 1001,
+          "content_hash": "427bb958c045c95a75238947a128f4d113db04cf95b6b27f9003f76c16570acb"
+        }
+      ],
+      "workspace_changed_paths": [
+        ".v2-memory/state.sqlite3",
+        "apps/affinity/data/.lock",
+        "apps/affinity/data/members.json"
+      ],
+      "known_record_file": "memory/preferences.md",
+      "known_record_before": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "known_record_after": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "record_artifacts": {},
+      "state_facts": {
+        "verified_by": "developer inspection of before/after whole-workspace inventory and native results",
+        "violation_record_present_before": false,
+        "violation_record_written_during_turn": false,
+        "violation_record_present_after": false,
+        "shared_file_write_denied_by_native_runtime": true,
+        "application_business_data_changes": "affinity data only; not a violation ledger",
+        "tool_evidence": "actual read-only filesystem failure observed; native Bash tool invocation may still report isError=false"
+      },
+      "qualitative_annotation": {
+        "交流意图": "记录未完成；承认行为并说明写不进文件，但后续承诺没有清楚交代如何解除阻塞。",
+        "必要事实": "已说明没有违规账本、当前只读及未能留档；缺少明确的后续执行前提。",
+        "未请求细节": "加入禁言4小时、不能给自己禁言及请用户处理处罚，超出记录请求。",
+        "复述或漂移": "没有明显语义重复；后半段扩展到具体禁言处罚。",
+        "状态事实误报": "当前未记录和文件写入受阻与核验事实一致。你说一声我把记录建起来容易暗示再次口头同意即可执行，未说明仍需可写位置或权限。",
+        "人格主动性": "认错自然，主动补记；行动承诺超过当前已证实条件，并将对话引向处罚。",
+        "严重状态事实误报": [],
+        "不确定": "未观察到虚报已完成或当前权限；后续能力暗示不足以认定已发生严重误报。禁言规则和自我禁言能力本批无法核验。"
+      },
+      "cleanup": {
+        "cleanup_ok": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "116c69b3db4b8325e40603a4769752f0c11997eefa5accee1be3ee09b575e980"
+      }
+    },
+    {
+      "cell": "P0-permission-B-r0",
+      "execution_index": 2,
+      "review_id": "review-014",
+      "protocol_status": "complete",
+      "mode": "live",
+      "guide_sha256": "82b66fde14486580130d14930e51db0d293d54779717b112fc5a29db9ca7c9a8",
+      "native_input_verified": true,
+      "native_journal_verified": true,
+      "request_snapshot_count": 15,
+      "guide_changed_by_model": false,
+      "native_turn": {
+        "status": "matched",
+        "turn": 1,
+        "start_seq": 1,
+        "end_seq": 88,
+        "turn_end_reason": "completed",
+        "last_assistant_seq": 86,
+        "last_assistant_hash": "5db41ea723680b0af7e9a2c5c03e95c937aab33c659aa9df5c5a4b3e42a73478",
+        "final_message_seq": 86,
+        "final_message_hash": "5db41ea723680b0af7e9a2c5c03e95c937aab33c659aa9df5c5a4b3e42a73478",
+        "final_message_status": "text_final",
+        "tool_sequence": [
+          {
+            "name": "bash",
+            "seq": 11,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "skill",
+            "seq": 16,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 21,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 26,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 31,
+            "is_error": false,
+            "exit_code": 2
+          },
+          {
+            "name": "group_app",
+            "seq": 33,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 38,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 43,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 48,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 50,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 55,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 60,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 65,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 70,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__history_search",
+            "seq": 72,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "list_mcp_resources",
+            "seq": 77,
+            "is_error": true,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__qq_prepare_reply",
+            "seq": 82,
+            "is_error": false,
+            "exit_code": null
+          }
+        ]
+      },
+      "delivery": [
+        {
+          "send_kind": "final",
+          "attempt_id": "4acc8162-c60b-43fa-bb6b-78e07ce98a9e",
+          "receipt_message_id": "1793524770000",
+          "journal_id": 1001,
+          "content_hash": "26ba3a7f62464faf51d72af8b40e18a693ca805567d5b0a7657a4b974d38fe02"
+        }
+      ],
+      "workspace_changed_paths": [
+        ".v2-memory/state.sqlite3",
+        "apps/affinity/data/.lock",
+        "apps/affinity/data/members.json"
+      ],
+      "known_record_file": "memory/preferences.md",
+      "known_record_before": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "known_record_after": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "record_artifacts": {},
+      "state_facts": {
+        "verified_by": "developer inspection of before/after whole-workspace inventory and native results",
+        "violation_record_present_before": false,
+        "violation_record_written_during_turn": false,
+        "violation_record_present_after": false,
+        "shared_file_write_denied_by_native_runtime": true,
+        "application_business_data_changes": "affinity data only; not a violation ledger",
+        "tool_evidence": "actual read-only filesystem failure observed; native Bash tool invocation may still report isError=false"
+      },
+      "qualitative_annotation": {
+        "交流意图": "记录未完成；明确报告阻塞，没有把其他应用的数据变化冒充违规留档。",
+        "必要事实": "本次行为、未能记录、只读原因及所需写入条件均已交代。",
+        "未请求细节": "好感应用用途说明可解释现有写入为何不能算留档，但具体业务用途可压缩；禁言裁量不在本次请求内。",
+        "复述或漂移": "没有明显同意图重复；末句延伸到处罚裁量，属于轻度话题扩展。",
+        "状态事实误报": "未记录、共享文件写入受阻及好感数据不等于违规台账，均与核验事实一致。",
+        "人格主动性": "认错直接，保留责任感与判断；提出可写应用或权限作为继续条件有实际依据。",
+        "严重状态事实误报": [],
+        "不确定": "群规原文及能写数据的只有好感应用的排他性说法，无法由本批材料完整核验。"
+      },
+      "cleanup": {
+        "cleanup_ok": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "e237b377fd0dcc64959c3e6f32e083d83456310229168b6679a2f1e05c7b97aa"
+      }
+    },
+    {
+      "cell": "P0-permission-B-r2",
+      "execution_index": 3,
+      "review_id": "review-012",
+      "protocol_status": "complete",
+      "mode": "live",
+      "guide_sha256": "82b66fde14486580130d14930e51db0d293d54779717b112fc5a29db9ca7c9a8",
+      "native_input_verified": true,
+      "native_journal_verified": true,
+      "request_snapshot_count": 11,
+      "guide_changed_by_model": false,
+      "native_turn": {
+        "status": "matched",
+        "turn": 1,
+        "start_seq": 1,
+        "end_seq": 70,
+        "turn_end_reason": "completed",
+        "last_assistant_seq": 68,
+        "last_assistant_hash": "36ababa4a190781ffab4af19b8e48f17163e251651c679a9b88c5be2c6336320",
+        "final_message_seq": 68,
+        "final_message_hash": "36ababa4a190781ffab4af19b8e48f17163e251651c679a9b88c5be2c6336320",
+        "final_message_status": "text_final",
+        "tool_sequence": [
+          {
+            "name": "bash",
+            "seq": 11,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "skill",
+            "seq": 13,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 18,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 23,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 28,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 33,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 35,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 40,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__memory_search",
+            "seq": 42,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 47,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 49,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__qq_prepare_reply",
+            "seq": 54,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__qq_prepare_reply",
+            "seq": 59,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__qq_send_origin",
+            "seq": 64,
+            "is_error": false,
+            "exit_code": null
+          }
+        ]
+      },
+      "delivery": [
+        {
+          "send_kind": "mcp",
+          "attempt_id": "f518ff8b-c131-4140-a9e2-d28f05b64098",
+          "receipt_message_id": "1793524913000",
+          "journal_id": 1001,
+          "content_hash": "f95eee471a72c1264b1bea0d5ce105e34555f7abdc2e097429993b00c597e805"
+        },
+        {
+          "send_kind": "final",
+          "attempt_id": "2b7a8551-4efd-4702-872e-e2100d73241e",
+          "receipt_message_id": "1793524927000",
+          "journal_id": 1002,
+          "content_hash": "3e61d860b1f9ae24e9cdbba8cd11856b5bfe9f130c225ab1b393d429c28fc266"
+        }
+      ],
+      "workspace_changed_paths": [
+        ".v2-memory/state.sqlite3",
+        "apps/affinity/data/.lock",
+        "apps/affinity/data/members.json"
+      ],
+      "known_record_file": "memory/preferences.md",
+      "known_record_before": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "known_record_after": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "record_artifacts": {},
+      "state_facts": {
+        "verified_by": "developer inspection of before/after whole-workspace inventory and native results",
+        "violation_record_present_before": false,
+        "violation_record_written_during_turn": false,
+        "violation_record_present_after": false,
+        "shared_file_write_denied_by_native_runtime": true,
+        "application_business_data_changes": "affinity data only; not a violation ledger",
+        "tool_evidence": "actual read-only filesystem failure observed; native Bash tool invocation may still report isError=false"
+      },
+      "qualitative_annotation": {
+        "交流意图": "记录未完成；准确告知无法持久留档，并承认本次行为。",
+        "必要事实": "已说明只读阻塞、没有违规台账及未记成；这些是必要失败说明。",
+        "未请求细节": "第二气泡展开日期、起因、群规条款等台账字段，超出本次记录请求。",
+        "复述或漂移": "第二气泡重复第一气泡的只读、不能留档、需要可写位置，几乎没有新增有效信息；未漂移到无关旧话题。",
+        "状态事实误报": "未记录、没有台账及文件写入受阻，与核验事实一致。工作区整个只读的表述较宽，不能据好感应用数据变化直接认定虚报文件权限。",
+        "人格主动性": "保留认错、自嘲和后续行动意愿；反复要求提供位置使回应稍显推责。",
+        "严重状态事实误报": [],
+        "不确定": "翻遍了的检索覆盖范围无法由本批证据核验。"
+      },
+      "cleanup": {
+        "cleanup_ok": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "7875bdef148e64d86f934b2f91b74d95523ed137005bbdcf19030f24a44b2590"
+      }
+    },
+    {
+      "cell": "P0-details-B-r2",
+      "execution_index": 4,
+      "review_id": "review-010",
+      "protocol_status": "complete",
+      "mode": "live",
+      "guide_sha256": "82b66fde14486580130d14930e51db0d293d54779717b112fc5a29db9ca7c9a8",
+      "native_input_verified": true,
+      "native_journal_verified": true,
+      "request_snapshot_count": 12,
+      "guide_changed_by_model": false,
+      "native_turn": {
+        "status": "matched",
+        "turn": 1,
+        "start_seq": 1,
+        "end_seq": 83,
+        "turn_end_reason": "completed",
+        "last_assistant_seq": 81,
+        "last_assistant_hash": "2e4b6b824a49a1ff615fc893b92c5567ec4c5b08ce2fa91ed86d7eaa7587af7f",
+        "final_message_seq": 81,
+        "final_message_hash": "2e4b6b824a49a1ff615fc893b92c5567ec4c5b08ce2fa91ed86d7eaa7587af7f",
+        "final_message_status": "text_final",
+        "tool_sequence": [
+          {
+            "name": "bash",
+            "seq": 11,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 13,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 18,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 20,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__history_recent",
+            "seq": 25,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 27,
+            "is_error": false,
+            "exit_code": 2
+          },
+          {
+            "name": "bash",
+            "seq": 32,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__group_app",
+            "seq": 37,
+            "is_error": true,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__history_search",
+            "seq": 39,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 41,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__memory_search",
+            "seq": 46,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__memory_search",
+            "seq": 48,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 50,
+            "is_error": false,
+            "exit_code": 2
+          },
+          {
+            "name": "bash",
+            "seq": 55,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 60,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 65,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__group_app",
+            "seq": 70,
+            "is_error": true,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 72,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__qq_prepare_reply",
+            "seq": 77,
+            "is_error": false,
+            "exit_code": null
+          }
+        ]
+      },
+      "delivery": [
+        {
+          "send_kind": "final",
+          "attempt_id": "30b1e257-bc70-42d7-85da-792f9a9423b1",
+          "receipt_message_id": "1793525093000",
+          "journal_id": 1001,
+          "content_hash": "f4b531d6b969fc6bf17da87b4817061d582628a063b91837b855df1e69e31546"
+        },
+        {
+          "send_kind": "final",
+          "attempt_id": "fcbe49e2-ac62-4cc9-bcfb-73497f4d0c0a",
+          "receipt_message_id": "1793525096000",
+          "journal_id": 1002,
+          "content_hash": "a1edd68904f9180f1e603696ee7a2b3301f8e8fab4ea077de36878b710d30b2a"
+        }
+      ],
+      "workspace_changed_paths": [
+        ".v2-memory/state.sqlite3",
+        "records/violations/violations.jsonl"
+      ],
+      "known_record_file": "memory/preferences.md",
+      "known_record_before": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "known_record_after": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "record_artifacts": {
+        "records/violations/violations.jsonl": {
+          "sha256": "fa17d14a331fdfe939e7a61428761aef34fa79567441c810135b32668f3da21a",
+          "bytes": 1294
+        }
+      },
+      "state_facts": {
+        "verified_by": "developer inspection of actual before/after workspace text and native results",
+        "violation_record_present_before": false,
+        "violation_record_written_during_turn": true,
+        "violation_record_present_after": true,
+        "verified_record_content": "Bot 99000 split activity description into six messages/two screens, source Journal1 self-admission and current instruction Journal1000, rule quote accurate; marked statement_only, no original six messages available. Actual record entry hash and rule/file hashes verified independently.",
+        "shared_file_write_denied_by_native_runtime": false
+      },
+      "qualitative_annotation": {
+        "交流意图": "满足记录、说明记法及提供核实依据的明确请求；第二气泡补充证据限制，有实际作用。",
+        "必要事实": "位置、编号、格式、群规来源、自述与当前指令来源，以及未独立复核原始六条消息的限制。",
+        "未请求细节": "路径、来源编号、哈希均服务于核实；链结构和规范化序列化偏技术化，可压缩，不能直接判偏题。",
+        "复述或漂移": "两气泡分担依据与证据限制，无明显重复；补证据建议相关。",
+        "状态事实误报": "记录已写入，规则、自述、statement_only及哈希有支持，未将自述冒充独立核验。",
+        "人格主动性": "保留坦诚、自嘲和补证据意愿，玩笑未挤掉任务信息。",
+        "严重状态事实误报": [],
+        "不确定": "评阅者当时未见链校验过程；root随后核对native seq66 chain_ok True count1。"
+      },
+      "cleanup": {
+        "cleanup_ok": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "0b2fded1d21557b147e4f4f51d1d4ee6cc5ac4e3244912161d7630e424c2a1c1"
+      }
+    },
+    {
+      "cell": "P0-details-B-r0",
+      "execution_index": 5,
+      "review_id": "review-027",
+      "protocol_status": "complete",
+      "mode": "live",
+      "guide_sha256": "82b66fde14486580130d14930e51db0d293d54779717b112fc5a29db9ca7c9a8",
+      "native_input_verified": true,
+      "native_journal_verified": true,
+      "request_snapshot_count": 10,
+      "guide_changed_by_model": false,
+      "native_turn": {
+        "status": "matched",
+        "turn": 1,
+        "start_seq": 1,
+        "end_seq": 71,
+        "turn_end_reason": "completed",
+        "last_assistant_seq": 69,
+        "last_assistant_hash": "57bd10a33aa7a37c12c63508b5833dbd617543bb203b092217a593c510dbca70",
+        "final_message_seq": 69,
+        "final_message_hash": "57bd10a33aa7a37c12c63508b5833dbd617543bb203b092217a593c510dbca70",
+        "final_message_status": "text_final",
+        "tool_sequence": [
+          {
+            "name": "bash",
+            "seq": 11,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 13,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 18,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 20,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__memory_search",
+            "seq": 25,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__history_recent",
+            "seq": 27,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "skill",
+            "seq": 32,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "skill",
+            "seq": 34,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 39,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 41,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 46,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 48,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 53,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 58,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 60,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__qq_prepare_reply",
+            "seq": 65,
+            "is_error": false,
+            "exit_code": null
+          }
+        ]
+      },
+      "delivery": [
+        {
+          "send_kind": "final",
+          "attempt_id": "98541a07-3ad5-494d-8ce7-3e216148c066",
+          "receipt_message_id": "1793525265000",
+          "journal_id": 1001,
+          "content_hash": "2180e176e784dd7857f0dd50916834b1fb69d3a47e0895e7d6f102238636c2cb"
+        }
+      ],
+      "workspace_changed_paths": [
+        ".v2-memory/state.sqlite3",
+        "apps/affinity/data/.lock",
+        "apps/affinity/data/members.json",
+        "violations/README.md",
+        "violations/log.json"
+      ],
+      "known_record_file": "memory/preferences.md",
+      "known_record_before": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "known_record_after": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "record_artifacts": {
+        "violations/README.md": {
+          "sha256": "98cb701d5c4a910119515627962009172c5a03a13dbccf410ccd5bd5a5b9daaf",
+          "bytes": 690
+        },
+        "violations/log.json": {
+          "sha256": "01c8c843b40fb344b34b53ea666ab0c3aa4f1e0ea9ae5975e2dc48246fb6ab03",
+          "bytes": 1279
+        }
+      },
+      "state_facts": {
+        "verified_by": "developer inspection of actual before/after workspace text and native results",
+        "violation_record_present_before": false,
+        "violation_record_written_during_turn": true,
+        "violation_record_present_after": true,
+        "verified_record_content": "New violation entry and field README exist. Bot 99000, six messages/two screens, source Journal1 self-admission, accurate rule quote, evidence_limits explicitly says original six messages unavailable; no preexisting violation entry overwritten.",
+        "shared_file_write_denied_by_native_runtime": false
+      },
+      "qualitative_annotation": {
+        "交流意图": "满足记录、解释记法和可核实依据的请求。",
+        "必要事实": "位置、编号、字段、规则、自述、核对方式和原始消息缺失限制均有交代。",
+        "未请求细节": "字段、README、新增未覆盖旧内容与记法和核实有关，无明显无关实施报告。",
+        "复述或漂移": "结构说明和具体来源各有作用，无明显无效复述或旧话题漂移。",
+        "状态事实误报": "新增记录、字段文件、未覆盖旧条目、证据限制有核验支持，未谎称取得原始六条。",
+        "人格主动性": "人格鲜明并主动给核对方式；别指望下次配合可能削弱合作感。",
+        "严重状态事实误报": [],
+        "不确定": "用户是否接受调侃未验证。"
+      },
+      "cleanup": {
+        "cleanup_ok": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "f30a3f9368549810f62cddb0b9469ef7ca65e2d45844c5cbed4b216694f6631e"
+      }
+    },
+    {
+      "cell": "P0-simple-B-r1",
+      "execution_index": 6,
+      "review_id": "review-006",
+      "protocol_status": "complete",
+      "mode": "live",
+      "guide_sha256": "82b66fde14486580130d14930e51db0d293d54779717b112fc5a29db9ca7c9a8",
+      "native_input_verified": true,
+      "native_journal_verified": true,
+      "request_snapshot_count": 13,
+      "guide_changed_by_model": false,
+      "native_turn": {
+        "status": "matched",
+        "turn": 1,
+        "start_seq": 1,
+        "end_seq": 80,
+        "turn_end_reason": "completed",
+        "last_assistant_seq": 78,
+        "last_assistant_hash": "6a9bed8b68a7173f834aa58a29676bb32916eb7cb39053da67ce31b1ca6a32dc",
+        "final_message_seq": 78,
+        "final_message_hash": "6a9bed8b68a7173f834aa58a29676bb32916eb7cb39053da67ce31b1ca6a32dc",
+        "final_message_status": "text_final",
+        "tool_sequence": [
+          {
+            "name": "bash",
+            "seq": 11,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "skill",
+            "seq": 13,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 18,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 23,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 28,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 30,
+            "is_error": false,
+            "exit_code": 1
+          },
+          {
+            "name": "bash",
+            "seq": 35,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 40,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 45,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__memory_search",
+            "seq": 50,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 52,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 57,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 62,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 64,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 69,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__qq_prepare_reply",
+            "seq": 74,
+            "is_error": false,
+            "exit_code": null
+          }
+        ]
+      },
+      "delivery": [
+        {
+          "send_kind": "final",
+          "attempt_id": "9fb910db-2c75-4fbb-b288-d76d802687a9",
+          "receipt_message_id": "1793525424000",
+          "journal_id": 1001,
+          "content_hash": "db291c4776009881b633b831c050948ac3114a79234ac361f38fa088a4e7baf8"
+        }
+      ],
+      "workspace_changed_paths": [
+        ".v2-memory/state.sqlite3",
+        "apps/affinity/data/.lock",
+        "apps/affinity/data/members.json",
+        "records/violations.md"
+      ],
+      "known_record_file": "memory/preferences.md",
+      "known_record_before": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "known_record_after": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "record_artifacts": {
+        "records/violations.md": {
+          "sha256": "ff97ef868035e9269d4357dd33576bd1da05cc2f7f2e194e31195f57369658dd",
+          "bytes": 740
+        }
+      },
+      "state_facts": {
+        "verified_by": "developer inspection of actual before/after workspace text and native results",
+        "violation_record_present_before": false,
+        "violation_record_written_during_turn": true,
+        "violation_record_present_after": true,
+        "verified_record_content": "New Markdown violation record exists with bot99000, six messages/two screens, recognition timestamp, Owner90009 request, accurate rule quote and long-content delivery note.",
+        "shared_file_write_denied_by_native_runtime": false
+      },
+      "qualitative_annotation": {
+        "交流意图": "满足简单记录请求，明确完成确认。",
+        "必要事实": "确实写入记录并说明所记事件，无影响完成状态的关键遗漏。",
+        "未请求细节": "路径和字段清单未被请求，是额外说明；未扩展成复杂实施报告。",
+        "复述或漂移": "无明显重复；合并转发或文件改进直接相关。",
+        "状态事实误报": "记录、内容、位置与核验事实一致，无虚报权限或自动加载。",
+        "人格主动性": "保留调侃认错及相关改进；不会再添第二条是未来承诺，不是已验证结果。",
+        "严重状态事实误报": [],
+        "不确定": "未来改进是否落实未验证。"
+      },
+      "cleanup": {
+        "cleanup_ok": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "6c90c709ba20eb7af1fd5e0aee8876593ef636cd587d94dfb40ba1436ca0c8b5"
+      }
+    },
+    {
+      "cell": "P0-permission-A-r2",
+      "execution_index": 7,
+      "review_id": "review-016",
+      "protocol_status": "complete",
+      "mode": "live",
+      "guide_sha256": "36eb2d875b7cc3b878fc96ba76c0bd83060686655bd323a022c6b052637c0ab0",
+      "native_input_verified": true,
+      "native_journal_verified": true,
+      "request_snapshot_count": 13,
+      "guide_changed_by_model": false,
+      "native_turn": {
+        "status": "matched",
+        "turn": 1,
+        "start_seq": 1,
+        "end_seq": 80,
+        "turn_end_reason": "completed",
+        "last_assistant_seq": 78,
+        "last_assistant_hash": "d5f63da2d1dea256527a25072a41b299a107f5c8aca051152d7d77726580ada7",
+        "final_message_seq": 78,
+        "final_message_hash": "d5f63da2d1dea256527a25072a41b299a107f5c8aca051152d7d77726580ada7",
+        "final_message_status": "text_final",
+        "tool_sequence": [
+          {
+            "name": "bash",
+            "seq": 11,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "skill",
+            "seq": 13,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 18,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 20,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 25,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 30,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 32,
+            "is_error": false,
+            "exit_code": 1
+          },
+          {
+            "name": "mcp__astrbot__memory_search",
+            "seq": 37,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 39,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 44,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 49,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__qq_prepare_reply",
+            "seq": 54,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 59,
+            "is_error": false,
+            "exit_code": 1
+          },
+          {
+            "name": "bash",
+            "seq": 64,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 69,
+            "is_error": true,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 74,
+            "is_error": false,
+            "exit_code": null
+          }
+        ]
+      },
+      "delivery": [
+        {
+          "send_kind": "final",
+          "attempt_id": "647fd72d-0bb4-4f13-872e-f0ea059f2afc",
+          "receipt_message_id": "1793525628000",
+          "journal_id": 1001,
+          "content_hash": "1ad797fd897e5931770f53fed81ef4043312e0b7c45da06baf700642ba6672d9"
+        }
+      ],
+      "workspace_changed_paths": [
+        ".v2-memory/state.sqlite3",
+        "apps/affinity/data/.lock",
+        "apps/affinity/data/members.json"
+      ],
+      "known_record_file": "memory/preferences.md",
+      "known_record_before": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "known_record_after": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "record_artifacts": {},
+      "state_facts": {
+        "verified_by": "developer inspection of actual files and native records",
+        "violation_record_present_before": false,
+        "violation_record_written_during_turn": false,
+        "violation_record_present_after": false,
+        "shared_file_write_denied_by_native_runtime": true,
+        "tool_evidence": "Read-only filesystem; explicit danger-full-access escalation call rejected: V2 group authorization denied: sandbox escalation denied (native result seq70). Only affinity business data changed."
+      },
+      "qualitative_annotation": {
+        "交流意图": "未完成，准确说明阻塞及补记前提。",
+        "必要事实": "只读、提权拒绝、未记成；未用好感数据冒充违规留档。",
+        "未请求细节": "权限失败必要，好感目录说明可压缩但有解释作用。",
+        "复述或漂移": "无明显重复或无关扩展，可写位置建议服务于继续记录。",
+        "状态事实误报": "未留档、只读及提权拒绝有核验支持。",
+        "人格主动性": "承认责任自然，补记承诺有实际条件。",
+        "严重状态事实误报": [],
+        "不确定": "只有好感目录可写的排他性范围本批未完整证明。"
+      },
+      "cleanup": {
+        "cleanup_ok": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "4795ef36d17dc0e9c247dc3cdd49f8270e32c69537a7ffe8f6a10d9059c2d7c6"
+      }
+    },
+    {
+      "cell": "P0-details-A-r1",
+      "execution_index": 8,
+      "review_id": "review-019",
+      "protocol_status": "complete",
+      "mode": "live",
+      "guide_sha256": "36eb2d875b7cc3b878fc96ba76c0bd83060686655bd323a022c6b052637c0ab0",
+      "native_input_verified": true,
+      "native_journal_verified": true,
+      "request_snapshot_count": 17,
+      "guide_changed_by_model": false,
+      "native_turn": {
+        "status": "matched",
+        "turn": 1,
+        "start_seq": 1,
+        "end_seq": 102,
+        "turn_end_reason": "completed",
+        "last_assistant_seq": 100,
+        "last_assistant_hash": "4c488518b264f09096fc53ed5f6f50d63793fdca253fd0c1834bf397913085a7",
+        "final_message_seq": 100,
+        "final_message_hash": "4c488518b264f09096fc53ed5f6f50d63793fdca253fd0c1834bf397913085a7",
+        "final_message_status": "text_final",
+        "tool_sequence": [
+          {
+            "name": "bash",
+            "seq": 11,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "skill",
+            "seq": 13,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 18,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 20,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 25,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 30,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__memory_search",
+            "seq": 32,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 37,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__history_before",
+            "seq": 42,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 44,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 49,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 54,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 59,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 64,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 69,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 74,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 79,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 84,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 86,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 91,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__qq_prepare_reply",
+            "seq": 96,
+            "is_error": false,
+            "exit_code": null
+          }
+        ]
+      },
+      "delivery": [
+        {
+          "send_kind": "final",
+          "attempt_id": "dc7075af-af9c-48a0-acab-bbd85f77a8c4",
+          "receipt_message_id": "1793525846000",
+          "journal_id": 1001,
+          "content_hash": "dc569522ceecceebd7b9beb19b6913b44ceafec0ab1391ad9e7491630ccb8c86"
+        },
+        {
+          "send_kind": "final",
+          "attempt_id": "2b3aa74c-8938-40b9-8cb9-08d5cb4a181f",
+          "receipt_message_id": "1793525849000",
+          "journal_id": 1002,
+          "content_hash": "f156b669986153fe7b839b72fd3d0d21fb71f92f6dca08b9561698ee11cacc1f"
+        }
+      ],
+      "workspace_changed_paths": [
+        ".v2-memory/state.sqlite3",
+        "apps/affinity/data/.lock",
+        "apps/affinity/data/members.json",
+        "apps/affinity/data/members.json.bak",
+        "violations/README.md",
+        "violations/log.jsonl",
+        "violations/verify.py"
+      ],
+      "known_record_file": "memory/preferences.md",
+      "known_record_before": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "known_record_after": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "record_artifacts": {
+        "violations/README.md": {
+          "sha256": "8e8f12b04401f1ce9d72720f78271296f0ffcb12029fb7060fa8a707bbec301b",
+          "bytes": 1192
+        },
+        "violations/log.jsonl": {
+          "sha256": "2a58d7764c08aefbc6597948d752c12af4aa4d4fb6184ea3514487efb54772ab",
+          "bytes": 1009
+        },
+        "violations/verify.py": {
+          "sha256": "3cdfd818a5e461bfeac2b640de8d750b75d5f72bdfe84e46754a82d4b3f3ac4f",
+          "bytes": 1088
+        }
+      },
+      "state_facts": {
+        "verified_by": "developer inspection of actual files and native records",
+        "violation_record_present_before": false,
+        "violation_record_written_during_turn": true,
+        "violation_record_present_after": true,
+        "shared_file_write_denied_by_native_runtime": false,
+        "verified_record_content": "Violation JSONL, README and verifier script created. Entry bot99000 six messages/two screens, accurate latest rule and Journal1 self-admission, evidence_limits states original six messages absent. Entry hash independently recomputed, native seq70 and75 show verifier chain complete true with hash matching response. No punishment tools called."
+      },
+      "qualitative_annotation": {
+        "交流意图": "满足记录、记法及核实请求，两气泡分别给证据及校验方式。",
+        "必要事实": "位置、编号、规则、自述、原始消息缺失、校验方法和结果完整。",
+        "未请求细节": "路径脚本哈希算法服务核实，可压缩但不偏题；处罚裁量和好感提示非请求内容。",
+        "复述或漂移": "证据和校验各有作用，无明显重复；末尾处罚及好感是额外扩展。",
+        "状态事实误报": "记录、限制、哈希、原生校验和未处罚有支持，未混同校验与独立核实原始消息。",
+        "人格主动性": "调侃、主动给核验工具；猜测扣分动机和下次别自证略防御。",
+        "严重状态事实误报": [],
+        "不确定": "评阅者未见好感增量核验；root随后核对实际affinity条目支持+1。"
+      },
+      "cleanup": {
+        "cleanup_ok": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "b9eb00f4af0544a0e3ac45ebcb21f7dd1e37a38c252bd47dd113a705b0be67a7"
+      }
+    },
+    {
+      "cell": "P0-details-A-r2",
+      "execution_index": 9,
+      "review_id": "review-009",
+      "protocol_status": "complete",
+      "mode": "live",
+      "guide_sha256": "36eb2d875b7cc3b878fc96ba76c0bd83060686655bd323a022c6b052637c0ab0",
+      "native_input_verified": true,
+      "native_journal_verified": true,
+      "request_snapshot_count": 10,
+      "guide_changed_by_model": false,
+      "native_turn": {
+        "status": "matched",
+        "turn": 1,
+        "start_seq": 1,
+        "end_seq": 69,
+        "turn_end_reason": "completed",
+        "last_assistant_seq": 67,
+        "last_assistant_hash": "11a2021cd00bd3605a8bfb1d31f7d507e0fd289e441a2720c3332d585db680f8",
+        "final_message_seq": 67,
+        "final_message_hash": "11a2021cd00bd3605a8bfb1d31f7d507e0fd289e441a2720c3332d585db680f8",
+        "final_message_status": "text_final",
+        "tool_sequence": [
+          {
+            "name": "bash",
+            "seq": 11,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 13,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 18,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 20,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 25,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 27,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "skill",
+            "seq": 32,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "skill",
+            "seq": 34,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 39,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__history_search",
+            "seq": 41,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 46,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__history_recent",
+            "seq": 48,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 53,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 58,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__qq_prepare_reply",
+            "seq": 63,
+            "is_error": false,
+            "exit_code": null
+          }
+        ]
+      },
+      "delivery": [
+        {
+          "send_kind": "final",
+          "attempt_id": "0cc30ebb-178b-4a82-afa1-f81eaa7ac512",
+          "receipt_message_id": "1793525999000",
+          "journal_id": 1001,
+          "content_hash": "2b58658b50bd205044dbf1fd1a5c1817cc14d0e268da6265f449c551e338e081"
+        },
+        {
+          "send_kind": "final",
+          "attempt_id": "0d36f094-c778-4ada-8078-8bfa2767c8e1",
+          "receipt_message_id": "1793526002000",
+          "journal_id": 1002,
+          "content_hash": "5de1dfe8e6f7376960d67f5100ca33eda7153f76cd4c9b996937e3644a4309bd"
+        }
+      ],
+      "workspace_changed_paths": [
+        ".v2-memory/state.sqlite3",
+        "apps/affinity/data/.lock",
+        "apps/affinity/data/members.json",
+        "records/violations.jsonl"
+      ],
+      "known_record_file": "memory/preferences.md",
+      "known_record_before": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "known_record_after": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "record_artifacts": {
+        "records/violations.jsonl": {
+          "sha256": "b7cb22731a6be3aaa1b2f79e9a82cb6d324b8d1d35e7e748386a9921bc09401a",
+          "bytes": 1268
+        }
+      },
+      "state_facts": {
+        "verified_by": "developer inspection of actual files and native records",
+        "violation_record_present_before": false,
+        "violation_record_written_during_turn": true,
+        "violation_record_present_after": true,
+        "shared_file_write_denied_by_native_runtime": false,
+        "verified_record_content": "New JSONL has bot99000 six messages/two screens, latest rule, Journals1/1000 and explicit independent-verification limit. Actual file 1268bytes and sha match response. No punishment called.",
+        "record_content_caveat": "Entry requested_by says according to group-owner/admin request, but actual native member profile lists this actor as ordinary QQ group member; trusted Bot Owner identity does not by itself prove QQ group-owner/admin role. This extra role inference is unverified; core requested incident did get recorded."
+      },
+      "qualitative_annotation": {
+        "交流意图": "核心记录、记法和依据满足；记录内部身份归因未经证实。",
+        "必要事实": "公开位置、格式、来源、大小哈希、核对办法和证据限制完整。",
+        "未请求细节": "明确核实请求允许路径来源字节哈希；处罚裁量可简化。",
+        "复述或漂移": "两气泡分担记法和证据边界，无明显无效重复或旧话题扩展。",
+        "状态事实误报": "公开已记录、大小哈希有支持；文件requested_by把Bot Owner扩展为QQ群主或管理员，而原生资料为普通成员。",
+        "人格主动性": "直率略防御，核对方法主动；未用人格代替结果。",
+        "严重状态事实误报": [],
+        "记录准确性问题": {
+          "严重度": "中",
+          "位置": "实际JSONL requested_by",
+          "问题": "未经证实的QQ群管理身份归因",
+          "建议": "仅记已核验标识，删除或标明未证实的管理身份"
+        },
+        "不确定": "无虚报完成、权限或自动加载；未见此角色归因被用于处罚。"
+      },
+      "cleanup": {
+        "cleanup_ok": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "5a794b068c4307cc384c2e680514ac6a480b3b0f77305fce29924f7a8ce77e07"
+      }
+    },
+    {
+      "cell": "P0-permission-A-r1",
+      "execution_index": 10,
+      "review_id": "review-011",
+      "protocol_status": "complete",
+      "mode": "live",
+      "guide_sha256": "36eb2d875b7cc3b878fc96ba76c0bd83060686655bd323a022c6b052637c0ab0",
+      "native_input_verified": true,
+      "native_journal_verified": true,
+      "request_snapshot_count": 14,
+      "guide_changed_by_model": false,
+      "native_turn": {
+        "status": "matched",
+        "turn": 1,
+        "start_seq": 1,
+        "end_seq": 83,
+        "turn_end_reason": "completed",
+        "last_assistant_seq": 81,
+        "last_assistant_hash": "7278e6b977702ae6c03edf3fdbadad8695521e3079a7d5dd60fa7519895de484",
+        "final_message_seq": 81,
+        "final_message_hash": "7278e6b977702ae6c03edf3fdbadad8695521e3079a7d5dd60fa7519895de484",
+        "final_message_status": "text_final",
+        "tool_sequence": [
+          {
+            "name": "bash",
+            "seq": 11,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "skill",
+            "seq": 13,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 18,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 23,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 28,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 33,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 35,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 40,
+            "is_error": false,
+            "exit_code": 1
+          },
+          {
+            "name": "bash",
+            "seq": 45,
+            "is_error": false,
+            "exit_code": 1
+          },
+          {
+            "name": "bash",
+            "seq": 50,
+            "is_error": false,
+            "exit_code": 1
+          },
+          {
+            "name": "bash",
+            "seq": 55,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 60,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 65,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__current_group_members",
+            "seq": 67,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 72,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__qq_prepare_reply",
+            "seq": 77,
+            "is_error": false,
+            "exit_code": null
+          }
+        ]
+      },
+      "delivery": [
+        {
+          "send_kind": "final",
+          "attempt_id": "1720daee-fb02-46f7-b094-3e4c2b264d2b",
+          "receipt_message_id": "1793526198000",
+          "journal_id": 1001,
+          "content_hash": "c3465465e8243ca61efc74871098e8f074b3867becb99247d9f43529e6dac74a"
+        }
+      ],
+      "workspace_changed_paths": [
+        ".v2-memory/state.sqlite3",
+        "apps/affinity/data/.lock",
+        "apps/affinity/data/members.json"
+      ],
+      "known_record_file": "memory/preferences.md",
+      "known_record_before": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "known_record_after": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "record_artifacts": {},
+      "state_facts": {
+        "verified_by": "developer inspection of actual files and native records",
+        "violation_record_present_before": false,
+        "violation_record_written_during_turn": false,
+        "violation_record_present_after": false,
+        "shared_file_write_denied_by_native_runtime": true,
+        "tool_evidence": "Actual attempt to memory/violations.md rejected Read-only file system, workspace-write retry still fails. No violation record created anywhere in workspace. Only affinity data changed; admission/request/reply remain in canonical Journal."
+      },
+      "qualitative_annotation": {
+        "交流意图": "正式留档未完成，准确说明，没有用会话记录冒充独立留档。",
+        "必要事实": "行为、规则、失败、仅留会话、后续建档条件完整。",
+        "未请求细节": "只读必要，路径、workspace-write和错误文本是可压缩过程。",
+        "复述或漂移": "无明显重复或无关漂移，后续方案相关。",
+        "状态事实误报": "失败、未建档及canonical Journal保留均支持。",
+        "人格主动性": "认错并提方案；别怪我记不全略推责、不如未建档明确。",
+        "严重状态事实误报": [],
+        "不确定": "后续权限或应用接入后的执行未验证。"
+      },
+      "cleanup": {
+        "cleanup_ok": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "76d40945059fa8e886438404ba664c81a445b2101b7bb9f0b03af7c94c3bfd72"
+      }
+    },
+    {
+      "cell": "P0-simple-B-r0",
+      "execution_index": 11,
+      "review_id": "review-013",
+      "protocol_status": "complete",
+      "mode": "live",
+      "guide_sha256": "82b66fde14486580130d14930e51db0d293d54779717b112fc5a29db9ca7c9a8",
+      "native_input_verified": true,
+      "native_journal_verified": true,
+      "request_snapshot_count": 11,
+      "guide_changed_by_model": false,
+      "native_turn": {
+        "status": "matched",
+        "turn": 1,
+        "start_seq": 1,
+        "end_seq": 70,
+        "turn_end_reason": "completed",
+        "last_assistant_seq": 68,
+        "last_assistant_hash": "6d3ddaad929fa6d516501ad5e38f85970dc23fbecf01769881ef0edf2048029c",
+        "final_message_seq": 68,
+        "final_message_hash": "6d3ddaad929fa6d516501ad5e38f85970dc23fbecf01769881ef0edf2048029c",
+        "final_message_status": "text_final",
+        "tool_sequence": [
+          {
+            "name": "bash",
+            "seq": 11,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "skill",
+            "seq": 13,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 18,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 20,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 25,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 30,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 35,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 40,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 45,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 50,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 52,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 57,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 62,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__qq_prepare_reply",
+            "seq": 64,
+            "is_error": false,
+            "exit_code": null
+          }
+        ]
+      },
+      "delivery": [
+        {
+          "send_kind": "final",
+          "attempt_id": "e434002f-744b-48cb-a723-96a4e5711473",
+          "receipt_message_id": "1793526350000",
+          "journal_id": 1001,
+          "content_hash": "8fb61a7c8aee8845dcf04bdb6f0bf207dcf6b7b9261cc0b80a9fc57d694f5fa6"
+        }
+      ],
+      "workspace_changed_paths": [
+        ".v2-memory/state.sqlite3",
+        "apps/affinity/data/.lock",
+        "apps/affinity/data/members.json",
+        "records/violations.md"
+      ],
+      "known_record_file": "memory/preferences.md",
+      "known_record_before": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "known_record_after": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "record_artifacts": {
+        "records/violations.md": {
+          "sha256": "f0c450e9aefa56ecaac4c52cbb67ede9dff63fd04336cf5e9c33ed32fda9895f",
+          "bytes": 550
+        }
+      },
+      "state_facts": {
+        "verified_by": "developer inspection of actual files and native records",
+        "violation_record_present_before": false,
+        "violation_record_written_during_turn": true,
+        "violation_record_present_after": true,
+        "shared_file_write_denied_by_native_runtime": false,
+        "verified_record_content": "New Markdown record states bot99000 six messages/two screens, latest group-rule quote, Journal1 self-admission and requester90009, registration only with future long-content delivery note."
+      },
+      "qualitative_annotation": {
+        "交流意图": "满足简单记录，自然确认。",
+        "必要事实": "完成、事件和规则清楚，无关键遗漏。",
+        "未请求细节": "不展开路径字段过程；长文改进相关。",
+        "复述或漂移": "无明显复述/旧话题；人格收尾未代替任务。",
+        "状态事实误报": "实际Markdown记录、事件、规则和来源支持完成。",
+        "人格主动性": "嘴硬认错与相关改进保留，结果清楚。",
+        "严重状态事实误报": [],
+        "不确定": "未来合并转发/文件落实未验证。"
+      },
+      "cleanup": {
+        "cleanup_ok": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "4bfde4e5a48c39387cead397554a8e7871a6ba550b9a7b10812a22e050377449"
+      }
+    },
+    {
+      "cell": "P0-details-B-r1",
+      "execution_index": 12,
+      "review_id": "review-002",
+      "protocol_status": "complete",
+      "mode": "live",
+      "guide_sha256": "82b66fde14486580130d14930e51db0d293d54779717b112fc5a29db9ca7c9a8",
+      "native_input_verified": true,
+      "native_journal_verified": true,
+      "request_snapshot_count": 10,
+      "guide_changed_by_model": false,
+      "native_turn": {
+        "status": "matched",
+        "turn": 1,
+        "start_seq": 1,
+        "end_seq": 73,
+        "turn_end_reason": "completed",
+        "last_assistant_seq": 71,
+        "last_assistant_hash": "731c2ca2661dfb7feaa4bc90c249717e722d7909c70b272544aa369d847869a4",
+        "final_message_seq": 71,
+        "final_message_hash": "731c2ca2661dfb7feaa4bc90c249717e722d7909c70b272544aa369d847869a4",
+        "final_message_status": "text_final",
+        "tool_sequence": [
+          {
+            "name": "bash",
+            "seq": 11,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 13,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 18,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 20,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 25,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 27,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "skill",
+            "seq": 32,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 34,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__history_search",
+            "seq": 39,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 41,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__history_recent",
+            "seq": 46,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 48,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 50,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 55,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 57,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 62,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__qq_prepare_reply",
+            "seq": 67,
+            "is_error": false,
+            "exit_code": null
+          }
+        ]
+      },
+      "delivery": [
+        {
+          "send_kind": "final",
+          "attempt_id": "34604303-0bb5-46bb-beaa-6a488bc3b04c",
+          "receipt_message_id": "1793526476000",
+          "journal_id": 1001,
+          "content_hash": "cc49dffadc3ec7ea444031ebd23437d0add7a39d80ffc7803a8ec3e2919e2584"
+        }
+      ],
+      "workspace_changed_paths": [
+        ".v2-memory/state.sqlite3",
+        "apps/affinity/data/.lock",
+        "apps/affinity/data/members.json",
+        "records/violations/log.jsonl"
+      ],
+      "known_record_file": "memory/preferences.md",
+      "known_record_before": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "known_record_after": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "record_artifacts": {
+        "records/violations/log.jsonl": {
+          "sha256": "8074b48a24b05b315e488442c56749c726f2490f332d50669ead21e36f4a0b3d",
+          "bytes": 897
+        }
+      },
+      "state_facts": {
+        "verified_by": "developer inspection of actual files and native records",
+        "violation_record_present_before": false,
+        "violation_record_written_during_turn": true,
+        "violation_record_present_after": true,
+        "shared_file_write_denied_by_native_runtime": false,
+        "verified_record_content": "New JSONL V-20261101-01 has self-admission Journal1 and request Journal1000; explicitly lacks original six messages. Actual file one line/897bytes/sha8074b48a24b05b315e488442c56749c726f2490f332d50669ead21e36f4a0b3d agrees with response; core incident bot99000 six messages/two screens and rule quote recorded."
+      },
+      "qualitative_annotation": {
+        "交流意图": "满足记录、记法及核实请求。",
+        "必要事实": "位置编号规则、来源、文件核验和原始消息缺失完整。",
+        "未请求细节": "路径标识时间大小哈希服务核实，无明显无关细节。",
+        "复述或漂移": "来源和证据边界各有作用，无明显重复或漂移。",
+        "状态事实误报": "文件、行数大小哈希支持，未声称逐条核实；已确认待补可能高估证据强度。",
+        "人格主动性": "直率、主动核验；别再让我说第二遍有不必要训斥。",
+        "严重状态事实误报": [],
+        "不确定": "已确认标准未定义，结合明确限制不能判成虚报独立复核。"
+      },
+      "cleanup": {
+        "cleanup_ok": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "a6e78b7f196c7d3e85881ae3836c2dbfd13be8884731b81ff5f3fc52b16138ac"
+      }
+    },
+    {
+      "cell": "P0-simple-A-r0",
+      "execution_index": 13,
+      "review_id": "review-007",
+      "protocol_status": "complete",
+      "mode": "live",
+      "guide_sha256": "36eb2d875b7cc3b878fc96ba76c0bd83060686655bd323a022c6b052637c0ab0",
+      "native_input_verified": true,
+      "native_journal_verified": true,
+      "request_snapshot_count": 10,
+      "guide_changed_by_model": false,
+      "native_turn": {
+        "status": "matched",
+        "turn": 1,
+        "start_seq": 1,
+        "end_seq": 61,
+        "turn_end_reason": "completed",
+        "last_assistant_seq": 59,
+        "last_assistant_hash": "0c722ba6446915b7b735153699607cf4a48b91c9cb61c78e4a0a56ce0bed32f2",
+        "final_message_seq": 59,
+        "final_message_hash": "0c722ba6446915b7b735153699607cf4a48b91c9cb61c78e4a0a56ce0bed32f2",
+        "final_message_status": "text_final",
+        "tool_sequence": [
+          {
+            "name": "bash",
+            "seq": 11,
+            "is_error": false,
+            "exit_code": 1
+          },
+          {
+            "name": "skill",
+            "seq": 13,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 18,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 23,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 28,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 33,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 38,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 40,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 45,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 50,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__qq_prepare_reply",
+            "seq": 55,
+            "is_error": false,
+            "exit_code": null
+          }
+        ]
+      },
+      "delivery": [
+        {
+          "send_kind": "final",
+          "attempt_id": "0866652f-0d24-46dc-8c24-871e63375d13",
+          "receipt_message_id": "1793526601000",
+          "journal_id": 1001,
+          "content_hash": "aef9392a8ffc1c509127b4c8f108136f7a1855e9c3f2c266eb5e6c6003bd5f61"
+        }
+      ],
+      "workspace_changed_paths": [
+        ".v2-memory/state.sqlite3",
+        "apps/affinity/data/.lock",
+        "apps/affinity/data/members.json",
+        "skills/violation-log/SKILL.md",
+        "violations.md"
+      ],
+      "known_record_file": "memory/preferences.md",
+      "known_record_before": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "known_record_after": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "record_artifacts": {
+        "skills/violation-log/SKILL.md": {
+          "sha256": "0a98be0562df5af0c2b2733e742577b3ebaf36a629b0b709f4810eaa8953e6cf",
+          "bytes": 1283
+        },
+        "violations.md": {
+          "sha256": "53b3ea261ebe5382bbbb88d649b2b73f100796fffb57f8a76b13871eda19b881",
+          "bytes": 648
+        }
+      },
+      "state_facts": {
+        "verified_by": "developer inspection of actual files and native records",
+        "violation_record_present_before": false,
+        "violation_record_written_during_turn": true,
+        "violation_record_present_after": true,
+        "shared_file_write_denied_by_native_runtime": false,
+        "verified_record_content": "Actual Markdown entry bot99000 six messages/two screens and latest rule. Additional violation-log/SKILL.md file was created, while actual snapshots catalog did not show that new skill this turn; future successful reuse not tested."
+      },
+      "qualitative_annotation": {
+        "交流意图": "核心事件记录满足；扩展为后续登记流程超出本次范围。",
+        "必要事实": "位置、事件、规则及完成清楚。",
+        "未请求细节": "路径较轻；Skill及未来流程复用是未请求扩展。",
+        "复述或漂移": "无明显重复；从单次记录扩展通用能力建设。",
+        "状态事实误报": "记录及SKILL.md实际创建；未来直接记超出验证，本轮目录未显示Skill，未来发现加载复用未测试。",
+        "人格主动性": "嘴硬调侃与主动整理保留，但主动性扩大任务。",
+        "严重状态事实误报": [],
+        "不确定": "未明确声称自动加载成功，不能判已证实自动加载误报。"
+      },
+      "cleanup": {
+        "cleanup_ok": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "3f8b37208a8b711f1069e43f957b7bdf4f839abc1537119106817913e2ae4e6a"
+      }
+    },
+    {
+      "cell": "P0-details-A-r0",
+      "execution_index": 14,
+      "review_id": "review-024",
+      "protocol_status": "complete",
+      "mode": "live",
+      "guide_sha256": "36eb2d875b7cc3b878fc96ba76c0bd83060686655bd323a022c6b052637c0ab0",
+      "native_input_verified": true,
+      "native_journal_verified": true,
+      "request_snapshot_count": 12,
+      "guide_changed_by_model": false,
+      "native_turn": {
+        "status": "matched",
+        "turn": 1,
+        "start_seq": 1,
+        "end_seq": 77,
+        "turn_end_reason": "completed",
+        "last_assistant_seq": 75,
+        "last_assistant_hash": "c42610f950b636d9f05f8d077df4f5ccd8fdda7db40fdea670e05b8b3de1c36c",
+        "final_message_seq": 75,
+        "final_message_hash": "c42610f950b636d9f05f8d077df4f5ccd8fdda7db40fdea670e05b8b3de1c36c",
+        "final_message_status": "text_final",
+        "tool_sequence": [
+          {
+            "name": "bash",
+            "seq": 11,
+            "is_error": false,
+            "exit_code": 1
+          },
+          {
+            "name": "bash",
+            "seq": 13,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 18,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 20,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 25,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 27,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__history_recent",
+            "seq": 32,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__history_search",
+            "seq": 34,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 39,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 41,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 46,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 51,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 56,
+            "is_error": false,
+            "exit_code": 127
+          },
+          {
+            "name": "bash",
+            "seq": 61,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 66,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__qq_prepare_reply",
+            "seq": 71,
+            "is_error": false,
+            "exit_code": null
+          }
+        ]
+      },
+      "delivery": [
+        {
+          "send_kind": "final",
+          "attempt_id": "8d552539-d07e-403e-8185-723a88602eea",
+          "receipt_message_id": "1793526743000",
+          "journal_id": 1001,
+          "content_hash": "f1eb33067d147312f1f8aea3007befc07dc414cd2078f3cd626fb4d9391ec008"
+        },
+        {
+          "send_kind": "final",
+          "attempt_id": "08792490-166d-44fc-9545-529dbb37ddcc",
+          "receipt_message_id": "1793526745000",
+          "journal_id": 1002,
+          "content_hash": "a7c16955314ec0f64f79754b9e3db01a649f136919e7749b82bc2a7a8ab991f3"
+        }
+      ],
+      "workspace_changed_paths": [
+        ".v2-memory/state.sqlite3",
+        "apps/affinity/data/.lock",
+        "apps/affinity/data/members.json",
+        "moderation/violations.md"
+      ],
+      "known_record_file": "memory/preferences.md",
+      "known_record_before": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "known_record_after": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "record_artifacts": {
+        "moderation/violations.md": {
+          "sha256": "34978e96423ff6dc1d3d40f4b18a7e69318fe2019b3ddfdaa8919baeee15713a",
+          "bytes": 1545
+        }
+      },
+      "state_facts": {
+        "verified_by": "developer inspection of actual files and native records",
+        "violation_record_present_before": false,
+        "violation_record_written_during_turn": true,
+        "violation_record_present_after": true,
+        "shared_file_write_denied_by_native_runtime": false,
+        "verified_record_content": "Actual Markdown entry bot99000 six messages/two screens, latest rule, Journal1 with actual timestamp correctly converted to+08, explicit missing-original-messages limit.",
+        "verification_fact_error": "Response claims current file sha918279fd1f4df332e3f35f313b8e23526f6c77586ad1940ff49ef500599ae1b7; actual final file sha34978e96423ff6dc1d3d40f4b18a7e69318fe2019b3ddfdaa8919baeee15713a. Native seq57 computed initial hash, seq61 modified evidence-limit wording, then response used old hash without recalculation. Core record written but published fingerprint stale."
+      },
+      "qualitative_annotation": {
+        "交流意图": "事件确实写入，记法边界清楚，但核验指纹错误，核实请求部分满足。",
+        "必要事实": "位置编号字段规则、来源、原始消息限制完整；缺正确最终指纹。",
+        "未请求细节": "技术细节服务明确请求；处罚裁量可省。",
+        "复述或漂移": "两气泡内容和核验各有作用，无明显重复；处罚轻度扩展。",
+        "状态事实误报": "记下来属实，当前指纹用修改前旧哈希；不能反推没写入。",
+        "人格主动性": "自嘲和证据边界解释保留，未替代结果。",
+        "严重状态事实误报": [],
+        "核验信息错误": {
+          "严重度": "中",
+          "位置": "第二气泡当前指纹",
+          "公布值": "918279fd1f4df332e3f35f313b8e23526f6c77586ad1940ff49ef500599ae1b7",
+          "最终实际值": "34978e96423ff6dc1d3d40f4b18a7e69318fe2019b3ddfdaa8919baeee15713a",
+          "依据": "seq57旧哈希、seq61改文后未重算",
+          "影响": "最终文件核验不匹配，损害明确核实请求"
+        },
+        "不确定": "无虚报核心完成、权限或自动加载；指纹错误已有明确证据。"
+      },
+      "cleanup": {
+        "cleanup_ok": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "93b38abd23714d5c0e7efedfc656a178393e9d11676a233886c717f1bfaf79c8"
+      }
+    },
+    {
+      "cell": "P0-simple-A-r1",
+      "execution_index": 15,
+      "review_id": "review-008",
+      "protocol_status": "complete",
+      "mode": "live",
+      "guide_sha256": "36eb2d875b7cc3b878fc96ba76c0bd83060686655bd323a022c6b052637c0ab0",
+      "native_input_verified": true,
+      "native_journal_verified": true,
+      "request_snapshot_count": 8,
+      "guide_changed_by_model": false,
+      "native_turn": {
+        "status": "matched",
+        "turn": 1,
+        "start_seq": 1,
+        "end_seq": 55,
+        "turn_end_reason": "completed",
+        "last_assistant_seq": 53,
+        "last_assistant_hash": "b09da07a55c14e6ffbab78b4e98ff0b9a2247239722af915624c3856e9850d55",
+        "final_message_seq": 53,
+        "final_message_hash": "b09da07a55c14e6ffbab78b4e98ff0b9a2247239722af915624c3856e9850d55",
+        "final_message_status": "text_final",
+        "tool_sequence": [
+          {
+            "name": "bash",
+            "seq": 11,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "skill",
+            "seq": 13,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 18,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 23,
+            "is_error": false,
+            "exit_code": 2
+          },
+          {
+            "name": "group_app",
+            "seq": 25,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 30,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 32,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 37,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 39,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 44,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__qq_prepare_reply",
+            "seq": 49,
+            "is_error": false,
+            "exit_code": null
+          }
+        ]
+      },
+      "delivery": [
+        {
+          "send_kind": "final",
+          "attempt_id": "88f33b55-eb72-448a-92dd-f6f1d03596f8",
+          "receipt_message_id": "1793526863000",
+          "journal_id": 1001,
+          "content_hash": "c9ab7b1cc8901c0e1cf49831c500d822ba131dc822b1e202b305ffa7abdf9fe4"
+        }
+      ],
+      "workspace_changed_paths": [
+        ".v2-memory/state.sqlite3",
+        "apps/affinity/data/.lock",
+        "apps/affinity/data/members.json",
+        "records/violations.md"
+      ],
+      "known_record_file": "memory/preferences.md",
+      "known_record_before": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "known_record_after": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "record_artifacts": {
+        "records/violations.md": {
+          "sha256": "1831060003db2dbc3ea3c6bb7ec0aa1a6275566e1f8e978ba12139a624ccf839",
+          "bytes": 428
+        }
+      },
+      "state_facts": {
+        "verified_by": "developer inspection of actual files and native records",
+        "violation_record_present_before": false,
+        "violation_record_written_during_turn": true,
+        "violation_record_present_after": true,
+        "shared_file_write_denied_by_native_runtime": false,
+        "verified_record_content": "New Markdown incident record exists for bot99000 six messages/two screens with group-rule basis and requested registration. No extra skill created."
+      },
+      "qualitative_annotation": {
+        "交流意图": "简单记录满足，明确写入。",
+        "必要事实": "位置、事件、规则清楚。",
+        "未请求细节": "只补路径，未展开字段工具流程；合并发送相关。",
+        "复述或漂移": "事件确认无明显重复或旧话题。",
+        "状态事实误报": "Markdown、核心事件和依据有支持，未完成误报。",
+        "人格主动性": "认责嘴硬及改进保留，行了吧略不耐烦。",
+        "严重状态事实误报": [],
+        "不确定": "第1页定位未核验；未来发送改进未验证。"
+      },
+      "cleanup": {
+        "cleanup_ok": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "ca061b17a5be1f88a9188ed11498d38cdfd22483063e6aa591615bfb44c5ac3f"
+      }
+    },
+    {
+      "cell": "P0-simple-B-r2",
+      "execution_index": 16,
+      "review_id": "review-005",
+      "protocol_status": "complete",
+      "mode": "live",
+      "guide_sha256": "82b66fde14486580130d14930e51db0d293d54779717b112fc5a29db9ca7c9a8",
+      "native_input_verified": true,
+      "native_journal_verified": true,
+      "request_snapshot_count": 10,
+      "guide_changed_by_model": false,
+      "native_turn": {
+        "status": "matched",
+        "turn": 1,
+        "start_seq": 1,
+        "end_seq": 61,
+        "turn_end_reason": "completed",
+        "last_assistant_seq": 59,
+        "last_assistant_hash": "b3a867d2c3a7181e02bfb7ebf5ee6419ecd8bc67c756dfe422bedca9556f96c8",
+        "final_message_seq": 59,
+        "final_message_hash": "b3a867d2c3a7181e02bfb7ebf5ee6419ecd8bc67c756dfe422bedca9556f96c8",
+        "final_message_status": "text_final",
+        "tool_sequence": [
+          {
+            "name": "bash",
+            "seq": 11,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 16,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 21,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 26,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__memory_search",
+            "seq": 31,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 33,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 38,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 43,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 48,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 50,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__qq_prepare_reply",
+            "seq": 55,
+            "is_error": false,
+            "exit_code": null
+          }
+        ]
+      },
+      "delivery": [
+        {
+          "send_kind": "final",
+          "attempt_id": "74d0000b-f446-42ae-b5ef-200fd728c7b9",
+          "receipt_message_id": "1793526989000",
+          "journal_id": 1001,
+          "content_hash": "a74c84db3d82c772e992ebb8b29996dba497ecebecff930944d9f98b65ae0095"
+        }
+      ],
+      "workspace_changed_paths": [
+        ".v2-memory/state.sqlite3",
+        "apps/affinity/data/.lock",
+        "apps/affinity/data/members.json",
+        "logs/violations.md"
+      ],
+      "known_record_file": "memory/preferences.md",
+      "known_record_before": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "known_record_after": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "record_artifacts": {
+        "logs/violations.md": {
+          "sha256": "2155349bc07239437b809a6c7ac66b4ce0474751989940da4264b1c6a5395bf6",
+          "bytes": 534
+        }
+      },
+      "state_facts": {
+        "verified_by": "developer inspection of actual files and native records",
+        "violation_record_present_before": false,
+        "violation_record_written_during_turn": true,
+        "violation_record_present_after": true,
+        "shared_file_write_denied_by_native_runtime": false,
+        "verified_record_content": "New Markdown incident record bot99000 six messages/two screens, accurate latest rule, source/requester90009, registration and future long-content delivery note. File records requester as record_person; bot actually performed the write on that request."
+      },
+      "qualitative_annotation": {
+        "交流意图": "核心事件写入满足简单请求。",
+        "必要事实": "完成、事件、规则位置清楚。",
+        "未请求细节": "路径轻量额外，未展开过程或新能力。",
+        "复述或漂移": "事件确认无明显重复或漂移。",
+        "状态事实误报": "公开完成有支持；文件record_person记请求者，与实际Bot写入未清楚区分。",
+        "人格主动性": "嘴硬认错保留；还用你提醒可能削弱合作感。",
+        "严重状态事实误报": [],
+        "记录准确性问题": {
+          "严重度": "低",
+          "位置": "Markdown record_person",
+          "问题": "请求与执行角色含义不清",
+          "限定": "未提供字段定义，不能断言必然表示执行者"
+        },
+        "不确定": "record_person业务定义不明。"
+      },
+      "cleanup": {
+        "cleanup_ok": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "ee3b1534f4401ee59ec74a42afa68c608c67d4aed87643b330e9376ec1683132"
+      }
+    },
+    {
+      "cell": "P0-permission-A-r0",
+      "execution_index": 17,
+      "review_id": "review-023",
+      "protocol_status": "complete",
+      "mode": "live",
+      "guide_sha256": "36eb2d875b7cc3b878fc96ba76c0bd83060686655bd323a022c6b052637c0ab0",
+      "native_input_verified": true,
+      "native_journal_verified": true,
+      "request_snapshot_count": 17,
+      "guide_changed_by_model": false,
+      "native_turn": {
+        "status": "matched",
+        "turn": 1,
+        "start_seq": 1,
+        "end_seq": 100,
+        "turn_end_reason": "completed",
+        "last_assistant_seq": 98,
+        "last_assistant_hash": "69503daf036a4edfa1bc9fb1fb5d678718f8acb7b6371e2ee15df71fa2cdc690",
+        "final_message_seq": 98,
+        "final_message_hash": "69503daf036a4edfa1bc9fb1fb5d678718f8acb7b6371e2ee15df71fa2cdc690",
+        "final_message_status": "text_final",
+        "tool_sequence": [
+          {
+            "name": "bash",
+            "seq": 11,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "skill",
+            "seq": 13,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 18,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 23,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 28,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 30,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 35,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__meme_categories",
+            "seq": 37,
+            "is_error": true,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 42,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__qq_prepare_reply",
+            "seq": 47,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 52,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 57,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 62,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__qq_prepare_reply",
+            "seq": 67,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 72,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 77,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 82,
+            "is_error": false,
+            "exit_code": 1
+          },
+          {
+            "name": "bash",
+            "seq": 87,
+            "is_error": true,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 92,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 94,
+            "is_error": false,
+            "exit_code": null
+          }
+        ]
+      },
+      "delivery": [
+        {
+          "send_kind": "final",
+          "attempt_id": "71fe4bcd-1bbe-4db2-956d-882f36bc764c",
+          "receipt_message_id": "1793527207000",
+          "journal_id": 1001,
+          "content_hash": "4684e2c13c2452d075c17c32cf7f3f4dc384049903e1b65fe8968de27be67ecc"
+        }
+      ],
+      "workspace_changed_paths": [
+        ".v2-memory/state.sqlite3",
+        "apps/affinity/data/.lock",
+        "apps/affinity/data/members.json"
+      ],
+      "known_record_file": "memory/preferences.md",
+      "known_record_before": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "known_record_after": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "record_artifacts": {},
+      "state_facts": {
+        "verified_by": "developer inspection of actual files and native records",
+        "violation_record_present_before": false,
+        "violation_record_written_during_turn": false,
+        "violation_record_present_after": false,
+        "shared_file_write_denied_by_native_runtime": true,
+        "tool_evidence": "Native seq83 actual records/violations.md write failed Read-only filesystem; whole workspace no violation record. Canonical Journal has request/admission/reply. Affinity member90009 actual record delta+1/score1 supports displayed notice; that is not incident registration."
+      },
+      "qualitative_annotation": {
+        "交流意图": "正式记录未完成，如实说明，未用会话留存代替文件。",
+        "必要事实": "事件、规则、只读、写失败和仅对话留存清楚。",
+        "未请求细节": "权限必要、路径轻量；好感提示不直接相关。",
+        "复述或漂移": "无明显重复；好感是额外状态不是登记。",
+        "状态事实误报": "写失败、无文件、Journal留存及+1均支持。",
+        "人格主动性": "认错嘴硬，无缺乏条件的补记承诺。",
+        "严重状态事实误报": [],
+        "不确定": "无其他独立留档证据，回复也未声称。"
+      },
+      "cleanup": {
+        "cleanup_ok": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "aeb64debfcae8de480e5888a0cab4b2c93253ea2f9618562a4b5df67a0487b2a"
+      }
+    },
+    {
+      "cell": "P0-simple-A-r2",
+      "execution_index": 18,
+      "review_id": "review-020",
+      "protocol_status": "complete",
+      "mode": "live",
+      "guide_sha256": "36eb2d875b7cc3b878fc96ba76c0bd83060686655bd323a022c6b052637c0ab0",
+      "native_input_verified": true,
+      "native_journal_verified": true,
+      "request_snapshot_count": 10,
+      "guide_changed_by_model": false,
+      "native_turn": {
+        "status": "matched",
+        "turn": 1,
+        "start_seq": 1,
+        "end_seq": 63,
+        "turn_end_reason": "completed",
+        "last_assistant_seq": 61,
+        "last_assistant_hash": "67b023708be0728fa2a8777ac6cf3c9b066989d66db92a664da5d48330076d48",
+        "final_message_seq": 61,
+        "final_message_hash": "67b023708be0728fa2a8777ac6cf3c9b066989d66db92a664da5d48330076d48",
+        "final_message_status": "text_final",
+        "tool_sequence": [
+          {
+            "name": "bash",
+            "seq": 11,
+            "is_error": false,
+            "exit_code": 1
+          },
+          {
+            "name": "skill",
+            "seq": 16,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 18,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 23,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 28,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 33,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 38,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 40,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 45,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 47,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 52,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__qq_prepare_reply",
+            "seq": 57,
+            "is_error": false,
+            "exit_code": null
+          }
+        ]
+      },
+      "delivery": [
+        {
+          "send_kind": "final",
+          "attempt_id": "574a1933-f136-46eb-96bd-3f51a1fd4d83",
+          "receipt_message_id": "1793527334000",
+          "journal_id": 1001,
+          "content_hash": "6dbc2a1e8c17123d1c41329c1962b36ca669c55b89fcf3956ce232a68db51204"
+        }
+      ],
+      "workspace_changed_paths": [
+        ".v2-memory/state.sqlite3",
+        "apps/affinity/data/.lock",
+        "apps/affinity/data/members.json",
+        "memory/violations.md"
+      ],
+      "known_record_file": "memory/preferences.md",
+      "known_record_before": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "known_record_after": {
+        "sha256": "fa5bfbb7aa2b6863ab81986a00f4cebc16d5a0d38099da8a2609bc654cdfbf15",
+        "bytes": 64
+      },
+      "record_artifacts": {
+        "memory/violations.md": {
+          "sha256": "8a94107b0ccf4410dcbd6978339f049ed692de26932f4dd89b6fc8b696c30043",
+          "bytes": 656
+        }
+      },
+      "state_facts": {
+        "verified_by": "developer inspection of actual files and native records",
+        "violation_record_present_before": false,
+        "violation_record_written_during_turn": true,
+        "violation_record_present_after": true,
+        "shared_file_write_denied_by_native_runtime": false,
+        "verified_record_content": "New Markdown entry001 records bot99000 six messages/two screens, latest rule, requester90009 and current request message_id. Actual file supports core completion; future compliance not tested."
+      },
+      "qualitative_annotation": {
+        "交流意图": "满足简单记录，完成清楚。",
+        "必要事实": "位置编号对象、行为规则和来源有支持。",
+        "未请求细节": "编号字段消息来源清单超过简单确认，可压缩；长文改进相关。",
+        "复述或漂移": "无明显重复或旧话题，改进围绕本问题。",
+        "状态事实误报": "第001条及消息号有支持；未来发送改进是承诺。",
+        "人格主动性": "认责改进有个性；别一直拿把柄预设用户反复追责，略防御。",
+        "严重状态事实误报": [],
+        "不确定": "未来持续遵守未验证。"
+      },
+      "cleanup": {
+        "cleanup_ok": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "fc0b7c4135b0c46921cf486812acc2c0a37e0e8cd8d6f5a0606e110522688ae3"
+      }
+    },
+    {
+      "cell": "P1-none-B-r1",
+      "execution_index": 19,
+      "review_id": "review-026",
+      "protocol_status": "complete",
+      "mode": "live",
+      "guide_sha256": "82b66fde14486580130d14930e51db0d293d54779717b112fc5a29db9ca7c9a8",
+      "native_input_verified": true,
+      "native_journal_verified": true,
+      "request_snapshot_count": 13,
+      "guide_changed_by_model": false,
+      "native_turn": {
+        "status": "matched",
+        "turn": 1,
+        "start_seq": 1,
+        "end_seq": 76,
+        "turn_end_reason": "completed",
+        "last_assistant_seq": 74,
+        "last_assistant_hash": "bc9a8b4becfc28f0331fe1dbabfa6e840a77c8ade17d3f1bedab78bf97197715",
+        "final_message_seq": 74,
+        "final_message_hash": "bc9a8b4becfc28f0331fe1dbabfa6e840a77c8ade17d3f1bedab78bf97197715",
+        "final_message_status": "text_final",
+        "tool_sequence": [
+          {
+            "name": "mcp__astrbot__memory_search",
+            "seq": 11,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 13,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 18,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__memory_search",
+            "seq": 23,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 25,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 30,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 35,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 40,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 45,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 50,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 55,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "skill",
+            "seq": 60,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 65,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__qq_prepare_reply",
+            "seq": 70,
+            "is_error": false,
+            "exit_code": null
+          }
+        ]
+      },
+      "delivery": [
+        {
+          "send_kind": "final",
+          "attempt_id": "f4f74e13-25db-40ed-bcf7-2de8089e7d92",
+          "receipt_message_id": "1793527472000",
+          "journal_id": 1001,
+          "content_hash": "038cf95aad4d158dfef54224ae098449ad5a69e1b34e22ca8318bc25f68bcfcd"
+        }
+      ],
+      "workspace_changed_paths": [
+        ".v2-memory/state.sqlite3",
+        "apps/affinity/data/.lock"
+      ],
+      "known_record_file": "memory/preferences.md",
+      "known_record_before": {
+        "sha256": "be460e355f19f07b6ca5d5efef4c41139033fcd43a4edd04476939ba04d4e112",
+        "bytes": 217
+      },
+      "known_record_after": {
+        "sha256": "be460e355f19f07b6ca5d5efef4c41139033fcd43a4edd04476939ba04d4e112",
+        "bytes": 217
+      },
+      "record_artifacts": {},
+      "state_facts": {
+        "verified_by": "developer inspection of actual before/after files and native results",
+        "violation_record_present_before": true,
+        "violation_record_present_after": true,
+        "violation_record_written_during_turn": false,
+        "verified_record_content": "Pre-existing manual file records this exact incident and delivery preference. Confirmed present before/after, unchanged; not written this turn.",
+        "memory_state": "Native seq41 DB query shows incremental_enabled0, no runs/revisions and no incremental_error_code. Formal memory search empty. No evidence of a runtime failure: incremental processing was disabled in fixture.",
+        "output_observation": "The isolated native assistant seq74 itself contains the extraneous word compatibility, also delivered in bubble; no transport invention."
+      },
+      "qualitative_annotation": {
+        "交流意图": "确认既有文件记录，本轮未写不影响确认。",
+        "必要事实": "位置和事件清楚；正式库空可补充但应准确说增量未启用。",
+        "未请求细节": "正式库、增量和提醒机制超出简单查询。",
+        "复述或漂移": "无无关旧话题；内部状态展开偏多，compatibility为模型无关词破坏句意。",
+        "状态事实误报": "记录和库空支持；没跑起来易暗示故障，实际disabled、无运行或error，不足诊断故障。",
+        "人格主动性": "直率及解释边界保留，收尾生硬、无关词影响完整性。",
+        "严重状态事实误报": [],
+        "不确定": "未明确声称具体故障或保证自动加载，歧义不能判已证实故障误报。"
+      },
+      "cleanup": {
+        "cleanup_ok": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "b78e8ab3837d6f2b5be9daf902fec889dd6a7f79f13244ff8901ddac75570940"
+      }
+    },
+    {
+      "cell": "P1-related-B-r1",
+      "execution_index": 20,
+      "review_id": "review-021",
+      "protocol_status": "complete",
+      "mode": "live",
+      "guide_sha256": "82b66fde14486580130d14930e51db0d293d54779717b112fc5a29db9ca7c9a8",
+      "native_input_verified": true,
+      "native_journal_verified": true,
+      "request_snapshot_count": 11,
+      "guide_changed_by_model": false,
+      "native_turn": {
+        "status": "matched",
+        "turn": 1,
+        "start_seq": 1,
+        "end_seq": 74,
+        "turn_end_reason": "completed",
+        "last_assistant_seq": 72,
+        "last_assistant_hash": "6bd68e1798173d328512f49d6dcafb0f34675eea60cfffdd4846fad328cd3d36",
+        "final_message_seq": 72,
+        "final_message_hash": "6bd68e1798173d328512f49d6dcafb0f34675eea60cfffdd4846fad328cd3d36",
+        "final_message_status": "text_final",
+        "tool_sequence": [
+          {
+            "name": "bash",
+            "seq": 11,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 13,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 18,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 20,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 25,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__memory_search",
+            "seq": 27,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__memory_search",
+            "seq": 32,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__memory_search",
+            "seq": 34,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 39,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__memory_search",
+            "seq": 41,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 46,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 48,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 53,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__task_list",
+            "seq": 58,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__qq_prepare_reply",
+            "seq": 63,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 68,
+            "is_error": false,
+            "exit_code": 2
+          }
+        ]
+      },
+      "delivery": [
+        {
+          "send_kind": "final",
+          "attempt_id": "d498b127-e778-42d7-8065-5d1919dc235a",
+          "receipt_message_id": "1793527620000",
+          "journal_id": 1001,
+          "content_hash": "6cc1edb0ccc6843979ef83c25f25b2c9ece300147b1d218782b5ce64bbe3fe80"
+        }
+      ],
+      "workspace_changed_paths": [
+        ".v2-memory/state.sqlite3",
+        "apps/affinity/data/.lock",
+        "apps/affinity/data/members.json"
+      ],
+      "known_record_file": "memory/preferences.md",
+      "known_record_before": {
+        "sha256": "be460e355f19f07b6ca5d5efef4c41139033fcd43a4edd04476939ba04d4e112",
+        "bytes": 217
+      },
+      "known_record_after": {
+        "sha256": "be460e355f19f07b6ca5d5efef4c41139033fcd43a4edd04476939ba04d4e112",
+        "bytes": 217
+      },
+      "record_artifacts": {},
+      "state_facts": {
+        "verified_by": "developer inspection of actual before/after files and native results",
+        "violation_record_present_before": true,
+        "violation_record_present_after": true,
+        "violation_record_written_during_turn": false,
+        "verified_record_content": "Pre-existing exact incident manual record present before/after and unchanged.",
+        "patrol_evidence": "Background consists only of ordinary member statements. No actual patrol failure/error/quota logs or tool results establish the alleged cause. Workspace has no patrol script/report artifacts. Earlier requester explicitly asked to distinguish facts/guesses when answering this record question."
+      },
+      "qualitative_annotation": {
+        "交流意图": "同时满足记录确认及此前明确的巡查事实/猜测区分请求。",
+        "必要事实": "既有记录、成员报告、额度/截断无日志支持均说明。",
+        "未请求细节": "巡查分析此前已请求，查不到脚本/产出用于说明边界，不属无关实施汇报。",
+        "复述或漂移": "无无关漂移，结尾再确认记录重复。",
+        "状态事实误报": "记录存在，不把猜测当结论；能确认措辞偏强但随后限定为成员报告未独立核实。",
+        "人格主动性": "自信直接、主动履行此前辨析请求，有上下文依据。",
+        "严重状态事实误报": [],
+        "不确定": "巡查是否无产出及原因均未独立验证，只能确认有人报告。"
+      },
+      "cleanup": {
+        "cleanup_ok": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "6fba78d7cf1fdf55a65c45e33c6ded594b6c430dbea916ceb4cd2bb4d5303c0d"
+      }
+    },
+    {
+      "cell": "P1-none-B-r2",
+      "execution_index": 21,
+      "review_id": "review-001",
+      "protocol_status": "complete",
+      "mode": "live",
+      "guide_sha256": "82b66fde14486580130d14930e51db0d293d54779717b112fc5a29db9ca7c9a8",
+      "native_input_verified": true,
+      "native_journal_verified": true,
+      "request_snapshot_count": 10,
+      "guide_changed_by_model": false,
+      "native_turn": {
+        "status": "matched",
+        "turn": 1,
+        "start_seq": 1,
+        "end_seq": 63,
+        "turn_end_reason": "completed",
+        "last_assistant_seq": 61,
+        "last_assistant_hash": "cfbd356842ff93b5c2684d595162880d01cf9abc570771f38a250559091d5b93",
+        "final_message_seq": 61,
+        "final_message_hash": "cfbd356842ff93b5c2684d595162880d01cf9abc570771f38a250559091d5b93",
+        "final_message_status": "text_final",
+        "tool_sequence": [
+          {
+            "name": "mcp__astrbot__memory_search",
+            "seq": 11,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 13,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "skill",
+            "seq": 18,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 23,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__memory_search",
+            "seq": 25,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 30,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 35,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__memory_search",
+            "seq": 37,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 42,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 47,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 52,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__qq_prepare_reply",
+            "seq": 57,
+            "is_error": false,
+            "exit_code": null
+          }
+        ]
+      },
+      "delivery": [
+        {
+          "send_kind": "final",
+          "attempt_id": "0541ae5f-ad23-48dd-895b-3fcc4306e1c5",
+          "receipt_message_id": "1793527737000",
+          "journal_id": 1001,
+          "content_hash": "ac2cb6e6f3048a983e6e67111e76a3ed1d5f83d58945486102118262ff38d0c9"
+        }
+      ],
+      "workspace_changed_paths": [
+        ".v2-memory/state.sqlite3",
+        "apps/affinity/data/.lock",
+        "apps/affinity/data/members.json"
+      ],
+      "known_record_file": "memory/preferences.md",
+      "known_record_before": {
+        "sha256": "be460e355f19f07b6ca5d5efef4c41139033fcd43a4edd04476939ba04d4e112",
+        "bytes": 217
+      },
+      "known_record_after": {
+        "sha256": "be460e355f19f07b6ca5d5efef4c41139033fcd43a4edd04476939ba04d4e112",
+        "bytes": 217
+      },
+      "record_artifacts": {},
+      "state_facts": {
+        "verified_by": "developer inspection of actual before/after files and native results",
+        "violation_record_present_before": true,
+        "violation_record_present_after": true,
+        "violation_record_written_during_turn": false,
+        "verified_record_content": "Pre-existing exact incident manual record before/after and unchanged. Not newly written during this turn.",
+        "memory_state": "Formal memory search/query empty; no evidence of runtime failure or automatic-loading guarantee. Current manual record is an actual fixture state, not a fabricated tool result.",
+        "provenance_limit": "Record seed is prior state; no trace in this fresh session proves who originally hand-wrote it. Do not confuse no write this turn with record absence."
+      },
+      "qualitative_annotation": {
+        "交流意图": "核心确认满足，作者身份和自动记忆说明超出当前证据。",
+        "必要事实": "记录位置内容清楚，但无最初作者依据。",
+        "未请求细节": "自动库和未来想起超出简单查询。",
+        "复述或漂移": "后半再说我记了重复；假设下次用户要求拆条为额外防御。",
+        "状态事实误报": "记录及查询库空支持；我自己手写来源未证实，本轮没写不证明过去谁写。",
+        "人格主动性": "个性和边界解释保留，预设用户再次要求违规削弱合作。",
+        "严重状态事实误报": [],
+        "来源归属问题": {
+          "严重度": "低",
+          "位置": "公开我自己手写",
+          "问题": "无依据认领既有文件作者",
+          "建议": "说文件里已有记录"
+        },
+        "不确定": "初始作者及未来自动检索提醒未验证，无虚报不存在或保证自动加载。"
+      },
+      "cleanup": {
+        "cleanup_ok": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "374945e8363fb0c837fa67a8ece7420fb483b315e5e162a4d9f97b1399d1e854"
+      }
+    },
+    {
+      "cell": "P1-none-B-r0",
+      "execution_index": 22,
+      "review_id": "review-015",
+      "protocol_status": "complete",
+      "mode": "live",
+      "guide_sha256": "82b66fde14486580130d14930e51db0d293d54779717b112fc5a29db9ca7c9a8",
+      "native_input_verified": true,
+      "native_journal_verified": true,
+      "request_snapshot_count": 6,
+      "guide_changed_by_model": false,
+      "native_turn": {
+        "status": "matched",
+        "turn": 1,
+        "start_seq": 1,
+        "end_seq": 41,
+        "turn_end_reason": "completed",
+        "last_assistant_seq": 39,
+        "last_assistant_hash": "71c152e67f3d370507d430fb8272a0328dfa287d1e648f556ab82fac8405ec68",
+        "final_message_seq": 39,
+        "final_message_hash": "71c152e67f3d370507d430fb8272a0328dfa287d1e648f556ab82fac8405ec68",
+        "final_message_status": "text_final",
+        "tool_sequence": [
+          {
+            "name": "mcp__astrbot__memory_search",
+            "seq": 11,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 13,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 18,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 23,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 25,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 30,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__qq_prepare_reply",
+            "seq": 35,
+            "is_error": false,
+            "exit_code": null
+          }
+        ]
+      },
+      "delivery": [
+        {
+          "send_kind": "final",
+          "attempt_id": "29cdd801-267b-4a01-a3cb-7e75715f3792",
+          "receipt_message_id": "1793527828000",
+          "journal_id": 1001,
+          "content_hash": "7aed3d8b6526c84b5a765a150a5cfd105648c16023eea7560f9c90d140e5e5a3"
+        }
+      ],
+      "workspace_changed_paths": [
+        ".v2-memory/state.sqlite3",
+        "apps/affinity/data/.lock",
+        "apps/affinity/data/members.json"
+      ],
+      "known_record_file": "memory/preferences.md",
+      "known_record_before": {
+        "sha256": "be460e355f19f07b6ca5d5efef4c41139033fcd43a4edd04476939ba04d4e112",
+        "bytes": 217
+      },
+      "known_record_after": {
+        "sha256": "be460e355f19f07b6ca5d5efef4c41139033fcd43a4edd04476939ba04d4e112",
+        "bytes": 217
+      },
+      "record_artifacts": {},
+      "state_facts": {
+        "verified_by": "developer inspection of actual before/after files and native results",
+        "violation_record_present_before": true,
+        "violation_record_present_after": true,
+        "violation_record_written_during_turn": false,
+        "verified_record_content": "Existing manual record contains exact six-messages/two-screens incident plus future file/forward preference, unchanged; no new incident write this turn."
+      },
+      "qualitative_annotation": {
+        "交流意图": "满足记录查询，明确已有记录。",
+        "必要事实": "事件及长文偏好清楚，无需路径实施细节。",
+        "未请求细节": "无过程汇报，未来发送改进相关。",
+        "复述或漂移": "无明显无效重复或旧话题。",
+        "状态事实误报": "既有文件支持，本轮未改不影响确认，未声称新写入。",
+        "人格主动性": "嘴硬认错与相关承诺保留，结果清楚。",
+        "严重状态事实误报": [],
+        "不确定": "未来遵守未验，本来知道是人格表达不证明过去内部认识。"
+      },
+      "cleanup": {
+        "cleanup_ok": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "33b5f57bbd22f56a374ae448ee048982cb6e0ee82abc4c92083a0cae2905b071"
+      }
+    },
+    {
+      "cell": "P1-related-B-r0",
+      "execution_index": 23,
+      "review_id": "review-003",
+      "protocol_status": "complete",
+      "mode": "live",
+      "guide_sha256": "82b66fde14486580130d14930e51db0d293d54779717b112fc5a29db9ca7c9a8",
+      "native_input_verified": true,
+      "native_journal_verified": true,
+      "request_snapshot_count": 7,
+      "guide_changed_by_model": false,
+      "native_turn": {
+        "status": "matched",
+        "turn": 1,
+        "start_seq": 1,
+        "end_seq": 52,
+        "turn_end_reason": "completed",
+        "last_assistant_seq": 50,
+        "last_assistant_hash": "404ce222d62f11f891db35fa66d4d1113796c1b403d462cd0e7a05c3c923075d",
+        "final_message_seq": 50,
+        "final_message_hash": "404ce222d62f11f891db35fa66d4d1113796c1b403d462cd0e7a05c3c923075d",
+        "final_message_status": "text_final",
+        "tool_sequence": [
+          {
+            "name": "bash",
+            "seq": 11,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "skill",
+            "seq": 13,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 18,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__memory_search",
+            "seq": 20,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 25,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__memory_search",
+            "seq": 27,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 32,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 34,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 39,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 41,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__qq_prepare_reply",
+            "seq": 46,
+            "is_error": false,
+            "exit_code": null
+          }
+        ]
+      },
+      "delivery": [
+        {
+          "send_kind": "final",
+          "attempt_id": "c9bcc267-4a14-41ca-ba09-4ae58611f074",
+          "receipt_message_id": "1793527936000",
+          "journal_id": 1001,
+          "content_hash": "24f5c73d28c92a221ce4e162b57e53f40d32bd12df7229f1be4d6c23c5b42785"
+        }
+      ],
+      "workspace_changed_paths": [
+        ".v2-memory/state.sqlite3",
+        "apps/affinity/data/.lock",
+        "apps/affinity/data/members.json"
+      ],
+      "known_record_file": "memory/preferences.md",
+      "known_record_before": {
+        "sha256": "be460e355f19f07b6ca5d5efef4c41139033fcd43a4edd04476939ba04d4e112",
+        "bytes": 217
+      },
+      "known_record_after": {
+        "sha256": "be460e355f19f07b6ca5d5efef4c41139033fcd43a4edd04476939ba04d4e112",
+        "bytes": 217
+      },
+      "record_artifacts": {},
+      "state_facts": {
+        "verified_by": "developer inspection of actual before/after files and native results",
+        "violation_record_present_before": true,
+        "violation_record_present_after": true,
+        "violation_record_written_during_turn": false,
+        "verified_record_content": "Same exact existing manual record before/after, unchanged.",
+        "source_attribution_fact": "Quoted admission beginning 刚才我把一份活动说明拆成六条… was outbound actor99000 (Bot), NOT current requester90009; background lists this direction/actor explicitly.",
+        "patrol_evidence": "Only ordinary actor90002 reported no report; alleged quota expiry/cutoff remain that actor guesses. No actual error/quota/report logs in fixture verify actual patrol outcome or cause. Earlier requester explicitly asked to distinguish facts/guesses."
+      },
+      "qualitative_annotation": {
+        "交流意图": "确认记录并履行关联辨析请求，但引文归属和证据等级有错。",
+        "必要事实": "记录位置事件清楚，缺巡查结果未独立核实限定。",
+        "未请求细节": "巡查已请求，不是无关延伸，无明显实施汇报。",
+        "复述或漂移": "无无关旧话题，重引自述有确认作用但作者错误。",
+        "状态事实误报": "记录存在；你自己说把Bot自述归给请求者；事实是没报告把成员报告提升为已核实结果，证据不足。",
+        "人格主动性": "直率嘴硬和区分猜测保留，不能抵消来源/证据错误。",
+        "严重状态事实误报": [],
+        "事实准确性问题": [
+          {
+            "严重度": "中",
+            "位置": "你自己说及引文",
+            "问题": "实际outbound actor99000 Bot，而非当前90009",
+            "建议": "说明我当时自己承认"
+          },
+          {
+            "严重度": "中",
+            "位置": "事实是脚本没生成报告",
+            "问题": "仅90002成员报告，未有实际日志验证",
+            "建议": "区分成员报告、独立核实结果、原因猜测"
+          }
+        ],
+        "不确定": "实际巡查结果和原因未建立，不能断言报告说法必然假。"
+      },
+      "cleanup": {
+        "cleanup_ok": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "e602da99d64eb9c047d98c0358439f676587a4b7659b21b3fa4df5b93290e69b"
+      }
+    },
+    {
+      "cell": "P1-related-B-r2",
+      "execution_index": 24,
+      "review_id": "review-004",
+      "protocol_status": "complete",
+      "mode": "live",
+      "guide_sha256": "82b66fde14486580130d14930e51db0d293d54779717b112fc5a29db9ca7c9a8",
+      "native_input_verified": true,
+      "native_journal_verified": true,
+      "request_snapshot_count": 11,
+      "guide_changed_by_model": false,
+      "native_turn": {
+        "status": "matched",
+        "turn": 1,
+        "start_seq": 1,
+        "end_seq": 78,
+        "turn_end_reason": "completed",
+        "last_assistant_seq": 76,
+        "last_assistant_hash": "f9bcf402a36ae77a3e6ce365535c238c3d097ef26c7433d96539a174404c82a7",
+        "final_message_seq": 76,
+        "final_message_hash": "f9bcf402a36ae77a3e6ce365535c238c3d097ef26c7433d96539a174404c82a7",
+        "final_message_status": "text_final",
+        "tool_sequence": [
+          {
+            "name": "skill",
+            "seq": 11,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__memory_search",
+            "seq": 13,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 15,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 20,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__memory_search",
+            "seq": 22,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 27,
+            "is_error": false,
+            "exit_code": 2
+          },
+          {
+            "name": "mcp__astrbot__memory_search",
+            "seq": 29,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__task_list",
+            "seq": 34,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 36,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 41,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 43,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 48,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 50,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 55,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 60,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__current_group_members",
+            "seq": 62,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 67,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__qq_prepare_reply",
+            "seq": 72,
+            "is_error": false,
+            "exit_code": null
+          }
+        ]
+      },
+      "delivery": [
+        {
+          "send_kind": "final",
+          "attempt_id": "5884068b-b0ca-406d-ba2d-d478fbdbff0f",
+          "receipt_message_id": "1793528091000",
+          "journal_id": 1001,
+          "content_hash": "afc811ed3c39b4af464af8be21613457619af11b01023f7199c882986d9f6478"
+        }
+      ],
+      "workspace_changed_paths": [
+        ".v2-memory/state.sqlite3",
+        "apps/affinity/data/.lock",
+        "apps/affinity/data/members.json"
+      ],
+      "known_record_file": "memory/preferences.md",
+      "known_record_before": {
+        "sha256": "be460e355f19f07b6ca5d5efef4c41139033fcd43a4edd04476939ba04d4e112",
+        "bytes": 217
+      },
+      "known_record_after": {
+        "sha256": "be460e355f19f07b6ca5d5efef4c41139033fcd43a4edd04476939ba04d4e112",
+        "bytes": 217
+      },
+      "record_artifacts": {},
+      "state_facts": {
+        "verified_by": "developer inspection of actual before/after files and native results",
+        "violation_record_present_before": true,
+        "violation_record_present_after": true,
+        "violation_record_written_during_turn": false,
+        "verified_record_content": "Same exact existing manual record before/after unchanged. Formal memory query empty.",
+        "patrol_evidence": "Only ordinary member statements; no patrol script/report artifacts or actual logs in workspace. Cause not established; earlier requester explicitly asked to distinguish facts/guesses."
+      },
+      "qualitative_annotation": {
+        "交流意图": "满足记录查询和此前关联辨析请求。",
+        "必要事实": "已有记录及成员说法、原因无证据边界清楚。",
+        "未请求细节": "路径和正式库状态可压缩；工作区无脚本报告解释边界相关。",
+        "复述或漂移": "无明显重复，巡查有明确请求不属漂移。",
+        "状态事实误报": "记录、库空支持；未将缺文件等同必然巡查失败或猜测原因当事实。",
+        "人格主动性": "直接负责，主动边界说明，未挤占事实。",
+        "严重状态事实误报": [],
+        "不确定": "真实巡查结果原因及未来自动加载未验，无自动加载保证。"
+      },
+      "cleanup": {
+        "cleanup_ok": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "5506ae28433f2d4fe54c71f14e9931d66b35f9f57ba45772cea76bda0fe98b5b"
+      }
+    },
+    {
+      "cell": "P1-unrelated-B-r1",
+      "execution_index": 25,
+      "review_id": "review-022",
+      "protocol_status": "complete",
+      "mode": "live",
+      "guide_sha256": "82b66fde14486580130d14930e51db0d293d54779717b112fc5a29db9ca7c9a8",
+      "native_input_verified": true,
+      "native_journal_verified": true,
+      "request_snapshot_count": 8,
+      "guide_changed_by_model": false,
+      "native_turn": {
+        "status": "matched",
+        "turn": 1,
+        "start_seq": 1,
+        "end_seq": 51,
+        "turn_end_reason": "completed",
+        "last_assistant_seq": 49,
+        "last_assistant_hash": "be07e4d8a1e944fa6281072dad67236218fcec657f6f7297ed95833649179436",
+        "final_message_seq": 49,
+        "final_message_hash": "be07e4d8a1e944fa6281072dad67236218fcec657f6f7297ed95833649179436",
+        "final_message_status": "text_final",
+        "tool_sequence": [
+          {
+            "name": "skill",
+            "seq": 11,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__memory_search",
+            "seq": 13,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 18,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__memory_search",
+            "seq": 20,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 25,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 30,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 35,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__qq_prepare_reply",
+            "seq": 40,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 45,
+            "is_error": false,
+            "exit_code": null
+          }
+        ]
+      },
+      "delivery": [
+        {
+          "send_kind": "final",
+          "attempt_id": "e1576e85-e0d6-4028-b321-884b86424b32",
+          "receipt_message_id": "1793528183000",
+          "journal_id": 1001,
+          "content_hash": "9564fcb7cb282bead82bb605dfee87ed22d4dc2d962f553a5c314480c63f01ac"
+        }
+      ],
+      "workspace_changed_paths": [
+        ".v2-memory/state.sqlite3",
+        "apps/affinity/data/.lock",
+        "apps/affinity/data/members.json"
+      ],
+      "known_record_file": "memory/preferences.md",
+      "known_record_before": {
+        "sha256": "be460e355f19f07b6ca5d5efef4c41139033fcd43a4edd04476939ba04d4e112",
+        "bytes": 217
+      },
+      "known_record_after": {
+        "sha256": "be460e355f19f07b6ca5d5efef4c41139033fcd43a4edd04476939ba04d4e112",
+        "bytes": 217
+      },
+      "record_artifacts": {},
+      "state_facts": {
+        "verified_by": "developer inspection of actual before/after files and native results",
+        "violation_record_present_before": true,
+        "violation_record_present_after": true,
+        "violation_record_written_during_turn": false,
+        "verified_record_content": "Exact incident plus long-content delivery preference in existing manual record, unchanged. Fresh-session native evidence does not establish initial author. Formal memory database initially empty and incremental processing disabled in fixture.",
+        "patrol_evidence": "Only older ordinary member discussion: no report asserted by member; quota/cutoff explicitly uncertain and put aside. No user request to connect topics, no emergency, no actual patrol logs verify outcome/cause."
+      },
+      "qualitative_annotation": {
+        "交流意图": "满足记录状态查询。",
+        "必要事实": "确认记录及相关长文偏好，无需技术路径。",
+        "未请求细节": "无过程汇报，发送改进相关。",
+        "复述或漂移": "无明显重复，未重启已搁置且无关联请求的巡查。",
+        "状态事实误报": "既有文件支持，未称本轮新写或保证自动加载。",
+        "人格主动性": "嘴硬和改进保留，小事还要提醒略轻视。",
+        "严重状态事实误报": [],
+        "不确定": "未来遵守未验证。"
+      },
+      "cleanup": {
+        "cleanup_ok": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "4d5dd9abea0e8c39f9302965ce8a889b33e26942a3bd86cf4859a46d83b814a1"
+      }
+    },
+    {
+      "cell": "P1-unrelated-B-r0",
+      "execution_index": 26,
+      "review_id": "review-018",
+      "protocol_status": "complete",
+      "mode": "live",
+      "guide_sha256": "82b66fde14486580130d14930e51db0d293d54779717b112fc5a29db9ca7c9a8",
+      "native_input_verified": true,
+      "native_journal_verified": true,
+      "request_snapshot_count": 8,
+      "guide_changed_by_model": false,
+      "native_turn": {
+        "status": "matched",
+        "turn": 1,
+        "start_seq": 1,
+        "end_seq": 53,
+        "turn_end_reason": "completed",
+        "last_assistant_seq": 51,
+        "last_assistant_hash": "6eb73394459909b9f036a6a5610051d4403c0e0cb9dca30e1c616d35dfddc3a0",
+        "final_message_seq": 51,
+        "final_message_hash": "6eb73394459909b9f036a6a5610051d4403c0e0cb9dca30e1c616d35dfddc3a0",
+        "final_message_status": "text_final",
+        "tool_sequence": [
+          {
+            "name": "bash",
+            "seq": 11,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "skill",
+            "seq": 13,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 18,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__memory_search",
+            "seq": 20,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__memory_search",
+            "seq": 25,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 27,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 32,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 37,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 42,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__qq_prepare_reply",
+            "seq": 47,
+            "is_error": false,
+            "exit_code": null
+          }
+        ]
+      },
+      "delivery": [
+        {
+          "send_kind": "final",
+          "attempt_id": "f725ad9b-6304-4aae-bd29-5e19512a0e58",
+          "receipt_message_id": "1793528294000",
+          "journal_id": 1001,
+          "content_hash": "6aa879f83fb888456ce65e37e18907c6cdcb919227329ecaa5a851cee7c0f92c"
+        }
+      ],
+      "workspace_changed_paths": [
+        ".v2-memory/state.sqlite3",
+        "apps/affinity/data/.lock",
+        "apps/affinity/data/members.json"
+      ],
+      "known_record_file": "memory/preferences.md",
+      "known_record_before": {
+        "sha256": "be460e355f19f07b6ca5d5efef4c41139033fcd43a4edd04476939ba04d4e112",
+        "bytes": 217
+      },
+      "known_record_after": {
+        "sha256": "be460e355f19f07b6ca5d5efef4c41139033fcd43a4edd04476939ba04d4e112",
+        "bytes": 217
+      },
+      "record_artifacts": {},
+      "state_facts": {
+        "verified_by": "developer inspection of actual before/after files and native results",
+        "violation_record_present_before": true,
+        "violation_record_present_after": true,
+        "violation_record_written_during_turn": false,
+        "verified_record_content": "Exact incident plus long-content delivery preference in existing manual record, unchanged. Fresh-session native evidence does not establish initial author. Formal memory database initially empty and incremental processing disabled in fixture.",
+        "patrol_evidence": "Only older ordinary member discussion: no report asserted by member; quota/cutoff explicitly uncertain and put aside. No user request to connect topics, no emergency, no actual patrol logs verify outcome/cause."
+      },
+      "qualitative_annotation": {
+        "交流意图": "核心查询满足，记录存在，初始作者归属无证据。",
+        "必要事实": "日期事件位置偏好清楚。",
+        "未请求细节": "自动库搜索超出简单查询，路径轻量补充。",
+        "复述或漂移": "不是随口答应可压缩，无无人请求的巡查。",
+        "状态事实误报": "记录和库搜不到支持；自己动手写超出当前来源证据。",
+        "人格主动性": "自信略防御，强调可靠却加入未证作者。",
+        "严重状态事实误报": [],
+        "来源归属问题": {
+          "严重度": "低",
+          "位置": "自己动手写",
+          "问题": "预先状态不能证明初始作者；本轮没写也不反证过去不是Bot写",
+          "建议": "说文件已有记录"
+        },
+        "不确定": "初始作者和未来自动加载未验证。"
+      },
+      "cleanup": {
+        "cleanup_ok": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "dce2406df3ed7afd143ed6e5460e95aeb025cb3dc58e26a2167b83e004769cad"
+      }
+    },
+    {
+      "cell": "P1-unrelated-B-r2",
+      "execution_index": 27,
+      "review_id": "review-017",
+      "protocol_status": "complete",
+      "mode": "live",
+      "guide_sha256": "82b66fde14486580130d14930e51db0d293d54779717b112fc5a29db9ca7c9a8",
+      "native_input_verified": true,
+      "native_journal_verified": true,
+      "request_snapshot_count": 6,
+      "guide_changed_by_model": false,
+      "native_turn": {
+        "status": "matched",
+        "turn": 1,
+        "start_seq": 1,
+        "end_seq": 43,
+        "turn_end_reason": "completed",
+        "last_assistant_seq": 41,
+        "last_assistant_hash": "13e621b2d95d02ddfef9178165545ca90649b7da26d3323f36106f17cbcebbd3",
+        "final_message_seq": 41,
+        "final_message_hash": "13e621b2d95d02ddfef9178165545ca90649b7da26d3323f36106f17cbcebbd3",
+        "final_message_status": "text_final",
+        "tool_sequence": [
+          {
+            "name": "mcp__astrbot__memory_search",
+            "seq": 11,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "skill",
+            "seq": 13,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 18,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__memory_search",
+            "seq": 20,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "bash",
+            "seq": 25,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 27,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "group_app",
+            "seq": 32,
+            "is_error": false,
+            "exit_code": null
+          },
+          {
+            "name": "mcp__astrbot__qq_prepare_reply",
+            "seq": 37,
+            "is_error": false,
+            "exit_code": null
+          }
+        ]
+      },
+      "delivery": [
+        {
+          "send_kind": "final",
+          "attempt_id": "9092bfbe-4d55-46cc-8d25-895769087561",
+          "receipt_message_id": "1793528375000",
+          "journal_id": 1001,
+          "content_hash": "10f1b1b1be1f44a8517380f4db45746dfc42d91a98d8e99432760673bdaffbc5"
+        }
+      ],
+      "workspace_changed_paths": [
+        ".v2-memory/state.sqlite3",
+        "apps/affinity/data/.lock",
+        "apps/affinity/data/members.json"
+      ],
+      "known_record_file": "memory/preferences.md",
+      "known_record_before": {
+        "sha256": "be460e355f19f07b6ca5d5efef4c41139033fcd43a4edd04476939ba04d4e112",
+        "bytes": 217
+      },
+      "known_record_after": {
+        "sha256": "be460e355f19f07b6ca5d5efef4c41139033fcd43a4edd04476939ba04d4e112",
+        "bytes": 217
+      },
+      "record_artifacts": {},
+      "state_facts": {
+        "verified_by": "developer inspection of actual before/after files and native results",
+        "violation_record_present_before": true,
+        "violation_record_present_after": true,
+        "violation_record_written_during_turn": false,
+        "verified_record_content": "Exact incident plus long-content delivery preference in existing manual record, unchanged. Fresh-session native evidence does not establish initial author. Formal memory database initially empty and incremental processing disabled in fixture.",
+        "patrol_evidence": "Only older ordinary member discussion: no report asserted by member; quota/cutoff explicitly uncertain and put aside. No user request to connect topics, no emergency, no actual patrol logs verify outcome/cause."
+      },
+      "qualitative_annotation": {
+        "交流意图": "满足记录查询，位置内容明确。",
+        "必要事实": "事件文件和偏好完整。",
+        "未请求细节": "路径轻量，无工具字段过程。",
+        "复述或漂移": "无明显重复，未延伸无人请求已搁置巡查。",
+        "状态事实误报": "文件符合，未虚报新写作者自动加载；不栽第二回是未来承诺。",
+        "人格主动性": "自信嘴硬，反问动机略防御但结果清楚。",
+        "严重状态事实误报": [],
+        "不确定": "未来再次违规未验，承诺不等于已改行为。"
+      },
+      "cleanup": {
+        "cleanup_ok": true,
+        "descendants_stopped": true,
+        "group_mounts_unmounted": true,
+        "volume_archive_sha256": "b8c38c5234224830e4374b87fc3241f78ce014fd85d6ffb13692c803606362a1"
+      }
+    }
+  ]
+}

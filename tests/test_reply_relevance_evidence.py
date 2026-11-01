@@ -29,6 +29,7 @@ def fixture(tmp_path, *, journal_identity=("qq", "bot", "group:44"), receipt=Tru
                 direction TEXT,message_id TEXT,content_json TEXT)""")
     db.execute("INSERT INTO journal VALUES(1,?,?,?,?,?,?)", (*journal_identity, "inbound", "in-1", '{"text":"PRIVATE CHAT"}'))
     db.execute("INSERT INTO journal VALUES(2,?,?,?,?,?,?)", ("qq", "bot", "group:44", "outbound", "out-2", '{"text":"OUTBOUND CHAT"}'))
+    db.execute("INSERT INTO journal VALUES(3,?,?,?,?,?,?)", ("qq", "bot", "group:44", "outbound", "out-3", '{"text":"FINAL CHAT"}'))
     db.commit()
     db.close()
     prompt = {
@@ -86,6 +87,10 @@ def fixture(tmp_path, *, journal_identity=("qq", "bot", "group:44"), receipt=Tru
         rows.append({"turn_id": "turn-1", "session_id": "sid-1", "event": "send/receipt", "attempt_id": "a-mcp",
                      "message_id": "out-2", "action": "send_group_msg", "platform_id": "qq", "bot_id": "bot",
                      "conversation_key": "group:44", "inbound_message_id": "in-1"})
+    if receipt == "complete":
+        rows.append({"turn_id": "turn-1", "session_id": "sid-1", "event": "send/receipt", "attempt_id": "a-final",
+                     "message_id": "out-3", "action": "send_group_msg", "platform_id": "qq", "bot_id": "bot",
+                     "conversation_key": "group:44", "inbound_message_id": "in-1"})
     (audit / "events.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
     (audit / "events.jsonl").chmod(0o600)
     return session, audit, db_path
@@ -95,6 +100,12 @@ def test_exact_identity_and_native_projection_no_chat_payloads(tmp_path):
     session, audit, db = fixture(tmp_path)
     report = tool.build_report(session, audit, db, "turn-1", "in-1")
     assert report["status"] == "matched"
+    assert report["status_scope"] == "inbound_journal_and_native_prompt_identity"
+    assert report["inbound_status"] == "matched"
+    assert report["native_evidence_status"] == "complete"
+    assert "does not assert business success" in report["native_evidence_status_scope"]
+    assert report["send_receipt_journal_status"] == "incomplete"
+    assert report["overall_evidence_status"] == "incomplete"
     assert report["inbound_journal"]["status"] == "matched"
     assert [s["send_kind"] for s in report["sends"]] == ["mcp", "final"]
     assert report["sends"][0]["receipts"][0]["journal_status"] == "matched"
@@ -113,6 +124,9 @@ def test_exact_identity_and_native_projection_no_chat_payloads(tmp_path):
     assert report["native_turn"]["tool_results"][1]["call_id_hash"] == report["native_turn"]["tool_calls"][1]["call_id_hash"]
     assert report["native_turn"]["tool_results"][1]["is_error"] is True
     assert report["native_turn"]["assistant_messages"][-1]["seq"] == 19
+    assert report["native_turn"]["final_message_status"] == "text_final"
+    assert report["native_turn"]["final_message_seq"] == 19
+    assert report["native_turn"]["last_assistant_seq"] == 19
 
 
 def test_exact_identity_mismatch_is_not_joined(tmp_path):
@@ -120,6 +134,17 @@ def test_exact_identity_mismatch_is_not_joined(tmp_path):
     report = tool.build_report(session, audit, db, "turn-1", "in-1")
     assert report["status"] == "identity_mismatch"
     assert report["inbound_journal"]["status"] == "identity_mismatch"
+
+
+def test_inbound_status_is_independent_when_native_prompt_is_missing(tmp_path):
+    session, audit, db = fixture(tmp_path)
+    events = [json.loads(line) for line in session.read_text().splitlines()]
+    events = [event for event in events if event.get("type") != "user/message"]
+    session.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
+    report = tool.build_report(session, audit, db, "turn-1", "in-1")
+    assert report["status"] == "unknown"
+    assert report["inbound_status"] == "matched"
+    assert report["native_evidence_status"] == "unknown"
 
 
 def test_unknown_receipt_is_preserved_and_prepare_is_not_a_send(tmp_path):
@@ -132,6 +157,157 @@ def test_unknown_receipt_is_preserved_and_prepare_is_not_a_send(tmp_path):
     report = tool.build_report(session, audit, db, "turn-1", "in-1")
     assert [s["send_kind"] for s in report["sends"]] == ["mcp", "final"]
     assert all(s["receipts"] == [] for s in report["sends"])
+
+
+def test_full_send_receipt_and_journal_evidence_is_separate_from_identity(tmp_path):
+    session, audit, db = fixture(tmp_path, receipt="complete")
+    report = tool.build_report(session, audit, db, "turn-1", "in-1")
+    assert report["status"] == "matched"
+    assert report["send_receipt_journal_status"] == "complete"
+    assert report["overall_evidence_status"] == "complete"
+    assert all(send["receipts"][0]["journal_status"] == "matched" for send in report["sends"])
+
+
+def test_one_attempt_can_have_multiple_distinct_receipt_ids(tmp_path):
+    session, audit, db_path = fixture(tmp_path, receipt="complete")
+    db = sqlite3.connect(db_path)
+    db.execute("INSERT INTO journal VALUES(4,?,?,?,?,?,?)",
+               ("qq", "bot", "group:44", "outbound", "out-4", '{"text":"FINAL CONTINUED"}'))
+    db.commit()
+    db.close()
+    path = audit / "events.jsonl"
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    rows.append({"turn_id": "turn-1", "session_id": "sid-1", "event": "send/receipt", "attempt_id": "a-final",
+                 "message_id": "out-4", "action": "send_group_msg", "platform_id": "qq", "bot_id": "bot",
+                 "conversation_key": "group:44", "inbound_message_id": "in-1"})
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    report = tool.build_report(session, audit, db_path, "turn-1", "in-1")
+    final_attempt = next(send for send in report["sends"] if send["attempt_id"] == "a-final")
+    assert len(final_attempt["receipts"]) == 2
+    assert final_attempt["receipt_evidence_status"] == "complete"
+    assert final_attempt["duplicate_receipt_id_count"] == 0
+    assert report["send_receipt_journal_status"] == "complete"
+
+
+def test_repeated_receipt_id_is_ambiguous_and_cannot_complete(tmp_path):
+    session, audit, db = fixture(tmp_path, receipt="complete")
+    path = audit / "events.jsonl"
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    receipt = next(row for row in rows if row.get("event") == "send/receipt" and row.get("attempt_id") == "a-final")
+    rows.append(dict(receipt))
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    report = tool.build_report(session, audit, db, "turn-1", "in-1")
+    final_attempt = next(send for send in report["sends"] if send["attempt_id"] == "a-final")
+    assert final_attempt["receipt_evidence_status"] == "ambiguous"
+    assert final_attempt["duplicate_receipt_id_count"] == 1
+    assert report["send_receipt_journal_status"] == "incomplete"
+    assert report["overall_evidence_status"] == "incomplete"
+
+
+def test_cli_success_exit_does_not_claim_full_delivery_evidence(tmp_path):
+    session, audit, db = fixture(tmp_path)
+    output = tmp_path / "report.json"
+    exit_code = tool.main(["--session", str(session), "--audit", str(audit), "--journal", str(db),
+                           "--turn-id", "turn-1", "--inbound-message-id", "in-1", "--output", str(output)])
+    report = json.loads(output.read_text())
+    assert exit_code == 0
+    assert report["status_scope"] == "inbound_journal_and_native_prompt_identity"
+    assert report["send_receipt_journal_status"] == "incomplete"
+    assert report["overall_evidence_status"] == "incomplete"
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [([], "empty"), ([{"type": "tool-call", "id": "last", "name": "tool", "arguments": "{}"}], "tool_only")],
+)
+def test_final_message_classifies_empty_and_tool_only_tail(tmp_path, content, expected):
+    session, audit, db = fixture(tmp_path)
+    events = [json.loads(line) for line in session.read_text().splitlines()]
+    event = next(item for item in events if item.get("seq") == 19)
+    event["data"]["message"]["content"] = content
+    session.write_text("".join(json.dumps(item) + "\n" for item in events), encoding="utf-8")
+    report = tool.build_report(session, audit, db, "turn-1", "in-1")
+    assert report["native_turn"]["final_message_status"] == expected
+    assert report["native_turn"]["final_message_seq"] is None
+    assert report["native_turn"]["final_message_hash"] is None
+    assert report["native_turn"]["last_assistant_seq"] == 19
+
+
+@pytest.mark.parametrize(("reason", "expected"), [("aborted", "terminal_aborted"), ("error", "terminal_error")])
+def test_noncompleted_turn_never_classifies_text_as_final(tmp_path, reason, expected):
+    session, audit, db = fixture(tmp_path)
+    events = [json.loads(line) for line in session.read_text().splitlines()]
+    event = next(item for item in events if item.get("seq") == 21)
+    event["data"]["reason"]["kind"] = reason
+    session.write_text("".join(json.dumps(item) + "\n" for item in events), encoding="utf-8")
+    report = tool.build_report(session, audit, db, "turn-1", "in-1")
+    assert report["native_turn"]["final_message_status"] == expected
+    assert report["native_turn"]["final_message_seq"] is None
+    assert report["native_turn"]["final_message_hash"] is None
+    assert report["native_turn"]["last_assistant_seq"] == 19
+
+
+def test_whitespace_only_text_blocks_are_empty_after_trim(tmp_path):
+    session, audit, db = fixture(tmp_path)
+    events = [json.loads(line) for line in session.read_text().splitlines()]
+    event = next(item for item in events if item.get("seq") == 19)
+    event["data"]["message"]["content"] = [
+        {"type": "text", "text": "  \n "}, {"type": "text", "text": ""}, {"type": "text", "text": "  "}
+    ]
+    session.write_text("".join(json.dumps(item) + "\n" for item in events), encoding="utf-8")
+    report = tool.build_report(session, audit, db, "turn-1", "in-1")
+    assert report["native_turn"]["final_message_status"] == "empty"
+    assert report["native_turn"]["final_message_seq"] is None
+    assert report["native_turn"]["last_assistant_seq"] == 19
+
+
+def test_multiple_text_blocks_use_trimmed_nonempty_content(tmp_path):
+    session, audit, db = fixture(tmp_path)
+    events = [json.loads(line) for line in session.read_text().splitlines()]
+    event = next(item for item in events if item.get("seq") == 19)
+    event["data"]["message"]["content"] = [
+        {"type": "text", "text": "  first  "}, {"type": "text", "text": "  "},
+        {"type": "text", "text": "second\n"}
+    ]
+    session.write_text("".join(json.dumps(item) + "\n" for item in events), encoding="utf-8")
+    report = tool.build_report(session, audit, db, "turn-1", "in-1")
+    assert report["native_turn"]["final_message_status"] == "text_final"
+    assert report["native_turn"]["final_message_seq"] == 19
+
+
+def test_narration_then_tool_call_clears_final_candidate_even_after_tool_result(tmp_path):
+    session, audit, db = fixture(tmp_path)
+    events = [json.loads(line) for line in session.read_text().splitlines()]
+    assistant = next(item for item in events if item.get("seq") == 19)
+    assistant["data"]["message"]["content"] = [
+        {"type": "text", "text": "narration"},
+        {"type": "tool-call", "id": "tail-call", "name": "follow_up", "arguments": "{}"},
+    ]
+    insertion = events.index(assistant) + 1
+    events[insertion:insertion] = [
+        {"seq": 19.1, "type": "tool/call", "data": {"turn": 7, "step": 3, "callId": "tail-call", "name": "follow_up", "arguments": "{}"}},
+        {"seq": 19.2, "type": "tool/result", "data": {"turn": 7, "step": 3, "message": {"toolCallId": "tail-call", "isError": False, "content": []}}},
+    ]
+    session.write_text("".join(json.dumps(item) + "\n" for item in events), encoding="utf-8")
+    report = tool.build_report(session, audit, db, "turn-1", "in-1")
+    assert report["native_turn"]["final_message_status"] == "tool_only"
+    assert report["native_turn"]["final_message_seq"] is None
+    assert report["native_turn"]["last_assistant_seq"] == 19
+
+
+def test_cross_session_receipt_cannot_complete_send_evidence(tmp_path):
+    session, audit, db = fixture(tmp_path, receipt="complete")
+    path = audit / "events.jsonl"
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    rows = [row for row in rows if not (row.get("event") == "send/receipt" and row.get("attempt_id") == "a-final")]
+    rows.append({"turn_id": "turn-1", "session_id": "other-session", "event": "send/receipt",
+                 "attempt_id": "a-final", "message_id": "out-3", "action": "send_group_msg",
+                 "platform_id": "qq", "bot_id": "bot", "conversation_key": "group:44", "inbound_message_id": "in-1"})
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    report = tool.build_report(session, audit, db, "turn-1", "in-1")
+    final = next(send for send in report["sends"] if send["send_kind"] == "final")
+    assert final["receipts"] == []
+    assert report["send_receipt_journal_status"] == "incomplete"
 
 
 def test_latest_prior_system_and_header_ignore_future_events(tmp_path):
@@ -214,8 +390,14 @@ def test_turn_without_its_end_does_not_borrow_next_turn(tmp_path):
     session.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
     report = tool.build_report(session, audit, db, "turn-1", "in-1")
     assert report["native_turn"]["status"] == "incomplete"
+    assert report["native_turn"]["final_message_status"] == "no_terminal"
+    assert report["native_turn"]["final_message_seq"] is None
+    assert report["native_turn"]["last_assistant_seq"] == 19
+    assert report["native_evidence_status"] == "incomplete"
+    assert report["status"] == "matched"
+    assert report["overall_evidence_status"] == "incomplete"
     assert report["native_turn"]["tool_calls"] == []
-    assert report["native_turn"]["assistant_messages"] == []
+    assert [row["seq"] for row in report["native_turn"]["assistant_messages"]] == [8, 14, 19]
     assert report["native_context_timeline"]["status"] == "unknown"
 
 

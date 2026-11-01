@@ -73,6 +73,14 @@ def content_text(message: dict) -> str:
                      if isinstance(block, dict) and block.get("type") == "text")
 
 
+def assistant_has_final_text(message: dict) -> bool:
+    content = message.get("content", [])
+    return isinstance(content, list) and any(
+        isinstance(block, dict) and block.get("type") == "text"
+        and isinstance(block.get("text"), str) and block["text"].strip()
+        for block in content)
+
+
 def find_native_prompt(events: list[dict], journal_id: int, identity: dict) -> dict:
     matches = []
     for event in events:
@@ -141,7 +149,9 @@ def native_turn_evidence(events: list[dict], prompt_seq: int | None) -> dict:
                      and isinstance(event.get("seq"), int) and event["seq"] < prompt_seq),
                     key=lambda event: event["seq"])
     if not starts:
-        return {"status": "unknown"}
+        return {"status": "unknown", "final_message_status": "no_terminal",
+                "last_assistant_seq": None, "last_assistant_hash": None,
+                "final_message_seq": None, "final_message_hash": None}
     # The native loop opens the turn before appending system/user messages.
     # Select the enclosing start, never the next turn after this prompt.
     start = starts[-1]
@@ -153,16 +163,28 @@ def native_turn_evidence(events: list[dict], prompt_seq: int | None) -> dict:
                       and event.get("data", {}).get("turn") == turn), None)
     if prior_end is not None:
         return {"status": "unknown", "reason": "prompt_outside_turn", "tool_calls": [], "tool_results": [],
-                "assistant_messages": [], "final_message_seq": None, "final_message_hash": None}
+                "assistant_messages": [], "final_message_seq": None, "final_message_hash": None,
+                "last_assistant_seq": None, "last_assistant_hash": None,
+                "final_message_status": "no_terminal"}
     end = next((event for event in sorted(events, key=lambda item: item.get("seq", -1))
                 if event.get("type") == "turn/end" and event.get("seq", -1) > prompt_seq
                 and (next_start is None or event.get("seq", -1) < next_start)
                 and event.get("data", {}).get("turn") == turn), None)
     if end is None:
+        open_events = [event for event in events if event.get("seq", -1) > prompt_seq
+                       and (next_start is None or event.get("seq", -1) < next_start)
+                       and event.get("type") == "assistant/message"
+                       and event.get("data", {}).get("turn") == turn]
+        last_assistant = open_events[-1] if open_events else None
         return {"status": "incomplete", "turn": turn, "start_seq": start.get("seq"),
                 "end_seq": None, "tool_calls": [], "tool_results": [],
-                "assistant_messages": [], "final_message_seq": None, "final_message_hash": None,
-                "turn_end_reason": None}
+                "assistant_messages": [{"seq": e.get("seq"), "message_hash": digest(e.get("data", {}).get("message")),
+                                        "content_types": [b.get("type") for b in e.get("data", {}).get("message", {}).get("content", [])
+                                                          if isinstance(b, dict)]} for e in open_events],
+                "last_assistant_seq": last_assistant.get("seq") if last_assistant else None,
+                "last_assistant_hash": digest(last_assistant.get("data", {}).get("message")) if last_assistant else None,
+                "final_message_seq": None, "final_message_hash": None,
+                "turn_end_reason": None, "final_message_status": "no_terminal"}
     ceiling = end["seq"]
     in_turn = [event for event in events if start.get("seq", 0) <= event.get("seq", -1) <= ceiling]
     calls = []
@@ -188,13 +210,36 @@ def native_turn_evidence(events: list[dict], prompt_seq: int | None) -> dict:
                     calls.append({"call_id_hash": call_id_hash, "tool_name": block.get("name"),
                                   "seq": event.get("seq"), "arguments_hash": digest(block.get("arguments"))})
     results = [event for event in in_turn if event.get("type") == "tool/result"]
-    assistant = [event for event in in_turn if event.get("type") == "assistant/message"]
+    assistant = [event for event in in_turn if event.get("type") == "assistant/message"
+                 and event.get("data", {}).get("turn") == turn]
     final = assistant[-1] if assistant else None
+    final_text = False
+    final_text_assistant = None
+    for event in in_turn:
+        if event.get("type") == "assistant/message" and event.get("data", {}).get("turn") == turn:
+            message = event.get("data", {}).get("message", {})
+            final_text = isinstance(message, dict) and assistant_has_final_text(message)
+            final_text_assistant = event if final_text else None
+        elif event.get("type") == "tool/call" and event.get("data", {}).get("turn") == turn:
+            final_text = False
+            final_text_assistant = None
+    end_reason = _end_reason_kind(end)
+    if end_reason != "completed":
+        final_status = f"terminal_{end_reason}"
+    elif final is None:
+        final_status = "no_assistant"
+    elif final_text:
+        final_status = "text_final"
+    elif final is not None and any(isinstance(block, dict) and block.get("type") == "tool-call"
+                                   for block in final.get("data", {}).get("message", {}).get("content", [])):
+        final_status = "tool_only"
+    else:
+        final_status = "empty"
     return {
         "status": "matched",
         "turn": turn, "start_seq": start.get("seq"),
         "end_seq": end.get("seq") if end else None,
-        "turn_end_reason": _end_reason_kind(end),
+        "turn_end_reason": end_reason,
         "tool_calls": calls,
         "tool_results": [{"seq": e.get("seq"),
                           "call_id_hash": digest(e.get("data", {}).get("message", {}).get("toolCallId")),
@@ -204,8 +249,11 @@ def native_turn_evidence(events: list[dict], prompt_seq: int | None) -> dict:
         "assistant_messages": [{"seq": e.get("seq"), "message_hash": digest(e.get("data", {}).get("message")),
                                 "content_types": [b.get("type") for b in e.get("data", {}).get("message", {}).get("content", [])
                                                   if isinstance(b, dict)]} for e in assistant],
-        "final_message_seq": final.get("seq") if final else None,
-        "final_message_hash": digest(final.get("data", {}).get("message")) if final else None,
+        "last_assistant_seq": final.get("seq") if final else None,
+        "last_assistant_hash": digest(final.get("data", {}).get("message")) if final else None,
+        "final_message_seq": final_text_assistant.get("seq") if final_status == "text_final" else None,
+        "final_message_hash": digest(final_text_assistant.get("data", {}).get("message")) if final_status == "text_final" else None,
+        "final_message_status": final_status,
     }
 
 
@@ -359,6 +407,18 @@ def build_report(session_path: Path, audit_dir: Path, journal_path: Path,
                         "content_hashes": [digest(json.loads(m["content_json"])) for m in exact],
                         "cross_conversation_matches": len(matches) - len(exact)})
         for attempt in attempts.values():
+            receipt_ids = [str(receipt["message_id"]) for receipt in attempt["receipts"]
+                           if receipt.get("message_id") is not None]
+            duplicate_ids = {message_id for message_id in receipt_ids if receipt_ids.count(message_id) > 1}
+            attempt["duplicate_receipt_id_count"] = len(duplicate_ids)
+            if duplicate_ids:
+                attempt["receipt_evidence_status"] = "ambiguous"
+            elif (attempt["status"] in {"returned", "failed"} and attempt["receipts"] and
+                  all(receipt["journal_status"] == "matched" for receipt in attempt["receipts"])):
+                attempt["receipt_evidence_status"] = "complete"
+            else:
+                attempt["receipt_evidence_status"] = "incomplete"
+        for attempt in attempts.values():
             evidence.append(attempt)
         turn_seq = next((e.get("seq") for e in events if e.get("type") == "user/message"
                          and e.get("seq") == native.get("seq")), None)
@@ -366,13 +426,37 @@ def build_report(session_path: Path, audit_dir: Path, journal_path: Path,
         context_timeline = (native_context_timeline(events, turn_evidence["start_seq"], turn_evidence["end_seq"],
                                                     turn_evidence["turn"])
                             if turn_evidence.get("status") == "matched" else {"status": "unknown", "requests": []})
-        status = "matched" if len(inbound_exact) == 1 and native.get("status") == "matched" else "unknown"
-        if inbound_mismatch:
+        inbound_status = "matched" if len(inbound_exact) == 1 else (
+            "ambiguous" if len(inbound_exact) > 1 else ("identity_mismatch" if inbound_mismatch else "unknown"))
+        send_status = "complete" if attempts and all(
+            attempt["receipt_evidence_status"] == "complete" for attempt in attempts.values()
+        ) else ("unknown" if not attempts else "incomplete")
+        if native.get("status") != "matched":
+            native_status = native.get("status", "unknown")
+        elif turn_evidence.get("status") == "matched":
+            native_status = "complete"
+        else:
+            native_status = turn_evidence.get("status", "unknown")
+        overall_status = "complete" if (inbound_status == "matched" and native_status == "complete"
+                                          and send_status == "complete") else "incomplete"
+        # Keep v1's top-level status semantics for existing consumers, but name
+        # its scope explicitly. It joins inbound Journal and native prompt
+        # identity only; terminal and send evidence have separate fields.
+        status = "matched" if inbound_status == "matched" and native.get("status") == "matched" else "unknown"
+        if inbound_status == "identity_mismatch":
             status = "identity_mismatch"
-        if len(inbound) > 1 or len(inbound_exact) > 1 or native.get("status") == "ambiguous":
+        if inbound_status == "ambiguous" or native.get("status") == "ambiguous":
             status = "ambiguous"
         return {
             "schema": "reply-relevance-evidence.v1", "status": status,
+            "status_scope": "inbound_journal_and_native_prompt_identity",
+            "cli_exit_scope": "top_level_status_only; does not prove native completion or send delivery",
+            "inbound_status": inbound_status,
+            "native_evidence_status": native_status,
+            "native_evidence_status_scope": "prompt identity and native turn terminal observed; terminal reason does not assert business success",
+            "send_receipt_journal_status": send_status,
+            "send_receipt_journal_scope": "each attempt has a terminal event and one or more distinct receipt IDs, each joined to exactly one outbound Journal row; complete means evidence is accounted for, not client-visible delivery or business success",
+            "overall_evidence_status": overall_status,
             "snapshot_note": "Native Session projection; not an HTTP capture and not an atomic online snapshot.",
             "turn_id": turn_id, "session_id": session_id, "inbound_message_id": inbound_id,
             "identity": identity,
@@ -410,6 +494,8 @@ def main(argv=None) -> int:
     parser.add_argument("--turn-id", required=True)
     parser.add_argument("--inbound-message-id", required=True)
     parser.add_argument("--output", required=True, type=Path, help="new private output file")
+    parser.epilog = ("Exit 0 means only that the inbound identity matched. It does not certify native turn completion, "
+                     "platform delivery, or complete send/receipt/Journal evidence; inspect the JSON status fields.")
     args = parser.parse_args(argv)
     if args.session.name != "session.v4.jsonl":
         parser.error("--session must name native session.v4.jsonl")
