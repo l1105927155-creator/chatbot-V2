@@ -1,8 +1,8 @@
 # 当前实施入口（QQ 交流表达阶段）
 
-当前评估：[DeepSeek V4.1 Flash 与 GPT-6.1 Terra 群聊表达质量隔离对照](docs/phases/group-chat-model-comparison-2026-11-01.md)。仅比较真实表达效果，指南/Persona/工具和初始事实保持等价；不把连通性当质量改善。注意前一提交记录生产七群和 Owner 已切 Terra，真实效果尚未验收；本阶段不再操作生产路由或发送真实 QQ 实验消息，需先确认线上现状和旧路由恢复路径。
+当前评估：[DeepSeek V4.1 Flash 与 GPT-6.1 Terra 群聊表达质量隔离对照](docs/phases/group-chat-model-comparison-2026-11-01.md)。仅比较真实表达效果，指南/Persona/工具和初始事实保持等价；不把连通性当质量改善。**用户已确认当前生产使用 DS Flash**；Terra 为隔离对照候选。开发助理在实验前只读核对当前模型，不修改生产路由或发送真实 QQ 实验消息。
 
-当前追加：[Terra Medium 与订阅代理](docs/terra-proxy-validation-2026-11-01.md)。订阅请求及凭据刷新单独使用本机 Clash，`wb` 与网页抓取保留直连；普通群及沙箱隔离双模型实测通过。生产七群与 Owner 私聊及新会话默认模型已切换，运行健康；真实 QQ 群效果和长期令牌刷新待验证。
+此前临时调试：[Terra Medium 与订阅代理](docs/terra-proxy-validation-2026-11-01.md)。订阅请求及凭据刷新单独使用本机 Clash，`wb` 与网页抓取保留直连；普通群及沙箱隔离双模型调用通过。该记录中的七群、Owner 私聊及新会话路由切至 Terra 属于**当时的临时调试状态**，不代表当前生产配置；据用户确认现已使用 DS Flash。真实 QQ 群表达效果和长期令牌刷新仍待验证。
 
 **当前核心目标：Bot 的聊天表达质量取得稳定、可验证的改善。** 仅有排查、实验完成或工具测试通过不算整改成功。第三阶段执行：[表达质量改善候选与双阶段验收](docs/phases/group-chat-expression-improvement-2026-11-01.md)，先分别验证结果表达选择与已发送／final 承接，再筛选值得实施的最小候选。无正向证据不部署；本会话助理验收代码，用户验收真实群聊效果。
 
