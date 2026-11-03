@@ -17,7 +17,32 @@ const SAFE_FAILURE_CODES = new Set(['RATE_LIMITED', 'UNAUTHORIZED', 'NOT_FOUND',
   'MODEL_ERROR', 'MODEL_OUTPUT_LIMIT', 'MEMORY_TIMEOUT', 'MEMORY_RESPONSE_TOO_LARGE',
   'MODEL_TIMEOUT', 'MODEL_TRANSPORT_ERROR', 'MEMORY_PREPARE_TIMEOUT',
   'MODEL_INVALID_RESPONSE', 'CONTEXT_WINDOW_EXCEEDED', 'INVALID_CREDENTIAL', 'QUOTA_EXCEEDED',
-  'MISSING_CREDENTIAL', 'NO_ADAPTER', 'EMPTY_RESPONSE', 'MEMORY_CAPACITY_CHANGED'])
+  'MISSING_CREDENTIAL', 'NO_ADAPTER', 'EMPTY_RESPONSE', 'MEMORY_CAPACITY_CHANGED',
+  'MEMORY_CAPACITY_UNKNOWN'])
+
+function validCapacity(value) {
+  return Number.isSafeInteger(value) && value > 0
+}
+
+async function memoryCapacity(ctx, provider, model, info, signal) {
+  const contextWindow = info.context?.contextWindow
+  if (!validCapacity(contextWindow)) return undefined
+  if (validCapacity(info.defaultMaxTokens)) {
+    return { contextWindow, defaultMaxTokens: info.defaultMaxTokens,
+      capacitySource: 'native_adapter' }
+  }
+
+  // Some provider catalogs expose a per-model output limit without
+  // configuring it as the chat request default. Ask the route-owning plugin
+  // through its public Cordis service, so that value remains memory-only.
+  const catalog = ctx.reflect?.get?.('v2SubscriptionMemoryCapacity')
+  if (typeof catalog?.outputLimit !== 'function') return undefined
+  const limit = await catalog.outputLimit(provider, model, signal)
+  if (!limit || limit.provider !== provider || limit.model !== model
+      || !validCapacity(limit.maxOutputTokens)) return undefined
+  return { contextWindow, defaultMaxTokens: limit.maxOutputTokens,
+    capacitySource: 'native_subscription_catalog' }
+}
 
 function validString(value, max) {
   return typeof value === 'string' && value.length > 0 && value.length <= max
@@ -148,12 +173,13 @@ export async function apply(ctx, config = {}) {
               }, prepareTimeoutMs)
             }),
           ]).finally(() => clearTimeout(prepareTimer))
-          send({ ok: true, provider: info.provider, model: info.id,
-            ...(Number.isSafeInteger(info.context?.contextWindow) && info.context.contextWindow > 0
-              ? { contextWindow: info.context.contextWindow } : {}),
-            ...(Number.isSafeInteger(info.defaultMaxTokens) && info.defaultMaxTokens > 0
-              ? { defaultMaxTokens: info.defaultMaxTokens } : {}),
-            capacitySource: 'native_adapter' })
+          const capacity = await memoryCapacity(ctx, request.provider, request.model, info,
+            controller.signal)
+          if (!capacity) {
+            send({ ok: false, code: 'MEMORY_CAPACITY_UNKNOWN' })
+            return
+          }
+          send({ ok: true, provider: info.provider, model: info.id, ...capacity })
           return
         }
         if (progressEnabled) {
@@ -165,8 +191,42 @@ export async function apply(ctx, config = {}) {
         let finish
         let usage = null
         let prepareTimer
-        const prepared = await Promise.race([
-          ctx.llm.prepareCall({ provider: request.provider, model: request.model }, controller.signal),
+        const preflight = (async () => {
+          const info = await ctx.llm.resolveModelInfo(request.provider, request.model, controller.signal)
+          const capacity = await memoryCapacity(ctx, request.provider, request.model, info,
+            controller.signal)
+          if (!capacity) return { failure: 'MEMORY_CAPACITY_UNKNOWN' }
+          if (expected !== undefined
+              && (expected.contextWindow !== capacity.contextWindow
+                || expected.defaultMaxTokens !== capacity.defaultMaxTokens)) {
+            return { failure: 'MEMORY_CAPACITY_CHANGED' }
+          }
+          const useCatalogOutputLimit = capacity.capacitySource === 'native_subscription_catalog'
+          const prepared = await ctx.llm.prepareCall({ provider: request.provider, model: request.model,
+            ...(useCatalogOutputLimit ? { maxTokens: capacity.defaultMaxTokens } : {}) }, controller.signal)
+          const preparedCapacity = {
+            contextWindow: prepared.context?.contextWindow ?? null,
+            defaultMaxTokens: prepared.config.maxTokens ?? null,
+          }
+          if (preparedCapacity.contextWindow !== capacity.contextWindow
+              || preparedCapacity.defaultMaxTokens !== capacity.defaultMaxTokens
+              || (expected !== undefined
+              && (expected.contextWindow !== preparedCapacity.contextWindow
+                || expected.defaultMaxTokens !== preparedCapacity.defaultMaxTokens))) {
+            return { failure: 'MEMORY_CAPACITY_CHANGED' }
+          }
+          if (useCatalogOutputLimit) {
+            const currentCapacity = await memoryCapacity(ctx, request.provider, request.model, info,
+              controller.signal)
+            if (!currentCapacity || currentCapacity.contextWindow !== capacity.contextWindow
+                || currentCapacity.defaultMaxTokens !== capacity.defaultMaxTokens) {
+              return { failure: 'MEMORY_CAPACITY_CHANGED' }
+            }
+          }
+          return { info, capacity, prepared }
+        })()
+        const preflightResult = await Promise.race([
+          preflight,
           new Promise((_, reject) => {
             prepareTimer = setTimeout(() => {
               controller.abort(new Error('memory model preparation timed out'))
@@ -176,15 +236,10 @@ export async function apply(ctx, config = {}) {
             }, prepareTimeoutMs)
           }),
         ]).finally(() => clearTimeout(prepareTimer))
-        const capacity = {
-          contextWindow: prepared.context?.contextWindow ?? null,
-          defaultMaxTokens: prepared.config.maxTokens ?? null,
+        if (preflightResult.failure) {
+          send({ ok: false, code: preflightResult.failure }); return
         }
-        if (expected !== undefined
-            && (expected.contextWindow !== capacity.contextWindow
-              || expected.defaultMaxTokens !== capacity.defaultMaxTokens)) {
-          send({ ok: false, code: 'MEMORY_CAPACITY_CHANGED' }); return
-        }
+        const { prepared } = preflightResult
         if (progressEnabled) {
           emitProgress('waiting_model', false, true)
         }

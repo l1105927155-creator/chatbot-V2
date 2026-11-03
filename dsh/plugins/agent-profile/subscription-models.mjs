@@ -247,6 +247,12 @@ class ScopedSubscriptionAdapter extends LlmAdapter {
     if (!this.current) return Promise.reject(new Error('Codex subscription is unavailable'))
     return this.current.resolveModel(provider, model, signal).then(info => this.withModelDefault(provider, model, info))
   }
+  memoryOutputLimit(provider, model) {
+    if (provider !== PROVIDER || !this.current) return undefined
+    const descriptor = this.current.current().models.getModel(provider, model)
+    if (!descriptor || !Number.isSafeInteger(descriptor.maxTokens) || descriptor.maxTokens <= 0) return undefined
+    return { provider, model, maxOutputTokens: descriptor.maxTokens }
+  }
   prepareCall(provider, model, signal) {
     if (!this.current) return Promise.reject(new Error('Codex subscription is unavailable'))
     return this.current.prepareCall(provider, model, signal).then(prepared => ({
@@ -338,6 +344,7 @@ export async function installSubscriptionModels(ctx, { catalogPath, credentials 
   return {
     async flush() { clearTimeout(timer); queued = queued.then(apply, apply); await queued },
     get accountScope() { return currentScope },
+    memoryOutputLimit(provider, model) { return adapter.memoryOutputLimit(provider, model) },
     async dispose() { stopped = true; clearTimeout(timer); clearInterval(poller); watcher?.close(); await queued; registration?.(); registration = undefined; adapter.current = undefined; await proxyAgent?.close() },
   }
 }
@@ -348,5 +355,8 @@ export const inject = ['llm', 'credentials']
 export async function apply(ctx) {
   if (!process.env.V2_SHARED_MODELS_PROFILE) return
   const installed = await installSubscriptionModels(ctx)
-  ctx.effect(() => () => installed.dispose())
+  const unprovide = await ctx.provide('v2SubscriptionMemoryCapacity', {
+    outputLimit(provider, model) { return installed.memoryOutputLimit(provider, model) },
+  })
+  ctx.effect(() => async () => { await unprovide(); await installed.dispose() })
 }

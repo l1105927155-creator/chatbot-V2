@@ -1,6 +1,6 @@
 // Exercise the native DSH LLM service without creating an Agent or Session.
 import assert from 'node:assert/strict'
-import { mkdtempSync, chmodSync, statSync } from 'node:fs'
+import { mkdtempSync, chmodSync, statSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { once } from 'node:events'
@@ -27,6 +27,7 @@ let capacitySignal
 let waitForCapacityAbort = false
 let capacityStarted
 let capacityAborted = false
+let nativeOutputLimit
 
 class ScriptedAdapter extends LlmAdapter {
   async resolveModel(provider, model, signal) {
@@ -39,6 +40,10 @@ class ScriptedAdapter extends LlmAdapter {
       }, { once: true }))
     }
     return { provider, id: model, name: model, ...modelInfo }
+  }
+  async memoryOutputLimit(provider, model) {
+    if (nativeOutputLimit === undefined) return undefined
+    return { provider, model, maxOutputTokens: nativeOutputLimit }
   }
   async *stream(options) {
     streamCalls++
@@ -60,6 +65,11 @@ class ScriptedAdapter extends LlmAdapter {
 const ctx = new Context()
 await ctx.plugin(LlmRuntime)
 ctx.llm.registerAdapter(['subscribed-model'], new ScriptedAdapter())
+const unprovideCapacity = await ctx.provide('v2SubscriptionMemoryCapacity', {
+  outputLimit(provider, model, signal) {
+    return ctx.llm.registration(provider).adapter.memoryOutputLimit(provider, model, signal)
+  },
+})
 const on = ctx.on.bind(ctx)
 ctx.on = (event, handler, ...args) => {
   if (event === 'dispose') disposeHandlers.push(handler)
@@ -140,8 +150,33 @@ assert.deepEqual(await request({ action: 'capacity', provider: base.provider, mo
 assert.equal(capacitySignal.aborted, false)
 modelInfo = {}
 assert.deepEqual(await request({ action: 'capacity', provider: base.provider, model: base.model, token }), {
-  ok: true, provider: base.provider, model: base.model, capacitySource: 'native_adapter',
+  ok: false, code: 'MEMORY_CAPACITY_UNKNOWN',
 })
+modelInfo = { context: { contextWindow: 128_000 } }
+nativeOutputLimit = 20_000
+assert.deepEqual(await request({ action: 'capacity', provider: base.provider, model: base.model, token }), {
+  ok: true, provider: base.provider, model: base.model, contextWindow: 128_000,
+  defaultMaxTokens: 20_000, capacitySource: 'native_subscription_catalog',
+})
+const beforeMemoryOnlyCap = streamCalls
+assert.equal((await request({ ...base, token, expectedCapacity: {
+  contextWindow: 128_000, defaultMaxTokens: 20_000,
+} })).ok, true)
+assert.equal(seen.maxTokens, 20_000, 'catalog output ceiling is explicit only on memory calls')
+nativeOutputLimit = 21_000
+assert.deepEqual(await request({ ...base, token, expectedCapacity: {
+  contextWindow: 128_000, defaultMaxTokens: 20_000,
+} }), { ok: false, code: 'MEMORY_CAPACITY_CHANGED' })
+assert.equal(streamCalls, beforeMemoryOnlyCap + 1, 'changed native output ceiling is rejected before streaming')
+nativeOutputLimit = 0
+assert.deepEqual(await request({ action: 'capacity', provider: base.provider, model: base.model, token }), {
+  ok: false, code: 'MEMORY_CAPACITY_UNKNOWN',
+})
+nativeOutputLimit = Number.MAX_SAFE_INTEGER + 1
+assert.deepEqual(await request({ action: 'capacity', provider: base.provider, model: base.model, token }), {
+  ok: false, code: 'MEMORY_CAPACITY_UNKNOWN',
+})
+nativeOutputLimit = undefined
 modelInfo = { context: { contextWindow: 128_000 }, defaultMaxTokens: 20_000 }
 
 waitForCapacityAbort = true
@@ -156,6 +191,21 @@ await startedCapacity
 cancelledLookup.destroy()
 for (let i = 0; i < 100 && !capacityAborted; i++) await new Promise(resolve => setTimeout(resolve, 5))
 assert.equal(capacityAborted, true)
+waitForCapacityAbort = false
+capacityStarted = undefined
+
+const timeoutSocketPath = join(directory, 'timeout.sock')
+await apply(ctx, { socketPath: timeoutSocketPath, token, testPrepareTimeoutMs: 50 })
+waitForCapacityAbort = true
+capacityAborted = false
+let announceConsolidateStarted
+const startedConsolidate = new Promise(resolve => { announceConsolidateStarted = resolve })
+capacityStarted = announceConsolidateStarted
+assert.deepEqual(await request({ ...base, token }, timeoutSocketPath), {
+  ok: false, code: 'MEMORY_PREPARE_TIMEOUT',
+})
+await startedConsolidate
+assert.equal(capacityAborted, true, 'a hung consolidation metadata lookup is aborted by the total preflight deadline')
 waitForCapacityAbort = false
 capacityStarted = undefined
 
@@ -203,6 +253,8 @@ for (const code of ['CONTEXT_WINDOW_EXCEEDED', 'INVALID_CREDENTIAL', 'QUOTA_EXCE
 }
 
 for (const dispose of disposeHandlers) await dispose?.()
+await unprovideCapacity()
 assert.equal(statSync(directory).mode & 0o777, 0o700)
+rmSync(directory, { recursive: true, force: true })
 console.log(JSON.stringify({ routedThroughNativeLlm: true, selectedRoute: true,
   noSessionOrTools: true, hostPromptCalls: promptCalls, disposed: true }))

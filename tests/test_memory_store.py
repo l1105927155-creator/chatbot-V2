@@ -1,5 +1,6 @@
 import importlib.util
 import os
+import shutil
 import stat
 from pathlib import Path
 
@@ -45,6 +46,42 @@ def test_one_message_can_support_several_quotes_and_identical_quotes_are_dedupli
     result = store.commit(0, 0, 1, [item], {})
     assert result["memories"][0]["claims"][0]["sources"] == [first, second]
     assert store.snapshot()["memories"] == result["memories"]
+
+
+def test_six_claim_sources_survive_snapshot_export_and_database_import(tmp_path):
+    path = tmp_path / "source" / "memory.sqlite3"
+    store = MemoryStore(path, GROUP)
+    store.initialize(0)
+    sources = [{"journal_id": index, "quote": f"证据{index}",
+                "actor_id": "qq:10", "direction": "inbound"}
+               for index in range(1, 7)]
+    result = store.commit(0, 0, 7, [change(
+        source_ids=list(range(1, 7)),
+        claims=[{"text": "六条消息共同支撑的理解", "sources": sources}])], {})
+    expected = result["memories"][0]["claims"][0]["sources"]
+    assert len(expected) == 6
+    assert store.snapshot()["memories"][0]["claims"][0]["sources"] == expected
+
+    exported = store.export()
+    assert exported["memories"][0]["claims"][0]["sources"] == expected
+    imported_path = tmp_path / "imported" / "memory.sqlite3"
+    imported_path.parent.mkdir(mode=0o700)
+    shutil.copy2(path, imported_path)
+    imported = MemoryStore(imported_path, GROUP)
+    assert imported.snapshot() == store.snapshot()
+    assert imported.export()["memories"][0]["claims"][0]["sources"] == expected
+
+
+def test_large_claim_evidence_still_obeys_128kib_limit(tmp_path):
+    store = MemoryStore(tmp_path / "memory.sqlite3", GROUP)
+    store.initialize(0)
+    claims = [{"text": f"认识{claim_index}", "sources": [
+        {"journal_id": 1, "quote": f"{claim_index}-{source_index}:" + "x" * 300,
+         "actor_id": "qq:10", "direction": "inbound"}
+        for source_index in range(22)]} for claim_index in range(20)]
+    with pytest.raises(ValueError, match="claim evidence is too large"):
+        store.commit(0, 0, 1, [change(source_ids=[1], claims=claims)], {})
+    assert store.snapshot()["cursor"] == 0
 
 
 def test_multiple_quotes_cannot_assign_conflicting_identity_to_one_message(tmp_path):
@@ -459,3 +496,32 @@ def test_sidecar_hardlinks_are_rejected(tmp_path, suffix):
     with pytest.raises(PermissionError):
         MemoryStore(path, GROUP)
     assert external.read_bytes() == b"keep"
+
+
+def test_cumulative_sources_round_trip_beyond_old_json_read_limits(tmp_path):
+    import json
+    import sqlite3
+    store = MemoryStore(tmp_path / "memory.sqlite3", GROUP)
+    store.initialize(0)
+    start = 10**17
+    identity = None
+    for revision in range(70):
+        ids = list(range(start + revision*200, start + (revision+1)*200))
+        item = change(id=identity, source_ids=ids, claims=[{"text":"原有连续经历", "sources":[{
+            "journal_id":start,"quote":"精确原文","actor_id":"qq:10","direction":"inbound"}]}])
+        saved = store.commit(revision,revision,revision+1,[item],{})
+        identity = saved["memories"][0]["id"]
+    memory = saved["memories"][0]
+    assert len(memory["source_ids"]) == 14000
+    assert len(json.dumps(memory["source_ids"])) > 262_144
+    # Reopen, export, history and a real SQLite backup must all read what was
+    # written, without clipping the cumulative source index.
+    reopened = MemoryStore(tmp_path / "memory.sqlite3", GROUP)
+    assert reopened.snapshot()["memories"][0] == memory
+    assert reopened.history(identity)[-1]["after"] == memory
+    assert reopened.export()["memories"][0] == memory
+    from contextlib import closing
+    with closing(sqlite3.connect(tmp_path / "memory.sqlite3")) as src:
+        with closing(sqlite3.connect(tmp_path / "restored.sqlite3")) as dst:
+            src.backup(dst)
+    assert MemoryStore(tmp_path / "restored.sqlite3",GROUP).snapshot()["memories"][0] == memory

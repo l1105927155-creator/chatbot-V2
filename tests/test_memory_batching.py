@@ -70,6 +70,16 @@ def test_native_capacity_changes_the_contiguous_batch_size():
     assert small["input_allowance"] == 1300
 
 
+def test_authenticated_catalog_output_ceiling_is_a_valid_memory_capacity_source():
+    result = plan_batch(system="s", provider="openai-codex", model="gpt-6.1-terra",
+                        capacity=capacity(context=500_000, output=128_000,
+                                          provider="openai-codex", model="gpt-6.1-terra",
+                                          source="native_subscription_catalog"),
+                        messages=[message(1, "hi")], memories=[])
+    assert result["capacity_source"] == "native_subscription_catalog"
+    assert result["input_allowance"] == 372_000
+
+
 def test_first_fit_prioritizes_one_existing_memory_and_deduplicates_ids():
     rows = [message(1, "a" * 20), message(2, "b" * 20)]
     old = [{"id": "old-1", "content": "prior", "source_ids": [7]}]

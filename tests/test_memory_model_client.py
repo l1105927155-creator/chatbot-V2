@@ -119,6 +119,22 @@ def test_native_capacity_metadata_is_exact_and_missing_is_not_invented(tmp_path)
                       'defaultMaxTokens': None, 'capacitySource': 'native_adapter'}
 
 
+def test_memory_capacity_unknown_error_code_survives_python_transport(tmp_path):
+    path = tmp_path / 'capacity-unknown.sock'
+    listener, thread, _received, _ = _server(path, {
+        'ok': False, 'code': 'MEMORY_CAPACITY_UNKNOWN'})
+    runtime = object.__new__(module.AcpRuntime)
+    runtime._memory_control_path = str(path)
+    runtime._memory_control_token = 'u' * 64
+    try:
+        with pytest.raises(module.MemoryModelError) as caught:
+            runtime.consolidate_memory(provider='p', model='m', system='persona', prompt='source')
+    finally:
+        listener.close()
+        thread.join(2)
+    assert caught.value.error_code == 'MEMORY_CAPACITY_UNKNOWN'
+
+
 def test_acp_runtime_cancel_disconnects_one_shot_socket(tmp_path):
     path = tmp_path / 'memory.sock'
     listener, thread, received, disconnected = _server(path, None, wait_for_disconnect=True)
@@ -316,3 +332,46 @@ def test_dsh_client_delegates_without_session_reservation_and_fails_closed(tmp_p
             client.memory_capacity(provider='p', model='m')
     finally:
         client.close()
+
+
+@pytest.mark.parametrize("source", ["native_subscription_catalog", "untrusted_capacity", None, [], {}])
+def test_capacity_transport_preserves_authenticated_catalog_and_rejects_unknown_source(tmp_path, source):
+    path = tmp_path / 'capacity.sock'
+    listener, thread, _received, _ = _server(path, {
+        'ok': True, 'provider': 'openai-codex', 'model': 'gpt-6.1-terra',
+        'contextWindow': 500_000, 'defaultMaxTokens': 128_000, 'capacitySource': source})
+    runtime = object.__new__(module.AcpRuntime)
+    runtime._memory_control_path = str(path)
+    runtime._memory_control_token = 'c' * 64
+    try:
+        if source != 'native_subscription_catalog':
+            with pytest.raises(module.MemoryModelError) as error:
+                runtime.memory_capacity(provider='openai-codex', model='gpt-6.1-terra')
+            assert error.value.error_code == 'MODEL_INVALID_RESPONSE'
+        else:
+            result = runtime.memory_capacity(provider='openai-codex', model='gpt-6.1-terra')
+            assert result['capacitySource'] == source
+            assert (result['contextWindow'], result['defaultMaxTokens']) == (500_000,128_000)
+    finally:
+        listener.close()
+        thread.join(2)
+
+
+def test_background_terminal_remains_on_runtime_with_native_control_receipt(tmp_path):
+    runtime = object.__new__(module.AcpRuntime)
+    # This lookup catches a class-boundary regression before any socket operation.
+    lookup = runtime.background_terminal
+    path = tmp_path / 'terminal.sock'
+    expected = {'event': 'settled', 'parent_session_id': 'sid', 'task_id': 'task'}
+    listener, thread, received, _ = _server(path, {'ok': True, 'event': expected})
+    runtime._console_control_path = str(path)
+    runtime._console_control_token = 'test-local-token'
+    try:
+        assert lookup('sid', 'task') == expected
+        thread.join(2)
+        assert not thread.is_alive()
+        assert received == [{'action': 'background_terminal', 'session_id': 'sid',
+                             'task_id': 'task', 'token': 'test-local-token'}]
+    finally:
+        listener.close()
+        thread.join(2)

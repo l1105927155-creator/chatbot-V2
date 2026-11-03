@@ -582,7 +582,7 @@ class AcpRuntime:
                           "MEMORY_RESPONSE_TOO_LARGE", "MODEL_INVALID_RESPONSE",
                           "CONTEXT_WINDOW_EXCEEDED", "INVALID_CREDENTIAL", "QUOTA_EXCEEDED",
                           "MISSING_CREDENTIAL", "NO_ADAPTER", "EMPTY_RESPONSE",
-                          "MEMORY_CAPACITY_CHANGED"}
+                          "MEMORY_CAPACITY_CHANGED", "MEMORY_CAPACITY_UNKNOWN"}
             if isinstance(code, str) and code in safe_codes:
                 status = result.get("status")
                 if isinstance(status, bool) or not isinstance(status, int) or not 100 <= status <= 599:
@@ -652,9 +652,11 @@ class AcpRuntime:
         result = self._memory_control_request({"action": "capacity", "provider": route[0],
                                                "model": route[1]}, cancel_event=cancel_event)
         if ((result.get("provider"), result.get("model")) != route
-                or result.get("capacitySource") != "native_adapter"):
+                or not isinstance(result.get("capacitySource"), str)
+                or result["capacitySource"] not in {"native_adapter", "native_subscription_catalog"}):
             raise MemoryModelError("MODEL_INVALID_RESPONSE")
-        capacity = {"provider": route[0], "model": route[1], "capacitySource": "native_adapter"}
+        capacity = {"provider": route[0], "model": route[1],
+                    "capacitySource": result["capacitySource"]}
         for key in ("contextWindow", "defaultMaxTokens"):
             value = result.get(key)
             if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value <= 0):

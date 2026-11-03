@@ -519,8 +519,8 @@ class MemoryStore:
                 raise MemoryStoreError("invalid revision history metadata")
             if row["action"] not in {"create", "update"}:
                 raise MemoryStoreError("invalid memory revision action")
-            before = _load_json(row["before_json"], 262_144) if row["before_json"] else None
-            after = _load_json(row["after_json"], 262_144) if row["after_json"] else None
+            before = _load_json(row["before_json"], None) if row["before_json"] else None
+            after = _load_json(row["after_json"], None) if row["after_json"] else None
             if before is not None:
                 _validate_memory_object(before)
             if after is None:
@@ -703,7 +703,7 @@ class MemoryStore:
                 raise ValueError("invalid evidence review flag")
             item = {"id": row["id"], "content": row["content"],
                     "members": _load_json(row["members_json"]),
-                    "source_ids": _load_json(row["source_ids_json"]),
+                    "source_ids": _load_json(row["source_ids_json"], None),
                     "claims": _load_json(raw_claims, 131_072) if raw_claims is not None else None,
                     "claims_review_required": bool(review_required),
                     "evidence_status": row["evidence_status"],
@@ -769,12 +769,18 @@ def _change(value):
         raise ValueError("members must be a list of at most 50 stable IDs")
     members = sorted({_member(member) for member in members})
     sources = value.get("source_ids")
-    if not isinstance(sources, list) or len(sources) > 200:
-        raise ValueError("source_ids must be a list of at most 200 Journal IDs")
+    if not isinstance(sources, list):
+        raise ValueError("source_ids must be a list of Journal IDs")
     if any(type(source) is not int or source < 1 for source in sources):
         raise ValueError("source IDs must be positive Journal IDs")
     sources = sorted(set(sources))
     claims = _claims(value["claims"]) if value.get("claims") is not None else None
+    # Bound claims already have a 128 KiB physical budget. Their redundant ID
+    # index must accept every validated citation, including revisions of old
+    # memories. Preserve the legacy input bound only for IDs without claims.
+    cited = {source["journal_id"] for claim in claims or [] for source in claim["sources"]}
+    if len(set(sources) - cited) > 200:
+        raise ValueError("source_ids without claim evidence exceed 200 Journal IDs")
     review_required = value.get("claims_review_required")
     if review_required is not None and type(review_required) is not bool:
         raise ValueError("claims_review_required must be a boolean")
@@ -797,8 +803,8 @@ def _claims(value):
             raise ValueError("invalid claim fields")
         text = _text(claim["text"], "claim text", 1000)
         sources = claim["sources"]
-        if not isinstance(sources, list) or not 1 <= len(sources) <= 5:
-            raise ValueError("claim sources must contain 1..5 sources")
+        if not isinstance(sources, list) or not sources:
+            raise ValueError("claim sources must be a non-empty list")
         normalized = []
         identities = {}
         seen_quotes = set()
@@ -907,7 +913,9 @@ def _usage_json(value):
 
 
 def _load_json(value, maximum=32_768):
-    if not isinstance(value, str) or len(value) > maximum:
+    # None is reserved for cumulative, host-written source indexes and their
+    # revision snapshots; their decoded structure is validated by the caller.
+    if not isinstance(value, str) or (maximum is not None and len(value) > maximum):
         raise ValueError("invalid JSON metadata size")
     try:
         return json.loads(value)
