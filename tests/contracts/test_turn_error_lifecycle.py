@@ -43,6 +43,12 @@ async def main():
         state = State()
         def __init__(self, exc): self.exc = exc
         async def handle(self, *_args, **_kwargs): raise self.exc
+        async def status(self, *_args):
+            return {'pending_upper_cursor': 77, 'pending_fault_kind': 'unknown'}
+        async def resolve_pending(self, conversation, cursor, **_kwargs):
+            assert notices[-1] == (conversation.key, 'auto_skip')
+            assert cursor == 77
+            self.skipped = True
     service = Service(RuntimeError('secret /host/path token'))
     async def get_service(_message): return service
     router._service_for = get_service
@@ -60,7 +66,17 @@ async def main():
     service.exc = m.DshTurnCancelled('internal details')
     await router.route_chat(event(4))
     await router.route_chat(event(5, malformed=True))
-    assert notices == [('private:42','failed'), ('private:42','pending'), ('private:42','cancelled')], notices
+    assert service.skipped
+    assert notices == [('private:42','failed'), ('private:42','auto_skip'), ('private:42','cancelled')], notices
+    async def failed_status(*_args):
+        return {'pending_upper_cursor': 78, 'pending_fault_kind': 'unknown'}
+    async def failed_recovery(*_args, **_kwargs):
+        raise RuntimeError('drain failed')
+    service.status = failed_status
+    service.resolve_pending = failed_recovery
+    service.exc = m.PendingTurnError('internal details')
+    await router.route_chat(event(8))
+    assert notices[-2:] == [('private:42', 'auto_skip'), ('private:42', 'skip_failed')]
     service.exc = m.ModelTurnError('INVALID_REQUEST')
     await router.route_chat(event(6))
     assert notices[-1] == ('private:42', 'model')

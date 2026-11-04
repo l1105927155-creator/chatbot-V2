@@ -76,31 +76,32 @@ async def test_max_wait_uses_capture_time_not_platform_created_at(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_failure_survives_new_messages_and_restart_until_explicit_resume(tmp_path):
+async def test_failed_batch_is_skipped_persistently_and_new_messages_continue(tmp_path):
     backend, journal, conv, runner, _manager = await setup(tmp_path, min_messages=1)
     try:
         row = append(journal, conv, 1, "100", "待整理")
         backend.service.dsh.responses.append(RuntimeError("injected"))
-        await runner.tick()
-        await drain(runner)
-        blocked = await backend._io("incremental_state")
-        assert blocked["failed_after"] == 0 and blocked["failed_through"] == row.journal_id
-        append(journal, conv, 2, "100", "新消息不能解开失败")
-        await runner.tick()
-        assert len(backend.service.dsh.calls) == 1
-        await backend.initialize()
-        assert (await backend._io("incremental_state"))["failed_through"] == row.journal_id
-        await runner.tick()
-        assert len(backend.service.dsh.calls) == 1
-        backend.service.dsh.responses.append(response([change([row.journal_id])]))
-        await backend._io("resume_incremental", blocked["revision"])
-        assert runner.submit("group", backend, force=True)
-        await drain(runner)
+        await runner.tick(); await drain(runner)
+        assert (await backend.snapshot())["cursor"] == row.journal_id
         assert (await backend._io("incremental_state"))["failed_through"] is None
-        assert (await backend.snapshot())["cursor"] == journal.high_watermark(conv)
+        failures = await backend._io("failed_runs")
+        assert failures["total"] == 1
+        failed = failures["items"][0]
+        assert failed["retry_state"] == "pending" and failed["retry_cursor"] == 0
+        assert failed["diagnostic"]["operation"] == "model"
+        assert "injected" not in str(failed["diagnostic"])
+        await backend.initialize()
+        assert (await backend._io("failed_runs"))["total"] == 1
+        await runner.tick(); await drain(runner)
+        assert len(backend.service.dsh.calls) == 1, "failed range must not retry itself"
+        newer = append(journal, conv, 2, "100", "新消息继续整理")
+        backend.service.dsh.responses.append(response([]))
+        await runner.tick(); await drain(runner)
+        assert (await backend.snapshot())["cursor"] == newer.journal_id
+        assert len(backend.service.dsh.calls) == 2
+        assert (await backend._io("get_failed_run", failed["id"]))["retry_state"] == "pending"
     finally:
-        await runner.close()
-        await backend.close()
+        await runner.close(); await backend.close()
 
 
 @pytest.mark.asyncio

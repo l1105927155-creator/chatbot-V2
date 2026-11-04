@@ -50,6 +50,7 @@ class Harness:
         self.invocations = []
         self.cancel_requests = []
         self.deliveries = []
+        self.agent_reply = "private model output must not be stored"
         self.running = 0
         self.max_running = 0
 
@@ -61,7 +62,7 @@ class Harness:
             self.finished.set()
             try:
                 await asyncio.sleep(0.3)
-                return {"status": "completed", "reply": "private model output must not be stored"}
+                return {"status": "completed", "reply": self.agent_reply}
             finally:
                 self.running -= 1
 
@@ -535,7 +536,7 @@ def test_native_date_trigger_passes_group_send_callback_and_persists_only_status
         assert "Write a short diary." in kwargs["prompt"]
         assert "本次实际执行时间：" in kwargs["prompt"]
         assert "可使用 qq_send_origin 向当前群发送消息" in kwargs["prompt"]
-        assert "最终正文仅记录在本次任务结果中" in kwargs["prompt"]
+        assert "最终正文不会自动投递到群里" in kwargs["prompt"]
         assert callable(kwargs["send"])
         assert harness.deliveries == []
         for _ in range(100):
@@ -544,7 +545,8 @@ def test_native_date_trigger_passes_group_send_callback_and_persists_only_status
                 break
             await asyncio.sleep(0.01)
         assert len(history) == 1 and history[0]["status"] == "completed"
-        assert history[0]["result"] == {"status": "completed"}
+        assert history[0]["result"] == {"status": "completed", "outcome": "unknown",
+                                          "summary": "Agent 未返回可识别的任务结果。"}
         assert "reply" not in str(history[0])
         await harness.manager.reconcile()
         assert not harness.scheduler.get_job(harness.manager._job_id(IDENTITY, task_id))
@@ -820,5 +822,54 @@ def test_concurrent_cancel_does_not_overwrite_completed_terminal_record(tmp_path
                                      expected_revision=1, actor_id="10001",
                                      source_message_id="source-disable-finish-race")
         assert harness.run_store.recent(IDENTITY, task_id)[0]["status"] == "completed"
+        await harness.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(("reply", "outcome"), [
+    ('{"outcome":"succeeded","summary":"报告已发送"}', "succeeded"),
+    ('{"outcome":"failed","summary":"历史未读完，报告未生成"}', "failed"),
+    ('{"outcome":"unknown","summary":"发送回执不确定"}', "unknown"),
+    ("执行失败：未完成核查", "unknown"),
+    ('{"outcome":"succeeded","summary":""}', "unknown"),
+    ('{"outcome":"succeeded","summary":"' + 'x' * 1001 + '"}', "unknown"),
+])
+def test_agent_result_requires_explicit_bounded_report(reply, outcome):
+    assert manager_module.agent_outcome(reply)["outcome"] == outcome
+
+
+def test_legacy_agent_run_is_exposed_as_unconfirmed(tmp_path):
+    async def scenario():
+        harness = Harness(tmp_path)
+        await harness.manager.start()
+        definition = task_definition("eb4b04e4-e70d-45c0-8b79-cce21e6ddf78")
+        await harness.manager.manage(harness.conversation, "create", definition=definition,
+                                     expected_revision=0, actor_id="10001", source_message_id="source")
+        task = harness.manager._store_for(IDENTITY).read()["tasks"][0]
+        assert harness.run_store.claim(IDENTITY, task, "old-slot")
+        harness.run_store.finish(IDENTITY, task, "old-slot", "completed", {"status": "completed"})
+        listing = await harness.manager.list(harness.conversation)
+        assert listing["tasks"][0]["recent_runs"][0]["result"]["outcome"] == "unknown"
+        await harness.close()
+    asyncio.run(scenario())
+
+
+def test_agent_failure_reason_survives_run_and_task_list(tmp_path):
+    async def scenario():
+        harness = Harness(tmp_path)
+        harness.agent_reply = '{"outcome":"failed","summary":"历史未读完，报告未生成"}'
+        await harness.manager.start()
+        task_id = "eb4b04e4-e70d-45c0-8b79-cce21e6ddf78"
+        definition = task_definition(task_id, run_at=(datetime.now(UTC) + timedelta(seconds=0.2)).isoformat())
+        await harness.manager.manage(harness.conversation, "create", definition=definition,
+                                     expected_revision=0, actor_id="10001", source_message_id="source")
+        for _ in range(200):
+            rows = harness.run_store.recent(IDENTITY, task_id)
+            if rows and rows[0]["status"] == "completed":
+                break
+            await asyncio.sleep(0.01)
+        result = (await harness.manager.list(harness.conversation))["tasks"][0]["recent_runs"][0]["result"]
+        assert result == {"status": "completed", "outcome": "failed", "summary": "历史未读完，报告未生成"}
+        assert harness.run_store.recent(("qq", "bot-1", "group:697823265"), task_id) == []
         await harness.close()
     asyncio.run(scenario())

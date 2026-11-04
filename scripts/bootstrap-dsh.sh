@@ -63,6 +63,7 @@ python3 "$repo_root/scripts/verify-dsh-source.py" "$repo_root/upstream.lock.json
 
 cp -- "$repo_root/dsh/runtime/package.json" "$repo_root/dsh/runtime/package-lock.json" "$install_dir/"
 npm ci --prefix "$install_dir" --omit=dev
+python3 "$repo_root/scripts/apply-dsh-runtime-fixes.py" "$install_dir"
 # Resolve V2 native plugin imports against precisely this locked installation.
 plugin_dependencies="$repo_root/dsh/node_modules"
 if [[ -e "$plugin_dependencies" && ! -L "$plugin_dependencies" ]]; then

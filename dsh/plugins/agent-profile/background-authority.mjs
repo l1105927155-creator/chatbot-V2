@@ -21,12 +21,28 @@ export function currentParentTurn(agent) {
   return binding
 }
 
-export function createResearchAuthority(parent, turn, source, taskId, profile, signal) {
+export function createResearchAuthority(parent, turn, source, taskId, profile, signal,
+  {rootSessionId = parent?.session?.id, parentTaskId, depth = 1} = {}) {
   if (!parent || !source || !taskId || !signal) throw new TypeError('complete research delegation required')
-  const parentTurn = currentParentTurn(parent)
-  if (parentTurn.turn !== turn || parentTurn.source !== source) throw new Error('research requester binding changed')
+  const parentDelegation = researchDelegation(parent)
+  if (parentDelegation) {
+    if (parentDelegation.taskId !== parentTaskId || parentDelegation.source !== source
+        || parentDelegation.rootSessionId !== rootSessionId
+        || parentDelegation.depth + 1 !== depth || parentDelegation.signal?.aborted) {
+      throw new Error('research requester delegation changed')
+    }
+  } else {
+    const parentTurn = currentParentTurn(parent)
+    if (parentTurn.turn !== turn || parentTurn.source !== source || parentTaskId !== undefined || depth !== 1) {
+      throw new Error('research requester binding changed')
+    }
+  }
+  if (typeof rootSessionId !== 'string' || !rootSessionId || !Number.isInteger(depth) || depth < 1) {
+    throw new TypeError('valid research root and depth required')
+  }
   const token = Object.freeze(Object.create(null))
-  delegations.set(token, {parent, source, taskId, profile, signal, active:true})
+  delegations.set(token, {parent, source, taskId, profile, signal, rootSessionId,
+    parentTaskId, depth, active:true})
   return token
 }
 

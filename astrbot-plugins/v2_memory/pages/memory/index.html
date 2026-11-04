@@ -45,15 +45,22 @@
   </section>
   <section>
     <h2>后台增量整理</h2>
-    <p class="muted">群友新消息达到门槛，或最早一条等待达到上限时整理；Bot消息不计数，仍保留在整理内容中。失败后暂停，未完成消息保留。</p>
+    <p class="muted">群友新消息达到门槛，或最早一条等待达到上限时整理；Bot消息不计数，仍保留在整理内容中。失败批次会记录后跳过，后续消息继续整理；失败批次仅在下方手动重新整理。</p>
     <div id="incremental-state" role="status"></div>
     <div class="row">
       <label>后台增量<select id="incremental-enabled"><option value="true">启用</option><option value="false">停用</option></select></label>
       <label>新增群友消息门槛<input id="incremental-min" type="number" min="1" max="10000" step="1"></label>
       <label>最长等待（秒）<input id="incremental-wait" type="number" min="1" max="86400" step="1"></label>
       <button id="incremental-save">保存增量设置</button>
-      <button id="incremental-retry" disabled>重试未完成范围</button>
+      <button id="incremental-resume" hidden>恢复已取消／中断的整理</button>
     </div>
+  </section>
+  <section>
+    <h2>已跳过的失败批次</h2>
+    <p class="muted">失败批次会保留原始消息范围和错误诊断。可在这里查看原因，并单独安排一次重新整理。</p>
+    <div id="failure-state" class="muted" role="status">正在读取失败记录…</div>
+    <div id="failures" class="list"></div>
+    <div class="toolbar"><button id="failure-previous">上一页</button><button id="failure-next">下一页</button><span id="failure-page" class="muted"></span></div>
   </section>
   <section>
     <h2>记忆浏览</h2>
@@ -74,7 +81,7 @@
       <label>状态<select id="entry-status"><option value="active">保留</option><option value="archived">归档</option><option value="forgotten">遗忘</option></select></label>
       <button id="save">保存修改</button>
     </div>
-    <h3>逐条陈述与原文</h3><div id="claims-status" class="muted"></div><pre id="claims"></pre>
+    <h3>逐条陈述与来源</h3><div id="claims-status" class="muted"></div><pre id="claims"></pre>
     <h3>来源标记</h3><pre id="sources"></pre>
     <h3>修订记录</h3><pre id="revisions"></pre>
   </section>
@@ -83,7 +90,8 @@
   const $ = (id) => document.getElementById(id);
   const esc = (value) => String(value ?? "—").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
   let groups = [], selectedGroup = "", selectedEntry = null, selectedRevision = null, offset = 0;
-  let statusRequest = 0, entryRequest = 0, detailRequest = 0, statusLoading = false;
+  let statusRequest = 0, entryRequest = 0, detailRequest = 0, failureRequest = 0, statusLoading = false;
+  let failureOffset = 0, failureTotal = 0;
   let incrementalDirty = false, incrementalRevision = null;
   const limit = 20;
   function say(text, kind = "muted") { $("notice").textContent = text; $("notice").className = kind; }
@@ -112,9 +120,12 @@
     $("cancel").disabled = !progress?.available || !progress.active;
     const increment = selected?.incremental;
     $("incremental-save").disabled = !increment;
-    $("incremental-retry").disabled = !increment?.enabled || !increment.blocked || !selected?.enabled || !selected?.agent_enabled || !!increment.scheduled || !!progress?.active;
+    const resumableErrors = new Set(["CANCELLED", "CancelledError", "PROCESS_INTERRUPTED", "ProcessInterrupted"]);
+    const resumable = !!increment?.blocked && resumableErrors.has(increment?.error_code);
+    $("incremental-resume").hidden = !resumable;
+    $("incremental-resume").disabled = !resumable || !increment?.enabled || !selected?.enabled || !selected?.agent_enabled || !!increment?.scheduled || !!progress?.active;
     $("incremental-state").textContent = increment
-      ? `后台${increment.enabled ? "启用" : "停用"} · 待处理群友消息 ${increment.inbound_count} 条（含Bot共 ${increment.total_messages} 条） · 最早等待 ${increment.oldest_wait_seconds} 秒${increment.blocked ? ` · 已暂停：未完成范围 (${increment.failed_after}, ${increment.failed_through}]，${increment.error_code || "未知错误"}` : increment.scheduled ? " · 等待或正在执行" : ""}`
+      ? `后台${increment.enabled ? "启用" : "停用"} · 待处理群友消息 ${increment.inbound_count} 条（含Bot共 ${increment.total_messages} 条） · 最早等待 ${increment.oldest_wait_seconds} 秒${increment.blocked ? resumable ? ` · 整理已取消／中断，需手动恢复范围 (${increment.failed_after}, ${increment.failed_through}]` : ` · 旧错误暂停范围待迁移：(${increment.failed_after}, ${increment.failed_through}]，${increment.error_code || "未知错误"}` : increment.scheduled ? " · 等待或正在执行" : ""}`
       : "后台增量状态暂不可用";
     if (!incrementalDirty) {
       incrementalRevision = increment?.revision ?? null;
@@ -125,7 +136,7 @@
     $("status").innerHTML = groups.map((g) => {
       const run = g.last_run || {}, p = g.progress;
       const state = {running:"整理中",completed:"已完成",failed:"失败",cancelled:"已取消",unavailable:"不可用"}[run.status] || "暂无";
-      const metrics = p?.available ? `<br>进度：${esc(phaseLabel(p))}<br>运行 ${esc(p.run_elapsed_ms)} 毫秒 · 批次 ${esc(p.batch_index || 0)}（${esc(p.batch_message_count || 0)} 条） · 已提交 ${esc(p.completed_batches || 0)} 批 / ${esc(p.committed_messages || 0)} 条 · 游标 ${esc(p.committed_cursor ?? "—")} / ${esc(p.target_cursor ?? "—")}<br>模型事件 ${esc(p.event_count || 0)} · 正文 ${esc(p.text_bytes || 0)} 字节 · 推理 ${esc(p.reasoning_bytes || 0)} 字节 · 距上次模型增量 ${esc(p.idle_ms || 0)} 毫秒${p.host_last_seen_age_ms != null ? ` · 宿主通道回执 ${esc(p.host_last_seen_age_ms)} 毫秒前` : ""}${p.error_category ? `<br>进度错误类别：${esc(p.error_category)}` : ""}` : `<br>运行进度：未观测`;
+      const metrics = p?.available ? `<br>进度：${esc(phaseLabel(p))}<br>运行 ${esc(p.run_elapsed_ms)} 毫秒 · 批次 ${esc(p.batch_index || 0)}（${esc(p.batch_message_count || 0)} 条） · 已写入 ${esc(p.completed_batches || 0)} 批 / ${esc(p.committed_messages || 0)} 条 · 本轮处理位置 ${esc(p.committed_cursor ?? "—")} / ${esc(p.target_cursor ?? "—")}<br>模型事件 ${esc(p.event_count || 0)} · 正文 ${esc(p.text_bytes || 0)} 字节 · 推理 ${esc(p.reasoning_bytes || 0)} 字节 · 距上次模型增量 ${esc(p.idle_ms || 0)} 毫秒${p.host_last_seen_age_ms != null ? ` · 宿主通道回执 ${esc(p.host_last_seen_age_ms)} 毫秒前` : ""}${p.error_category ? `<br>进度错误类别：${esc(p.error_category)}` : ""}` : `<br>运行进度：未观测`;
       return `<div class="card"><strong>${esc(g.label || g.key)}</strong><br>记忆：${g.enabled ? "启用" : "停用"}；后端：${g.connected ? "已连接" : "不可用"}<br>记忆数：${esc(g.memory_count)}<br>最近整理：${esc(state)} ${esc(run.created_at || "")}<br>耗时：${esc(run.duration_ms ?? "未提供")}毫秒；模型用量：${esc(run.usage == null ? "未提供" : JSON.stringify(run.usage))}${run.error_code ? `<br>失败类别：${esc(run.error_code)}` : ""}${metrics}</div>`;
     }).join("") || `<div class="muted">当前没有已准入群。</div>`;
   }
@@ -169,6 +180,53 @@
       say("记忆列表已更新");
     } catch (error) { say(error.message || "记忆列表读取失败。", "error"); }
   }
+  async function loadFailures() {
+    const groupAtStart = groupKey();
+    if (!groupAtStart) { $("failures").replaceChildren(); $("failure-state").textContent = "尚无可查看的群。"; return; }
+    const requestId = ++failureRequest;
+    try {
+      const data = await call("failures", {group_key: groupAtStart, limit, offset: failureOffset});
+      if (requestId !== failureRequest || groupAtStart !== groupKey()) return;
+      const items = Array.isArray(data?.items) ? data.items : [];
+      failureTotal = Number.isFinite(Number(data?.total)) ? Number(data.total) : items.length;
+      const root = $("failures"); root.replaceChildren();
+      for (const item of items) {
+        const card = document.createElement("article"); card.className = "card";
+        const heading = document.createElement("strong");
+        heading.textContent = `跳过范围 (${item.skipped_after ?? "?"}, ${item.skipped_through ?? "?"}] · ${item.retry_state === "completed" ? "已完成重新整理" : "待手动重新整理"}`;
+        card.append(heading);
+        const summary = document.createElement("p"); summary.className = "muted";
+        summary.textContent = `错误：${item.error_code || "未知错误"} · 模型：${item.model || "未记录"} · 记录时间：${item.created_at || "未知"}${item.retry_cursor != null ? ` · 重新整理游标：${item.retry_cursor}` : ""}`;
+        card.append(summary);
+        const diagnostic = document.createElement("pre"); diagnostic.textContent = JSON.stringify(item.diagnostic ?? {}, null, 2); card.append(diagnostic);
+        if (item.retry_state !== "completed") {
+          const button = document.createElement("button"); button.textContent = "重新整理此批次";
+          const group = groups.find((g) => g.key === groupAtStart), progress = group?.progress, increment = group?.incremental;
+          button.disabled = !group?.enabled || !group?.agent_enabled || !!progress?.active || !!increment?.scheduled;
+          button.addEventListener("click", async () => {
+            button.disabled = true;
+            try {
+              await call("retry_failure", {group_key: groupAtStart, run_id: item.id});
+              if (groupAtStart !== groupKey()) return;
+              say("已安排单次重新整理，失败仍保留记录。", "ok");
+              await Promise.all([loadFailures(), loadStatus({automatic: true, reloadEntries: false})]);
+            } catch (error) {
+              if (groupAtStart === groupKey()) say(error.message || "重新整理请求失败。", "error");
+              button.disabled = false;
+            }
+          });
+          card.append(button);
+        }
+        root.append(card);
+      }
+      $("failure-state").textContent = items.length ? `共 ${failureTotal} 条失败批次记录` : "当前群还没有失败批次记录。";
+      $("failure-page").textContent = `第 ${failureTotal ? Math.floor(failureOffset / limit) + 1 : 0} 页 · ${items.length} 条`;
+      $("failure-previous").disabled = failureOffset <= 0;
+      $("failure-next").disabled = failureOffset + limit >= failureTotal;
+    } catch (error) {
+      if (requestId === failureRequest && groupAtStart === groupKey()) $("failure-state").textContent = error.message || "失败记录读取失败。";
+    }
+  }
   async function loadDetail(id) {
     const requestId = ++detailRequest, groupAtStart = groupKey();
     try {
@@ -183,7 +241,7 @@
       $("weight").value = selectedEntry.weight ?? 0;
       $("entry-status").value = selectedEntry.status ?? "active";
       $("sources").textContent = JSON.stringify(data.sources ?? selectedEntry.sources ?? [], null, 2);
-      $("claims-status").textContent = selectedEntry.claims == null ? "旧记忆：尚无逐条原文证据，原有来源仍保留。" : selectedEntry.claims_review_required ? "手工修改后待核对：以下证据对应修改前的陈述。" : selectedEntry.evidence_status === "partial" ? "部分陈述有原文引用；旧记忆部分尚未重新核对。发言者由Journal绑定，解释仍可能有误。" : "发言者由程序依据Journal绑定；引句已核对原文。陈述的解释仍可能有误。";
+      $("claims-status").textContent = selectedEntry.claims == null ? "旧记忆：尚无逐条原文证据，原有来源仍保留。" : selectedEntry.claims_review_required ? "手工修改后待核对：以下来源对应修改前的陈述。" : selectedEntry.evidence_status === "partial" ? "部分陈述有原文或宿主观察来源；旧记忆部分尚未重新核对。" : "来源已按Journal核对原文或媒体／转发存在，发言者由程序绑定。写入前核对客观表述，主观理解仍由Bot形成。";
       $("claims").textContent = selectedEntry.claims == null ? "" : JSON.stringify(selectedEntry.claims, null, 2);
       $("revisions").textContent = JSON.stringify(data.revisions ?? [], null, 2);
       $("detail").scrollIntoView({behavior: "smooth", block: "start"});
@@ -200,7 +258,7 @@
   $("query").addEventListener("keydown", (event) => { if (event.key === "Enter") { offset = 0; loadEntries(); } });
   $("previous").addEventListener("click", () => { offset = Math.max(0, offset - limit); loadEntries(); });
   $("next").addEventListener("click", () => { offset += limit; loadEntries(); });
-  $("group").addEventListener("change", (event) => { selectedGroup = event.target.value; incrementalDirty = false; offset = 0; selectedEntry = null; detailRequest++; $("detail").hidden = true; renderStatus(); loadEntries(); });
+  $("group").addEventListener("change", (event) => { selectedGroup = event.target.value; incrementalDirty = false; offset = 0; failureOffset = 0; failureRequest++; selectedEntry = null; detailRequest++; $("detail").hidden = true; renderStatus(); loadEntries(); loadFailures(); });
   for (const id of ["incremental-enabled", "incremental-min", "incremental-wait"]) $(id).addEventListener("input", () => { incrementalDirty = true; });
   $("incremental-save").addEventListener("click", async () => {
     const key = groupKey(); if (!key || incrementalRevision == null) return;
@@ -211,13 +269,17 @@
       incrementalDirty = false; say("增量设置已持久保存", "ok"); await loadStatus({automatic: true});
     } catch (error) { say(error.message || "增量设置保存失败，请刷新后核对。", "error"); }
   });
-  $("incremental-retry").addEventListener("click", async () => {
-    const group = groups.find((item) => item.key === groupKey()); if (!group?.incremental?.blocked) return;
+  $("incremental-resume").addEventListener("click", async () => {
+    const group = groups.find((item) => item.key === groupKey());
+    if (!group?.incremental?.blocked || !["CANCELLED", "CancelledError", "PROCESS_INTERRUPTED", "ProcessInterrupted"].includes(group.incremental.error_code)) return;
     try {
       await call("retry_incremental", {group_key: group.key, expected_revision: group.incremental.revision});
-      say("已请求重试未完成范围，结果将显示在整理状态中。", "ok"); await loadStatus({automatic: true});
-    } catch (error) { say(error.message || "重试请求失败，请刷新后核对。", "error"); }
+      say("已恢复取消／中断的整理，结果将显示在整理状态中。", "ok");
+      await loadStatus({automatic: true, reloadEntries: false});
+    } catch (error) { say(error.message || "恢复请求失败。", "error"); }
   });
+  $("failure-previous").addEventListener("click", () => { failureOffset = Math.max(0, failureOffset - limit); loadFailures(); });
+  $("failure-next").addEventListener("click", () => { if (failureOffset + limit < failureTotal) { failureOffset += limit; loadFailures(); } });
   $("toggle").addEventListener("click", async () => {
     const group = groups.find((item) => item.key === groupKey()); if (!group) return;
     try { await call("enable", {group_key: group.key, enabled: !group.enabled, expected_revision: group.revision}); say("群记忆状态已更新", "ok"); await loadStatus(); }
@@ -253,7 +315,8 @@
   // DOMContentLoaded runs after that SDK has attached; call() then awaits its context.
   window.addEventListener("DOMContentLoaded", () => {
     loadStatus({automatic: false});
-    window.setInterval(() => loadStatus({automatic: true, reloadEntries: false}), 3000);
+    loadFailures();
+    window.setInterval(() => { loadStatus({automatic: true, reloadEntries: false}); loadFailures(); }, 3000);
   }, {once: true});
 </script>
 </body>

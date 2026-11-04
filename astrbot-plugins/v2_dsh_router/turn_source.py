@@ -13,6 +13,12 @@ import threading
 from pathlib import Path
 
 
+try:
+    from .model_failure import validate_recovery
+except ImportError:
+    from model_failure import validate_recovery
+
+
 SOURCE_FIELDS = (
     "platform_id",
     "bot_id",
@@ -196,13 +202,22 @@ class TurnSourcePublisher:
                 return None
             fields = {'version', 'session_id', 'epoch', 'nonce', 'turn', 'terminal',
                       'kind', 'code', 'tools_started', 'tools_finished', 'unfinished_tools'}
-            if (not isinstance(data, dict) or set(data) != fields or type(data['version']) is not int or data['version'] != 1
+            if (not isinstance(data, dict) or set(data) - {"recovery", "status"} != fields or type(data['version']) is not int or data['version'] != 1
                     or data['session_id'] != session_id or data['epoch'] != self.epoch
                     or data['nonce'] != nonce or data['terminal'] is not True
                     or type(data['turn']) is not int or data['turn'] < 1
-                    or data['kind'] not in ('model', 'infrastructure')
+                    or data['kind'] not in ('model', 'infrastructure', 'recovered')
                     or not isinstance(data['code'], str)
                     or not re.fullmatch(r'[A-Z][A-Z0-9_]{0,63}', data['code'])):
+                return None
+            if 'status' in data and (type(data['status']) is not int or not 100 <= data['status'] <= 599):
+                return None
+            try:
+                recovery = validate_recovery(data.get('recovery'))
+            except ValueError:
+                return None
+            if data['kind'] == 'recovered' and (not recovery or not recovery['recovered']
+                                                or data['code'] != 'MODEL_RECOVERED'):
                 return None
             for field in ('tools_started', 'tools_finished', 'unfinished_tools'):
                 values = data[field]

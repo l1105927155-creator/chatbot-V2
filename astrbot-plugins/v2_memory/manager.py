@@ -361,7 +361,7 @@ class MemoryManager:
         if self._closing or not self._started:
             raise RuntimeError("memory manager is unavailable")
         if action not in {"list", "get", "edit", "enable", "export", "clear", "cancel",
-                          "configure_incremental", "retry_incremental"}:
+                          "configure_incremental", "retry_incremental", "failures", "retry_failure"}:
             raise ValueError("unknown memory management action")
         if not isinstance(payload, dict):
             raise TypeError("memory management payload must be an object")
@@ -375,6 +375,21 @@ class MemoryManager:
                 or getattr(binding[0], "memory_backend", None) is not backend):
             raise RuntimeError("group memory service is unavailable")
         arguments = {name: value for name, value in payload.items() if name != "group_key"}
+        if action == "retry_failure":
+            if key in self._incremental._workers or backend.progress_snapshot().get("active"):
+                raise ValueError("memory processing is already scheduled")
+            if not self._incremental._allowed(key, backend):
+                raise PermissionError("group memory is not currently available")
+            snapshot = await backend.snapshot()
+            if not snapshot["enabled"]:
+                raise ValueError("enable group memory before replaying")
+            if set(arguments) != {"run_id"}:
+                raise ValueError("retry requires a single failed run id")
+            run = await backend._io("get_failed_run", arguments["run_id"])
+            if not run or run["retry_state"] != "pending":
+                raise ValueError("failed batch is not pending")
+            return {"scheduled": self._incremental.submit(key, backend, force=True,
+                                                        retry_run_id=run["id"])}
         if action == "configure_incremental":
             result = await backend._io("configure_incremental", **arguments)
             if arguments.get("enabled") is False:

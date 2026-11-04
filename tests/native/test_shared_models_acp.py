@@ -258,6 +258,26 @@ with TemporaryDirectory(prefix="shared-models-acp-", dir=root / ".runtime") as t
             "session_files_before_after": [len(persisted_after_first_read), len(persisted_after_reads)],
             "local_requests": len(received)}))
         runtime.close_session(sid)
+        runtime.close()
+        # A removed persisted selection must not make the SID unresumable.
+        # Host selection is applied after native resume, with zero inference.
+        write_profile(source_profile, [("model-one", "Renamed One")], second_endpoint)
+        for _ in range(2):
+            runtime = AcpRuntime(dsh_bin=str(root / ".runtime/dsh-runtime/node_modules/.bin/dsh"),
+                dsh_home=home, workspace=workspace, patch=safe_chat, instructions=instructions,
+                provider="test-route", model="model-one")
+            view = runtime.model_status(sid, model_route=('test-route','model-one'))
+            assert view['current']=={'provider':'test-route','model':'model-one'},view
+            assert len(received)==3, 'resume and repair must never perform inference'
+            runtime.close_session(sid); runtime.close()
+        runtime = AcpRuntime(dsh_bin=str(root / ".runtime/dsh-runtime/node_modules/.bin/dsh"),
+            dsh_home=home, workspace=workspace, patch=safe_chat, instructions=instructions,
+            provider="test-route", model="model-one")
+        runtime.model_status(sid, model_route=('test-route','model-one'))
+        assert runtime.run(sid, 'continue after removed model')=='local reply'
+        assert len(received)==4 and received[-1]['body']['model']=='model-one'
+        runtime.close_session(sid)
+        print(json.dumps({'removed_model_same_sid_process_restart':True,'no_inference_for_repair':True}))
     finally:
         runtime.close()
         server.shutdown(); server.server_close(); server_thread.join(timeout=2)

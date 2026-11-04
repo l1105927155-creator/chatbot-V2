@@ -17,3 +17,7 @@
 空闲检查后停写备份并启用；备份及发布副本位于 `.runtime/terra-proxy-20261101-232609/`。九个 DSH 进程的订阅代理配置已核对，通用 HTTPS_PROXY 为空。生产健康检查 `ready/core_ready/onebot_connected` 均为 true，active/queued/pending/quarantined 为 0；11 个状态库 `conversation_state` 与停机备份一致。
 
 使用原控制台 API 将七个群、Owner 私聊和新会话默认模型设为 `openai-codex/gpt-6.1-terra`；逐会话原生模型查询全部确认，启用状态和编辑名单保留。没有主动向真实 QQ 发送消息；真实群的回复、体验和长期令牌刷新仍待实际使用验证。回退时使用备份恢复旧路由及运行配置，并通过控制台恢复各会话原模型。
+
+## 2026-11-02 模型恢复
+
+用户指出此前仅要求配置随时可用，并未授权切换全部聊天。已通过控制台将 8 个会话和新会话默认模型恢复为 `wb / deepseek-v4.1-flash`，逐会话原生模型状态确认；启用状态和编辑名单保留。Terra 及订阅代理配置仍可供按需选择。

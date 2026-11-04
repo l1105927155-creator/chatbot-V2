@@ -121,6 +121,38 @@ async def test_only_visible_canonical_image_rows_are_resolved():
 
 
 @pytest.mark.asyncio
+async def test_animated_gif_projects_ordered_frames_as_static_image():
+    buf = io.BytesIO()
+    frames = [Image.new("RGB", (8, 8), color) for color in ("red", "green", "blue")]
+    frames[0].save(buf, format="GIF", save_all=True, append_images=frames[1:], duration=100, loop=0)
+    runner, base = await serve({"/animation": buf.getvalue()})
+    async def resolve(_segment):
+        return {"url": base + "/animation"}
+    try:
+        result = await QQVision(resolve).prepare([row(1, image_segment())], {1})
+        assert not result["errors"]
+        assert result["images"][0]["mimeType"] == "image/png"
+        assert result["references"][0]["status"] == "animated_gif_first_four_frames_left_to_right"
+        with Image.open(io.BytesIO(base64.b64decode(result["images"][0]["data"]))) as sheet:
+            assert sheet.size == (24, 8)
+            assert [sheet.getpixel((x, 2)) for x in (2, 10, 18)] == [(255, 0, 0), (0, 128, 0), (0, 0, 255)]
+    finally:
+        await runner.cleanup()
+
+
+def test_gif_later_frame_cannot_expand_past_animation_limit():
+    def gif(size):
+        output = io.BytesIO()
+        Image.new("P", size).save(output, format="GIF")
+        return output.getvalue()
+    first, second = gif((8, 8)), gif((2500, 2500))
+    table_size = 3 * (2 ** ((second[10] & 7) + 1)) if second[10] & 0x80 else 0
+    data = first[:-1] + second[13 + table_size:]
+    with pytest.raises(vision_module._VisionFailure, match="animated_image_size_limit"):
+        vision_module._project_animation(data, "image/gif")
+
+
+@pytest.mark.asyncio
 async def test_invalid_expired_unknown_and_oversized_images_are_safe_errors():
     good = image_bytes()
     corrupt = b"\x89PNG\r\n\x1a\n" + b"not-a-valid-png"

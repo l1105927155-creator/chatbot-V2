@@ -389,6 +389,15 @@ def _safe_result(value: object) -> str | None:
             raise ValueError("task result keys must be identifiers")
         if key == "status":
             continue
+        if key == "outcome":
+            if item not in ("succeeded", "failed", "unknown"):
+                raise ValueError("task outcome is not recognized")
+            continue
+        if key == "summary":
+            if (not isinstance(item, str) or not item.strip() or len(item) > 1000
+                    or any(ord(c) < 32 and c not in "\n\t" for c in item)):
+                raise ValueError("task summary is invalid")
+            continue
         check(item)
     return _json_bytes(value).decode("utf-8")
 

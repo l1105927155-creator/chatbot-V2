@@ -55,7 +55,10 @@ class FakeDsh:
     def __init__(self, responses=()):
         self.settings = {"provider": "test-provider", "model": "test-model"}
         self.responses = deque(responses)
-        self.calls = []
+        self.calls = []  # Generation calls; review traffic is tracked separately.
+        self.review_calls = []
+        self.review_responses = deque()
+        self.all_calls = []
 
     def memory_capacity(self, **kwargs):
         return {"provider": kwargs["provider"], "model": kwargs["model"],
@@ -63,6 +66,16 @@ class FakeDsh:
                 "capacitySource": "native_adapter"}
 
     def consolidate_memory(self, **kwargs):
+        self.all_calls.append(kwargs)
+        payload = json.loads(kwargs["prompt"])
+        if "draft_changes" in payload:
+            self.review_calls.append(kwargs)
+            result = (self.review_responses.popleft() if self.review_responses else
+                      {"text": json.dumps({"changes": payload["draft_changes"]}, ensure_ascii=False),
+                       "usage": {"inputTokens": 0, "outputTokens": 0}})
+            if isinstance(result, BaseException):
+                raise result
+            return result(**kwargs) if callable(result) else result
         self.calls.append(kwargs)
         response = self.responses.popleft()
         if callable(response):
@@ -72,16 +85,18 @@ class FakeDsh:
             if isinstance(value, dict) and isinstance(value.get("changes"), list):
                 prompt = json.loads(kwargs["prompt"])
                 messages = {row["journal_id"]: row for row in prompt.get("messages", [])}
-                memories = {source["journal_id"]: source
-                            for memory in prompt.get("memories", [])
-                            for claim in memory.get("claims") or []
-                            for source in claim.get("sources", [])}
+                message_evidence = {}
+                for row in prompt.get("messages", []):
+                    message_evidence[row["journal_id"]] = row.get("evidence", [])
+                memories = {evidence["journal_id"]: evidence
+                            for memory in prompt.get("existing_memories", [])
+                            for evidence in memory.get("evidence", [])}
                 for item in value["changes"]:
                     if "claims" in item:
                         continue
                     source_ids = item.get("source_ids", [])
                     source_id = next((sid for sid in source_ids if sid in messages), None)
-                    quote = (messages[source_id]["content"].get("text", "")[:40]
+                    quote = (next((evidence["quote"] for evidence in message_evidence.get(source_id, [])), "")
                              if source_id is not None else "")
                     if source_id is None:
                         source = next((memories[sid] for sid in source_ids if sid in memories), None)
@@ -255,8 +270,8 @@ async def test_initial_cursor_excludes_old_history_and_success_commits_sources_o
                                                         row_bot.journal_id]
     assert [(row["actor_id"], row["direction"]) for row in messages] == [
         ("100", "inbound"), ("200", "inbound"), ("900", "outbound")]
-    assert "A 说自己存下了工资" in messages[0]["content"]["text"]
-    assert "B 反驳" in messages[1]["content"]["text"]
+    assert "A 说自己存下了工资" in "".join(item["quote"] for item in messages[0]["evidence"])
+    assert "B 反驳" in "".join(item["quote"] for item in messages[1]["evidence"])
 
     saved = await store_snapshot(backend)
     assert saved["cursor"] == row_bot.journal_id
@@ -277,6 +292,338 @@ async def test_initial_cursor_excludes_old_history_and_success_commits_sources_o
                                      through_journal_id=row_bot.journal_id) is True
     assert len(service.dsh.calls) == 1
     await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_evidence_id_protocol_restores_exact_quote_and_host_identity(tmp_path):
+    backend, journal, conversation, _workspace, service = make_backend(tmp_path)
+    await backend.initialize()
+    body = "A说这件事，B补充了不同细节。" * 80
+    row = append(journal, conversation, 1, "200", body)
+
+    def selected_evidence(**kwargs):
+        prompt = json.loads(kwargs["prompt"])
+        message = prompt["messages"][0]
+        assert "content" not in message and "source_ids" not in message
+        assert all(len(item["quote"]) <= 320 for item in message["evidence"])
+        evidence = message["evidence"][0]
+        return {"text": json.dumps({"changes": [{
+            "content": "B补充了不同细节", "members": ["100", "200"],
+            "claims": [{"text": "B补充了不同细节", "sources": [evidence["evidence_id"]]}],
+            "weight": 3, "status": "active"}]}, ensure_ascii=False)}
+
+    service.dsh.responses.append(selected_evidence)
+    try:
+        assert await backend.consolidate(conversation, after_journal_id=0,
+                                         through_journal_id=row.journal_id)
+        memory = (await store_snapshot(backend))["memories"][0]
+        assert memory["source_ids"] == [row.journal_id]
+        source = memory["claims"][0]["sources"][0]
+        assert source == {"journal_id": row.journal_id, "quote": body[:320],
+                          "actor_id": "200", "direction": "inbound"}
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_six_evidence_refs_bind_and_commit_without_truncation(tmp_path):
+    backend, journal, conversation, _workspace, service = make_backend(tmp_path)
+    await backend.initialize()
+    rows = [append(journal, conversation, index, "100", f"第{index}条共同证据")
+            for index in range(1, 7)]
+
+    def cite_six(**kwargs):
+        prompt = json.loads(kwargs["prompt"])
+        evidence_ids = [message["evidence"][0]["evidence_id"] for message in prompt["messages"]]
+        assert len(evidence_ids) == 6 and all(type(value) is int for value in evidence_ids)
+        return {"text": json.dumps({"changes": [{
+            "id": None, "content": "六条消息共同支持的理解", "members": ["100"],
+            "claims": [{"text": "六条消息共同支持", "sources": evidence_ids}],
+            "weight": 3, "status": "active"}]}, ensure_ascii=False)}
+
+    service.dsh.responses.append(cite_six)
+    try:
+        assert await backend.consolidate(conversation, after_journal_id=0,
+                                         through_journal_id=rows[-1].journal_id)
+        memory = (await store_snapshot(backend))["memories"][0]
+        sources = memory["claims"][0]["sources"]
+        assert len(sources) == 6
+        assert [source["journal_id"] for source in sources] == [row.journal_id for row in rows]
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_claim_evidence_budget_is_checked_before_journal_io(tmp_path):
+    backend, _journal, conversation, _workspace, _service = make_backend(tmp_path)
+    await backend.initialize()
+    calls = []
+    original = backend.journal.by_journal_id
+
+    def counted(*args, **kwargs):
+        calls.append(args[1])
+        return original(*args, **kwargs)
+
+    backend.journal.by_journal_id = counted
+    evidence_index = {}
+    claims = []
+    for claim_index in range(20):
+        refs = []
+        for source_index in range(30):
+            ref = claim_index * 30 + source_index + 1
+            evidence_index[ref] = {"journal_id": ref, "quote": "证" * 320,
+                                   "kind": "text", "actor_id": "100", "direction": "inbound"}
+            refs.append(ref)
+        claims.append({"text": f"claim {claim_index}", "sources": refs})
+    try:
+        with pytest.raises(ValueError, match="128 KiB") as caught:
+            await backend._bind_evidence_claims(claims, conversation, evidence_index)
+        assert caught.value.error_code == "MODEL_OUTPUT_CLAIM_EVIDENCE_TOO_LARGE"
+        assert caught.value.error_path == "$.changes[0].claims"
+        assert caught.value.diagnostic["claim_evidence_bytes"] > 131_072
+        assert calls == []
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_repeated_evidence_refs_are_checked_and_journal_row_is_read_once(tmp_path):
+    backend, journal, conversation, _workspace, _service = make_backend(tmp_path)
+    await backend.initialize()
+    row = append(journal, conversation, 1, "100", "同一条精确来源")
+    calls = []
+    original = backend.journal.by_journal_id
+
+    def counted(*args, **kwargs):
+        calls.append(args[1])
+        return original(*args, **kwargs)
+
+    backend.journal.by_journal_id = counted
+    evidence_index = {number: {"journal_id": row.journal_id, "quote": "同一条精确来源",
+                               "kind": "text", "actor_id": "100", "direction": "inbound"}
+                     for number in range(1, 101)}
+    try:
+        result = await backend._bind_evidence_claims(
+            [{"text": "同一认识", "sources": list(evidence_index)}],
+            conversation, evidence_index)
+        assert len(result[0]["sources"]) == 1
+        assert result[0]["sources"][0]["journal_id"] == row.journal_id
+        assert calls == [row.journal_id]
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_legacy_claim_binding_accepts_six_sources_and_caches_each_row(tmp_path):
+    backend, journal, conversation, _workspace, _service = make_backend(tmp_path)
+    await backend.initialize()
+    rows = [append(journal, conversation, index, "100", f"legacy evidence {index}")
+            for index in range(1, 7)]
+    calls = []
+    original = backend.journal.by_journal_id
+
+    def counted(*args, **kwargs):
+        calls.append(args[1])
+        return original(*args, **kwargs)
+
+    backend.journal.by_journal_id = counted
+    source_context = {row.journal_id: {"actor_id": row.message.actor_id,
+                                       "direction": row.message.direction}
+                     for row in rows}
+    claims = [{"text": "六条历史共同支持", "sources": [
+        {"journal_id": row.journal_id, "quote": row.message.content["text"]}
+        for row in rows]}]
+    try:
+        result = await backend._bind_claims(claims, conversation,
+                                            {row.journal_id for row in rows}, source_context)
+        assert len(result[0]["sources"]) == 6
+        assert calls == [row.journal_id for row in rows]
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_blank_search_query_returns_empty_without_reaching_sql(tmp_path):
+    backend, _journal, _conversation, _workspace, _service = make_backend(tmp_path)
+    await backend.initialize()
+    original = backend._io
+    calls = []
+
+    async def track(action, *args, **kwargs):
+        calls.append(action)
+        return await original(action, *args, **kwargs)
+
+    backend._io = track
+    try:
+        assert await backend.search(" \t\n ") == []
+        assert calls == ["snapshot"]
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_unknown_evidence_id_is_rejected_and_private_diagnostic_is_actionable(tmp_path):
+    backend, journal, conversation, workspace, service = make_backend(tmp_path)
+    await backend.initialize()
+    row = append(journal, conversation, 1, "100", "可引用的真实消息")
+    response_text = json.dumps({"changes": [{
+        "content": "不能提交的理解", "members": ["100"],
+        "claims": [{"text": "不能提交", "sources": ["ev-forged"]}],
+        "weight": 2, "status": "active"}]}, ensure_ascii=False)
+    service.dsh.responses.append({"text": response_text})
+    try:
+        with pytest.raises(ValueError, match="unknown evidence ID"):
+            await backend.consolidate(conversation, after_journal_id=0,
+                                      through_journal_id=row.journal_id)
+        assert (await store_snapshot(backend))["cursor"] == 0
+        with sqlite3.connect(workspace / ".v2-memory/state.sqlite3") as db:
+            diagnostic = json.loads(db.execute(
+                "SELECT diagnostic_json FROM validation_diagnostics ORDER BY id DESC LIMIT 1"
+            ).fetchone()[0])
+        assert diagnostic["category"] == "EVIDENCE_ID_VALIDATION_FAILED"
+        assert backend.last_run["error_code"] == "MEMORY_UNKNOWN_EVIDENCE_ID"
+        assert diagnostic["error_path"] == "$.changes[0].claims[0].sources[0]"
+        assert diagnostic["response_sha256"] == hashlib.sha256(response_text.encode()).hexdigest()
+        assert diagnostic["prompt_sha256"]
+        assert diagnostic["evidence_reference_count"] == 1
+        assert len(diagnostic["evidence_reference_sha256"]) == 64
+        assert "ev-forged" in diagnostic["response_preview"]
+        assert diagnostic["route"] == "test-provider/test-model"
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_rejected_evidence_id_after_preview_limit_is_preserved_in_diagnostic(tmp_path):
+    backend, journal, conversation, workspace, service = make_backend(tmp_path)
+    await backend.initialize()
+    row = append(journal, conversation, 1, "100", "真实来源")
+    forged = "ev-forged-after-preview-" + "z" * 120
+    response_text = json.dumps({"changes": [{
+        "content": "x" * 3000, "id": None, "members": ["100"],
+        "claims": [{"text": "错误引用", "sources": [forged]}],
+        "weight": 2, "status": "active"}]}, ensure_ascii=False)
+    service.dsh.responses.append({"text": response_text})
+    try:
+        with pytest.raises(ValueError, match="unknown evidence ID"):
+            await backend.consolidate(conversation, after_journal_id=0,
+                                      through_journal_id=row.journal_id)
+        with sqlite3.connect(workspace / ".v2-memory/state.sqlite3") as db:
+            diagnostic = json.loads(db.execute(
+                "SELECT diagnostic_json FROM validation_diagnostics ORDER BY id DESC LIMIT 1"
+            ).fetchone()[0])
+        assert diagnostic["response_preview_truncated"] is True
+        assert forged not in diagnostic["response_preview"]
+        assert diagnostic["offending_evidence_id"] == forged
+        assert len(json.dumps(diagnostic, ensure_ascii=False).encode()) <= 16_000
+    finally:
+        await backend.close()
+
+
+@pytest.mark.parametrize("invalid_source", [{}, []])
+@pytest.mark.asyncio
+async def test_non_string_evidence_reference_has_structured_validation_error(
+        tmp_path, invalid_source):
+    backend, journal, conversation, workspace, service = make_backend(tmp_path)
+    await backend.initialize()
+    row = append(journal, conversation, 1, "100", "真实来源")
+    service.dsh.responses.append({"text": json.dumps({"changes": [{
+        "content": "无法提交", "id": None, "members": ["100"],
+        "claims": [{"text": "陈述", "sources": [invalid_source]}],
+        "weight": 2, "status": "active"}]}, ensure_ascii=False)})
+    try:
+        with pytest.raises(ValueError, match="unknown evidence ID"):
+            await backend.consolidate(conversation, after_journal_id=0,
+                                      through_journal_id=row.journal_id)
+        assert backend.last_run["error_code"] == "MEMORY_UNKNOWN_EVIDENCE_ID"
+        with sqlite3.connect(workspace / ".v2-memory/state.sqlite3") as db:
+            diagnostic = json.loads(db.execute(
+                "SELECT diagnostic_json FROM validation_diagnostics ORDER BY id DESC LIMIT 1"
+            ).fetchone()[0])
+        assert diagnostic["error_path"] == "$.changes[0].claims[0].sources[0]"
+        assert diagnostic["offending_evidence_type"] in {"dict", "list"}
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_existing_prior_quote_crossing_chunk_boundary_can_be_reselected_and_committed(tmp_path):
+    backend, journal, conversation, _workspace, service = make_backend(tmp_path)
+    await backend.initialize()
+    body = "甲" * 319 + "喜欢苹果" + "乙" * 321
+    source_row = append(journal, conversation, 1, "100", body)
+    await backend._io("commit", 0, 0, source_row.journal_id, [{
+        "id": None, "content": "A喜欢苹果", "members": ["100"],
+        "source_ids": [source_row.journal_id], "claims": [{"text": "A喜欢苹果", "sources": [{
+            "journal_id": source_row.journal_id, "quote": "喜欢苹果",
+            "actor_id": "100", "direction": "inbound"}]}],
+        "weight": 3, "status": "active"}], {})
+    memory_id = (await store_snapshot(backend))["memories"][0]["id"]
+    new_row = append(journal, conversation, 2, "100", "今天又提到苹果。")
+
+    def select_prior_quote(**kwargs):
+        prompt = json.loads(kwargs["prompt"])
+        memory = next(item for item in prompt["existing_memories"] if item["id"] == memory_id)
+        evidence = next(item for item in memory["evidence"] if item["quote"] == "喜欢苹果")
+        assert evidence["actor_id"] == "100" and evidence["direction"] == "inbound"
+        assert memory["claims"][0]["sources"] == [evidence["evidence_id"]]
+        return {"text": json.dumps({"changes": [{
+            "id": memory_id, "content": "A持续喜欢苹果", "members": ["100"],
+            "claims": [{"text": "A持续喜欢苹果", "sources": [evidence["evidence_id"]]}],
+            "weight": 3, "status": "active"}]}, ensure_ascii=False)}
+
+    service.dsh.responses.append(select_prior_quote)
+    try:
+        assert await backend.consolidate(conversation, after_journal_id=source_row.journal_id,
+                                         through_journal_id=new_row.journal_id)
+        memory = (await store_snapshot(backend))["memories"][0]
+        assert memory["claims"][0]["sources"][0]["quote"] == "喜欢苹果"
+        assert memory["claims"][0]["sources"][0]["journal_id"] == source_row.journal_id
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_revision_of_memory_with_over_200_sources_preserves_history(tmp_path):
+    backend, journal, conversation, _workspace, service = make_backend(tmp_path)
+    await backend.initialize()
+    rows = [append(journal, conversation, index, "100", f"历史消息{index}")
+            for index in range(1, 202)]
+    source_ids = [row.journal_id for row in rows]
+    await backend._io("commit", 0, 0, source_ids[-2], [{
+        "id": None, "content": "长期记忆", "members": ["100"],
+        "source_ids": source_ids[:-1], "claims": [{"text": "第一条历史", "sources": [{
+            "journal_id": rows[0].journal_id, "quote": "历史消息1",
+            "actor_id": "100", "direction": "inbound"}]}],
+        "weight": 3, "status": "active"}], {})
+    prior = (await store_snapshot(backend))["memories"][0]
+    memory_id = prior["id"]
+    await backend._io("commit", 1, source_ids[-2], source_ids[-1], [{
+        "id": memory_id, "content": prior["content"], "members": prior["members"],
+        "source_ids": [source_ids[-1]], "claims": prior["claims"],
+        "weight": 3, "status": "active"}], {})
+    new_row = append(journal, conversation, 202, "100", "补充一条当前经历")
+
+    def select_new_evidence(**kwargs):
+        prompt = json.loads(kwargs["prompt"])
+        message = next(item for item in prompt["messages"] if item["journal_id"] == new_row.journal_id)
+        return {"text": json.dumps({"changes": [{
+            "id": memory_id, "content": "长期记忆并包含当前经历", "members": ["100"],
+            "claims": [{"text": "当前新增经历", "sources": [
+                message["evidence"][0]["evidence_id"]]}],
+            "weight": 3, "status": "active"}]}, ensure_ascii=False)}
+
+    service.dsh.responses.append(select_new_evidence)
+    try:
+        assert await backend.consolidate(conversation, after_journal_id=source_ids[-1],
+                                         through_journal_id=new_row.journal_id)
+        saved = (await store_snapshot(backend))["memories"][0]
+        assert len(saved["source_ids"]) == 202
+        assert set(source_ids).issubset(saved["source_ids"])
+        assert new_row.journal_id in saved["source_ids"]
+        assert saved["claims"][0]["sources"][0]["journal_id"] == new_row.journal_id
+    finally:
+        await backend.close()
 
 
 @pytest.mark.asyncio
@@ -346,10 +693,11 @@ async def test_claim_sources_are_added_when_model_omits_them_from_source_ids(tmp
         await backend.close()
 
 
-def test_claim_source_union_rejects_over_capacity():
+def test_claim_source_union_preserves_claims_beyond_legacy_input_limit():
     claims = [{"text": "claim", "sources": [{"journal_id": 201, "quote": "quote"}]}]
+    assert _include_claim_source_ids(list(range(1, 201)), claims) == list(range(1, 202))
     with pytest.raises(ValueError, match="too many source IDs"):
-        _include_claim_source_ids(list(range(1, 201)), claims)
+        _include_claim_source_ids(list(range(1, 202)), [])
 
 
 @pytest.mark.asyncio
@@ -376,12 +724,13 @@ async def test_claim_quote_must_be_exact_source_text_and_speaker_is_host_bound(t
             "SELECT diagnostic_json FROM validation_diagnostics ORDER BY id DESC LIMIT 1"
         ).fetchone()[0])
     assert diagnostic["category"] == "SOURCE_QUOTE_MISMATCH"
+    assert diagnostic["validation_error"] == "model source quote does not match Journal"
     assert diagnostic["journal_id"] == row.journal_id
     assert diagnostic["source_kind"] == "batch_journal"
     assert (diagnostic["change_index"], diagnostic["claim_index"],
             diagnostic["source_index"]) == (0, 0, 0)
     assert diagnostic["route"] == "test-provider/test-model"
-    guide = (REPO / "dsh/plugins/agent-profile/memory-guide.md").read_bytes()
+    guide = (REPO / "dsh/plugins/agent-profile/memory-evidence-guide.md").read_bytes()
     assert diagnostic["guide_sha256"] == hashlib.sha256(guide).hexdigest()
     assert diagnostic["quote"] == "A用工资充值游戏"
     assert diagnostic["model_visible"]["batch_journal"]["text_preview"] == "B 反驳，说 A 用来充值游戏"
@@ -468,9 +817,9 @@ async def test_cancel_while_diagnostic_is_blocked_persists_failure_before_propag
     progress = backend.progress_snapshot()
     assert saved["cursor"] == 0 and saved["memories"] == []
     assert state["failed_after"] == 0 and state["failed_through"] == row.journal_id
-    assert state["error_code"] == "MEMORY_CONSOLIDATION_FAILED"
+    assert state["error_code"] == "MEMORY_SOURCE_QUOTE_MISMATCH"
     assert backend.last_run["status"] == "failed"
-    assert backend.last_run["error_code"] == "MEMORY_CONSOLIDATION_FAILED"
+    assert backend.last_run["error_code"] == "MEMORY_SOURCE_QUOTE_MISMATCH"
     assert progress["active"] is False and progress["phase"] == "failed"
     await backend.close()
 
@@ -548,9 +897,9 @@ async def test_quote_from_reply_metadata_is_rejected_but_content_is_diagnosable(
         ).fetchone()[0])
     visible = diagnostic["model_visible"]["batch_journal"]
     checked = diagnostic["journal_at_validation"]
-    assert "reply-target-77" in visible["content_preview"]
+    assert "reply-target-77" not in visible["content_preview"]
     assert "reply-target-77" in checked["content_preview"]
-    assert visible["content_sha256"] == checked["content_sha256"]
+    assert visible["content_sha256"] != checked["content_sha256"]
     assert diagnostic["batch_content_changed_since_prompt"] is False
     assert diagnostic["quote_matches_journal_text"] is False
     assert diagnostic["quote_matches_journal_file_name"] is False
@@ -612,10 +961,10 @@ async def test_metadata_quote_after_long_text_has_private_field_path_diagnostic(
             "SELECT diagnostic_json FROM validation_diagnostics ORDER BY id DESC LIMIT 1"
         ).fetchone()[0])
     assert quote not in diagnostic["model_visible"]["batch_journal"]["content_preview"]
-    assert diagnostic["quote_matches_searchable_model_fields"] is True
+    assert diagnostic["quote_matches_searchable_model_fields"] is False
     assert diagnostic["model_content_search_scope"] == \
         "non-binary string fields up to 4096 characters, 12 levels, 8 paths"
-    assert diagnostic["model_visible_content_match_paths"] == ["segments[0].message_id"]
+    assert diagnostic["model_visible_content_match_paths"] == []
     assert (await store_snapshot(backend))["cursor"] == 0
     await backend.close()
 
@@ -814,7 +1163,8 @@ async def test_native_short_window_splits_long_journal_rows_into_complete_contig
         consumed.extend(ids)
     expected_ids = [row.journal_id for row in rows]
     assert consumed == expected_ids
-    assert [item["content"]["text"] for call in service.dsh.calls
+    assert ["".join(evidence["quote"] for evidence in item["evidence"])
+            for call in service.dsh.calls
             for item in json.loads(call["prompt"])["messages"]] == texts
     assert 1 < len(service.dsh.calls) < len(rows)
     assert (await store_snapshot(backend))["cursor"] == rows[-1].journal_id
@@ -837,7 +1187,8 @@ async def test_actual_payload_over_old_256k_limit_is_accepted_with_native_capaci
     assert backend.last_plan["input_bytes"] > 256_000
     selected = json.loads(service.dsh.calls[0]["prompt"])["messages"]
     assert [item["journal_id"] for item in selected] == [row.journal_id for row in rows]
-    assert [item["content"]["text"] for item in selected] == texts
+    assert ["".join(evidence["quote"] for evidence in item["evidence"])
+            for item in selected] == texts
     assert (await store_snapshot(backend))["cursor"] == rows[-1].journal_id
     await backend.close()
 
@@ -1197,3 +1548,807 @@ async def test_capacity_lookup_cancellation_drains_worker_without_calling_model(
     assert (await backend.snapshot())["cursor"] == 0
     assert backend.last_run["status"] == "cancelled"
     await backend.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_source", [0, -1, 999999, True, 1.0, "1"])
+async def test_request_numeric_references_reject_non_integer_or_invisible_number(tmp_path, invalid_source):
+    backend, journal, conversation, _workspace, service = make_backend(tmp_path)
+    await backend.initialize()
+    row = append(journal, conversation, 1, "100", "本群原文")
+    service.dsh.responses.append({"text": json.dumps({"changes": [{
+        "id": None, "content": "拒绝错误编号", "members": ["100"],
+        "claims": [{"text": "认识", "sources": [invalid_source]}],
+        "weight": 3, "status": "active"}]}, ensure_ascii=False)})
+    try:
+        with pytest.raises(ValueError, match="unknown evidence ID"):
+            await backend.consolidate(conversation, after_journal_id=0, through_journal_id=row.journal_id)
+        assert (await store_snapshot(backend))["cursor"] == 0
+        assert (await store_snapshot(backend))["memories"] == []
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_file_name_citation_uses_request_number_and_retains_exact_host_binding(tmp_path):
+    backend, journal, conversation, _workspace, service = make_backend(tmp_path)
+    await backend.initialize()
+    row = journal.append(JOURNAL.Message(
+        platform_id=conversation.platform_id, bot_id=conversation.bot_id,
+        conversation_key=conversation.key, conversation_type="group", direction="inbound",
+        actor_id="100", actor_name="A", source="user", message_id="file-number",
+        reply_to=None, content={"text": "文档在此", "segments": [
+            {"type": "file", "name": "plan.pdf", "file": "opaque-file"}]},
+        created_at="2026-01-01T00:00:00Z", observed_at_ns=time.time_ns()))[0]
+    def response(**kwargs):
+        prompt = json.loads(kwargs["prompt"])
+        ref = next(e for e in prompt["messages"][0]["evidence"] if e["kind"]=="file_name")
+        assert type(ref["evidence_id"]) is int
+        assert "ev-" not in kwargs["prompt"]
+        return {"text":json.dumps({"changes":[{
+            "id":None,"content":"A分享了文档","members":["100"],
+            "claims":[{"text":"A分享plan.pdf","sources":[ref["evidence_id"]]}],
+            "weight":3,"status":"active"}]},ensure_ascii=False)}
+    service.dsh.responses.append(response)
+    try:
+        assert await backend.consolidate(conversation, after_journal_id=0, through_journal_id=row.journal_id)
+        source = (await store_snapshot(backend))["memories"][0]["claims"][0]["sources"][0]
+        assert source == {"journal_id":row.journal_id,"quote":"plan.pdf","actor_id":"100","direction":"inbound"}
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_groups_share_numeric_reference_one_without_cross_binding(tmp_path):
+    first = tmp_path / "first"; second = tmp_path / "second"
+    first.mkdir(mode=0o700); second.mkdir(mode=0o700)
+    a, journal, ca, _wa, sa = make_backend(first, group_id="12345")
+    b, _unused, cb, _wb, sb = make_backend(second, group_id="67890")
+    b.journal = journal
+    await a.initialize(); await b.initialize()
+    ra = append(journal, ca, 1, "100", "甲群精确原文")
+    rb = append(journal, cb, 2, "200", "乙群不同原文")
+    def response(**kwargs):
+        prompt = json.loads(kwargs["prompt"]); row = prompt["messages"][0]
+        assert row["evidence"][0]["evidence_id"] == 1
+        return {"text":json.dumps({"changes":[{
+            "id":None,"content":"当前群理解","members":[row["actor_id"]],
+            "claims":[{"text":"当前来源","sources":[1]}],"weight":3,"status":"active"}]},ensure_ascii=False)}
+    sa.dsh.responses.append(response); sb.dsh.responses.append(response)
+    try:
+        assert all(await asyncio.gather(
+            a.consolidate(ca,after_journal_id=0,through_journal_id=ra.journal_id),
+            b.consolidate(cb,after_journal_id=0,through_journal_id=rb.journal_id)))
+        am=(await store_snapshot(a))["memories"][0]["claims"][0]["sources"][0]
+        bm=(await store_snapshot(b))["memories"][0]["claims"][0]["sources"][0]
+        assert (am["journal_id"],am["quote"],am["actor_id"]) == (ra.journal_id,"甲群精确原文","100")
+        assert (bm["journal_id"],bm["quote"],bm["actor_id"]) == (rb.journal_id,"乙群不同原文","200")
+    finally:
+        await a.close(); await b.close()
+
+
+@pytest.mark.asyncio
+async def test_revising_201_visible_claim_sources_preserves_every_source(tmp_path):
+    backend, journal, conversation, _workspace, service = make_backend(tmp_path)
+    await backend.initialize()
+    rows = [append(journal, conversation, i, "100", f"长期共同经历{i}") for i in range(1,202)]
+    ids = [row.journal_id for row in rows]
+    prior = await backend._io("commit", 0, 0, ids[-1], [{
+        "id": None, "content": "长期共同经历", "members": ["100"], "source_ids": ids,
+        "claims": [{"text": "共同经历的连续记录", "sources": [{
+            "journal_id": row.journal_id, "quote": row.message.content["text"],
+            "actor_id": "100", "direction": "inbound"} for row in rows]}],
+        "weight": 3, "status": "active"}], {})
+    memory_id = prior["memories"][0]["id"]
+    new = append(journal, conversation, 202, "100", "长期共同经历的新补充")
+
+    def retain_all(**kwargs):
+        prompt = json.loads(kwargs["prompt"])
+        old = next(item for item in prompt["existing_memories"] if item["id"] == memory_id)
+        assert len(old["claims"][0]["sources"]) == 201
+        refs = [*old["claims"][0]["sources"], prompt["messages"][0]["evidence"][0]["evidence_id"]]
+        return {"text": json.dumps({"changes": [{"id": memory_id,
+            "content": "长期共同经历与新补充", "members": ["100"],
+            "claims": [{"text": "完整共同经历", "sources": refs}],
+            "weight": 3, "status": "active"}]}, ensure_ascii=False)}
+
+    service.dsh.responses.append(retain_all)
+    try:
+        assert await backend.consolidate(conversation, after_journal_id=ids[-1],
+                                         through_journal_id=new.journal_id)
+        saved = (await store_snapshot(backend))["memories"][0]
+        assert saved["source_ids"] == [*ids,new.journal_id]
+        assert len(saved["claims"][0]["sources"]) == 202
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_owner_edit_preserves_202_sources_and_marks_claims_for_review(tmp_path):
+    backend, _journal, _conversation, _workspace, _service = make_backend(tmp_path)
+    await backend.initialize()
+    sources = [{"journal_id": i, "quote": "来源", "actor_id": "100", "direction": "inbound"}
+               for i in range(1,203)]
+    saved = await backend._io("commit", 0, 0, 202, [{"id": None, "content": "原理解",
+        "members": ["100"], "source_ids": list(range(1,203)),
+        "claims": [{"text": "原认识", "sources": sources}], "weight": 3, "status": "active"}], {})
+    before = saved["memories"][0]
+    try:
+        await backend.manage("edit", {"id": before["id"], "expected_revision": 1,
+            "content": "Owner修订理解", "members": ["100"], "weight": 4, "status": "archived"})
+        result = await store_snapshot(backend)
+        after = result["memories"][0]
+        assert result["cursor"] == 202 and result["revision"] == 2
+        assert after["content"] == "Owner修订理解" and after["status"] == "archived"
+        assert after["source_ids"] == before["source_ids"]
+        assert after["claims"] == before["claims"]
+        assert after["claims_review_required"] and after["evidence_status"] == "review_required"
+    finally:
+        await backend.close()
+
+
+def latest_diagnostic(workspace):
+    with sqlite3.connect(workspace / ".v2-memory/state.sqlite3") as db:
+        row = db.execute(
+            "SELECT diagnostic_json FROM validation_diagnostics ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        return json.loads(row[0]) if row else None
+
+
+@pytest.mark.asyncio
+async def test_prebatch_runtime_error_is_persisted_without_exception_text(tmp_path):
+    backend, _journal, conversation, workspace, _service = make_backend(tmp_path)
+    await backend.initialize()
+    error = RuntimeError("SECRET provider payload")
+
+    async def fail_readable():
+        raise error
+
+    backend._readable = fail_readable
+    try:
+        with pytest.raises(RuntimeError) as caught:
+            await backend.consolidate(conversation, after_journal_id=7, through_journal_id=19)
+        assert caught.value is error
+        diagnostic = latest_diagnostic(workspace)
+        assert diagnostic["operation"] == "snapshot"
+        assert diagnostic["after_id"] == diagnostic["committed_cursor"] == 7
+        assert diagnostic["through_id"] == diagnostic["target_through_id"] == 19
+        assert diagnostic["exception_type"] == "builtins.RuntimeError"
+        assert diagnostic["backend_sha256"]
+        serialized = json.dumps(diagnostic)
+        assert "SECRET" not in serialized and "provider payload" not in serialized
+        assert "/home/" not in serialized and "locals" not in serialized
+        assert backend.last_run["error_code"] == "MEMORY_CONSOLIDATION_FAILED"
+        state = await backend.incremental_state()
+        assert state["failed_through"] == 19
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_external_value_errors_and_json_error_never_persist_raw_message(tmp_path):
+    for failing_operation in ("route", "capacity", "provider", "provider_json"):
+        (tmp_path / failing_operation).mkdir(mode=0o700)
+        backend, journal, conversation, workspace, service = make_backend(
+            tmp_path / failing_operation)
+        await backend.initialize()
+        row = append(journal, conversation, 1, "100", "消息")
+        secret_message = "SECRET api-key=abc123 https://private.example/path"
+        error = (json.JSONDecodeError(secret_message, "raw " + secret_message, 4)
+                 if failing_operation == "provider_json" else ValueError(secret_message))
+        error.error_code = "UPSTREAM_FAILURE"
+        if failing_operation == "route":
+            service.state.get_model_route = lambda *_args: (_ for _ in ()).throw(error)
+        else:
+            if failing_operation == "capacity":
+                service.dsh.memory_capacity = lambda **_kwargs: (_ for _ in ()).throw(error)
+            else:
+                service.dsh.responses.append(lambda **_kwargs: (_ for _ in ()).throw(error))
+        try:
+            with pytest.raises(type(error)) as caught:
+                await backend.consolidate(conversation, after_journal_id=0,
+                                          through_journal_id=row.journal_id)
+            diagnostic = latest_diagnostic(workspace)
+            assert caught.value is error
+            assert diagnostic["operation"] == (
+                "model" if failing_operation.startswith("provider") else failing_operation)
+            serialized = json.dumps(diagnostic)
+            assert "SECRET" not in serialized and "api-key" not in serialized
+            assert "private.example" not in serialized and "raw " not in serialized
+            assert "/home/abasun/" not in serialized and "/tmp/" not in serialized
+            assert "validation_error" not in diagnostic
+            assert backend.last_run["error_code"] == "UPSTREAM_FAILURE"
+            assert (await backend.snapshot())["cursor"] == 0
+            assert (await backend.incremental_state())["failed_through"] == row.journal_id
+        finally:
+            await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_external_value_error_safe_fallback_log_when_diagnostic_write_fails(tmp_path):
+    backend, _journal, conversation, workspace, service = make_backend(tmp_path)
+    await backend.initialize()
+    error = ValueError("SECRET api-key=abc123 https://private.example/path")
+    error.error_code = "UPSTREAM_FAILURE"
+    service.dsh.responses.append(lambda **_kwargs: (_ for _ in ()).throw(error))
+    logs = []
+    backend.logger.warning = lambda *args, **kwargs: logs.append((args, kwargs))
+    original_sync = backend._sync
+
+    def fail_diagnostic(action, *args, **kwargs):
+        if action == "record_validation_diagnostic":
+            raise OSError(28, "SECRET diagnostic volume")
+        return original_sync(action, *args, **kwargs)
+
+    backend._sync = fail_diagnostic
+    row = append(_journal, conversation, 1, "100", "消息")
+    try:
+        with pytest.raises(ValueError) as caught:
+            await backend.consolidate(conversation, after_journal_id=0,
+                                      through_journal_id=row.journal_id)
+        assert caught.value is error
+        log_text = json.dumps(logs)
+        assert "SECRET" not in log_text and "api-key" not in log_text
+        assert "private.example" not in log_text and "ValueError" in log_text
+        assert "/home/abasun/" not in log_text and "/tmp/" not in log_text
+        assert backend.last_run["error_code"] == "UPSTREAM_FAILURE"
+        assert (await backend.snapshot())["cursor"] == 0
+        assert (await backend.incremental_state())["failed_through"] == row.journal_id
+        with sqlite3.connect(workspace / ".v2-memory/state.sqlite3") as db:
+            assert db.execute("SELECT name FROM sqlite_master WHERE name = 'validation_diagnostics'").fetchone() is None
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_second_batch_prepare_failure_reports_last_committed_cursor(tmp_path):
+    backend, journal, conversation, workspace, service = make_backend(tmp_path)
+    await backend.initialize()
+    rows = [append(journal, conversation, i + 1, "100", f"消息{i}") for i in range(101)]
+    service.dsh.responses.append(response([]))
+    original_route = backend._route
+    calls = 0
+
+    def route_then_fail():
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            raise RuntimeError("SECRET next batch route")
+        return original_route()
+
+    backend._route = route_then_fail
+    try:
+        with pytest.raises(RuntimeError):
+            await backend.consolidate(conversation, after_journal_id=0,
+                                      through_journal_id=rows[-1].journal_id)
+        diagnostic = latest_diagnostic(workspace)
+        assert diagnostic["operation"] == "route"
+        assert diagnostic["after_id"] == rows[99].journal_id
+        assert diagnostic["committed_cursor"] == rows[99].journal_id
+        assert diagnostic["through_id"] == rows[-1].journal_id
+        assert diagnostic["batch_index"] == 2
+        assert "SECRET" not in json.dumps(diagnostic)
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_oserror_and_sqlite_metadata_are_bounded_and_cause_cycles_stop(tmp_path):
+    backend, _journal, conversation, workspace, _service = make_backend(tmp_path)
+    await backend.initialize()
+    error = OSError(5, "SECRET file")
+    cause = RuntimeError("SECRET cause")
+    error.__cause__ = cause
+    cause.__cause__ = error
+    error.sqlite_errorcode = 5
+    error.sqlite_errorname = "SQLITE_BUSY"
+
+    async def fail_readable():
+        raise error
+
+    backend._readable = fail_readable
+    try:
+        with pytest.raises(OSError):
+            await backend.consolidate(conversation, after_journal_id=0, through_journal_id=1)
+        diagnostic = latest_diagnostic(workspace)
+        assert diagnostic["errno"] == 5
+        assert diagnostic["sqlite_errorcode"] == 5
+        assert diagnostic["sqlite_errorname"] == "SQLITE_BUSY"
+        assert len(diagnostic["exception_chain"]) <= 4
+        assert "SECRET" not in json.dumps(diagnostic)
+        assert len(diagnostic["frames"]) <= 10
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_store_failure_logs_safe_summary_and_preserves_original_failure(tmp_path):
+    backend, _journal, conversation, _workspace, _service = make_backend(tmp_path)
+    await backend.initialize()
+    error = RuntimeError("SECRET original")
+    logs = []
+    backend.logger.warning = lambda *args, **kwargs: logs.append((args, kwargs))
+    original_sync = backend._sync
+
+    def fail_diagnostic(action, *args, **kwargs):
+        if action == "record_validation_diagnostic":
+            raise OSError(28, "SECRET diagnostic volume")
+        return original_sync(action, *args, **kwargs)
+
+    backend._sync = fail_diagnostic
+
+    async def fail_readable():
+        raise error
+
+    backend._readable = fail_readable
+    try:
+        with pytest.raises(RuntimeError) as caught:
+            await backend.consolidate(conversation, after_journal_id=0, through_journal_id=9)
+        assert caught.value is error
+        log_text = json.dumps(logs)
+        assert "SECRET" not in log_text and "original" not in log_text
+        assert "operation" in log_text and "builtins.RuntimeError" in log_text
+        assert (await backend.incremental_state())["failed_through"] == 9
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_legacy_diagnostic_identifies_first_bad_source_after_preflight(tmp_path):
+    backend, journal, conversation, _workspace, _service = make_backend(tmp_path)
+    await backend.initialize()
+    row = append(journal, conversation, 1, "100", "实际原文")
+    try:
+        with pytest.raises(ValueError, match="does not match Journal") as caught:
+            await backend._bind_claims([{"text": "待核对", "sources": [
+                {"journal_id": row.journal_id, "quote": "错误引句"},
+                {"journal_id": row.journal_id, "quote": "实际原文"}]}],
+                conversation, {row.journal_id}, change_index=2)
+        assert caught.value.error_path == "$.changes[2].claims[0].sources[0]"
+        assert caught.value.diagnostic["source_index"] == 0
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_fact_review_repairs_objective_content_and_claims_before_one_commit(tmp_path):
+    backend, journal, conversation, workspace, service = make_backend(tmp_path)
+    await backend.initialize()
+    row = append(journal, conversation, 1, "100", "大家看看演示视频")
+    service.dsh.responses.append(response([change([row.journal_id], content="A已发视频。我觉得这很有趣。")]))
+
+    def repair(**kwargs):
+        prompt = json.loads(kwargs["prompt"])
+        draft = prompt["draft_changes"]
+        assert "source_ids" not in draft[0]
+        assert "已发视频" in draft[0]["content"]
+        with sqlite3.connect(workspace / ".v2-memory/state.sqlite3") as db:
+            assert db.execute("SELECT cursor FROM workspace").fetchone()[0] == 0
+            assert db.execute("SELECT COUNT(*) FROM memories").fetchone()[0] == 0
+        draft[0]["content"] = "A邀请大家看演示视频；本次未提供视频内容。我觉得这很有趣。"
+        draft[0]["claims"][0]["text"] = "A邀请大家看演示视频"
+        return {"text": json.dumps({"changes": draft}, ensure_ascii=False),
+                "usage": {"inputTokens": 11, "outputTokens": 4}}
+
+    service.dsh.review_responses.append(repair)
+    try:
+        assert await backend.consolidate(conversation, after_journal_id=0, through_journal_id=row.journal_id)
+        saved = await store_snapshot(backend)
+        assert saved["cursor"] == row.journal_id
+        assert saved["memories"][0]["content"].endswith("我觉得这很有趣。")
+        assert "已发视频" not in saved["memories"][0]["content"]
+        assert saved["memories"][0]["claims"][0]["text"] == "A邀请大家看演示视频"
+        assert saved["memories"][0]["claims"][0]["sources"][0]["quote"] == "大家看看演示视频"
+        assert len(service.dsh.all_calls) == 2
+        assert backend.last_run["usage"] == {"input_tokens": 20, "output_tokens": 7}
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["transport", "reference", "decision", "json"])
+async def test_fact_review_failure_never_commits_draft_or_cursor(tmp_path, failure):
+    backend, journal, conversation, workspace, service = make_backend(tmp_path)
+    await backend.initialize()
+    row = append(journal, conversation, 1, "100", "我已经修改配置")
+    service.dsh.responses.append(response([change([row.journal_id], content="A修改了配置")]))
+
+    def fail(**kwargs):
+        if failure == "transport":
+            raise RuntimeError("review transport failed")
+        if failure == "json":
+            return {"text": "{"}
+        changes = json.loads(kwargs["prompt"])["draft_changes"]
+        if failure == "reference":
+            changes[0]["claims"][0]["sources"] = [99999]
+        else:
+            changes[0]["weight"] = 5
+        return {"text": json.dumps({"changes": changes})}
+
+    service.dsh.review_responses.append(fail)
+    try:
+        with pytest.raises((ValueError, RuntimeError)):
+            await backend.consolidate(conversation, after_journal_id=0, through_journal_id=row.journal_id)
+        saved = await store_snapshot(backend)
+        assert saved["cursor"] == 0 and saved["memories"] == []
+        assert (await backend.incremental_state())["failed_through"] == row.journal_id
+        with sqlite3.connect(workspace / ".v2-memory/state.sqlite3") as db:
+            diagnostic = json.loads(db.execute(
+                "SELECT diagnostic_json FROM validation_diagnostics ORDER BY id DESC LIMIT 1").fetchone()[0])
+        assert diagnostic["operation"].startswith("fact_review")
+        assert diagnostic["guide_sha256"] == hashlib.sha256(
+            (REPO / "dsh/plugins/agent-profile/memory-fact-review-guide.md").read_bytes()).hexdigest()
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_no_changes_skip_fact_review(tmp_path):
+    backend, journal, conversation, _workspace, service = make_backend(tmp_path)
+    await backend.initialize()
+    row = append(journal, conversation, 1, "100", "嗯")
+    service.dsh.responses.append(response([]))
+    try:
+        await backend.consolidate(conversation, after_journal_id=0, through_journal_id=row.journal_id)
+        assert len(service.dsh.all_calls) == 1 and not service.dsh.review_calls
+        assert (await store_snapshot(backend))["cursor"] == row.journal_id
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_fact_review_missing_usage_remains_unknown(tmp_path):
+    backend, journal, conversation, _workspace, service = make_backend(tmp_path)
+    await backend.initialize()
+    row = append(journal, conversation, 1, "100", "A邀请大家看视频")
+    service.dsh.responses.append(response([change([row.journal_id])]))
+    service.dsh.review_responses.append(lambda **kw: {
+        "text": json.dumps({"changes": json.loads(kw["prompt"])["draft_changes"]})})
+    try:
+        await backend.consolidate(conversation, after_journal_id=0, through_journal_id=row.journal_id)
+        assert backend.last_run["usage"] is None
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_source_mutated_during_review_cannot_commit(tmp_path):
+    backend, journal, conversation, _workspace, service = make_backend(tmp_path)
+    await backend.initialize()
+    row = append(journal, conversation, 1, "100", "原始说法")
+    service.dsh.responses.append(response([change([row.journal_id])]))
+
+    def mutate(**kw):
+        with sqlite3.connect(journal.path) as db:
+            db.execute("UPDATE journal SET content_json=? WHERE journal_id=?",
+                       (json.dumps({"text": "更正后的说法", "segments": []}), row.journal_id))
+        return {"text": json.dumps({"changes": json.loads(kw["prompt"])["draft_changes"]})}
+
+    service.dsh.review_responses.append(mutate)
+    try:
+        with pytest.raises(ValueError):
+            await backend.consolidate(conversation, after_journal_id=0, through_journal_id=row.journal_id)
+        saved = await store_snapshot(backend)
+        assert saved["cursor"] == 0 and saved["memories"] == []
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["cancel", "edit", "disable"])
+async def test_changes_during_fact_review_preserve_owner_state(tmp_path, action):
+    backend, journal, conversation, _workspace, service = make_backend(tmp_path)
+    await backend.initialize()
+    row = append(journal, conversation, 1, "100", "来源原文")
+    initial = await backend._io("commit", 0, 0, 0,
+                               [change([row.journal_id], content="原有记忆")], {})
+    memory_id = initial["memories"][0]["id"]
+    service.dsh.responses.append(response([change([row.journal_id], memory_id=memory_id)]))
+    started, release = threading.Event(), threading.Event()
+
+    def review(**kw):
+        started.set()
+        assert release.wait(5)
+        return {"text": json.dumps({"changes": json.loads(kw["prompt"])["draft_changes"]})}
+
+    service.dsh.review_responses.append(review)
+    run = asyncio.create_task(backend.consolidate(conversation, after_journal_id=0,
+                                                 through_journal_id=row.journal_id))
+    try:
+        assert await asyncio.to_thread(started.wait, 2)
+        if action == "cancel":
+            run.cancel()
+        elif action == "disable":
+            await backend._io("set_enabled", False, initial["revision"])
+        else:
+            manual = change([], content="Owner新修订", memory_id=memory_id)
+            manual.pop("claims")
+            await backend._io("update", initial["revision"], [manual], {"actor": "dashboard_owner"})
+        release.set()
+        with pytest.raises(asyncio.CancelledError if action == "cancel" else RevisionConflict):
+            await run
+        saved = await store_snapshot(backend)
+        assert saved["cursor"] == 0
+        assert saved["memories"][0]["content"] == ("Owner新修订" if action == "edit" else "原有记忆")
+        if action == "disable":
+            assert saved["enabled"] is False
+    finally:
+        release.set()
+        await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_later_review_packet_failure_keeps_all_changes_uncommitted(tmp_path, monkeypatch):
+    import v2_memory.backend as implementation
+    real_builder = implementation.build_review_packets
+
+    def separate(changes, messages, **kw):
+        packets = []
+        for index, item in enumerate(changes):
+            packet = real_builder([item], messages, **kw)[0]
+            packet["indexes"] = [index]
+            packets.append(packet)
+        return packets
+
+    monkeypatch.setattr(implementation, "build_review_packets", separate)
+    backend, journal, conversation, _workspace, service = make_backend(tmp_path)
+    await backend.initialize()
+    row = append(journal, conversation, 1, "100", "来源原文")
+    service.dsh.responses.append(response([change([row.journal_id], content="第一条"),
+                                           change([row.journal_id], content="第二条")]))
+    service.dsh.review_responses.extend([
+        lambda **kw: {"text": json.dumps({"changes": json.loads(kw["prompt"])["draft_changes"]})},
+        RuntimeError("second review failed"),
+    ])
+    try:
+        with pytest.raises(RuntimeError, match="second review"):
+            await backend.consolidate(conversation, after_journal_id=0, through_journal_id=row.journal_id)
+        saved = await store_snapshot(backend)
+        assert saved["cursor"] == 0 and saved["memories"] == []
+        assert len(service.dsh.review_calls) == 2
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_fact_review_keeps_unread_forward_context_without_text_reference(tmp_path):
+    backend, journal, conversation, _workspace, service = make_backend(tmp_path)
+    await backend.initialize()
+    row = append(journal, conversation, 1, "100", "看看演示视频")
+    forwarded = JOURNAL.Message(
+        platform_id=conversation.platform_id, bot_id=conversation.bot_id,
+        conversation_key=conversation.key, conversation_type="group", direction="inbound",
+        actor_id="100", actor_name="A", source="user", message_id="2", reply_to=None,
+        content={"text": "", "segments": [{"type": "forward", "id": "opaque-private-id"}]},
+        created_at=2, observed_at_ns=time.time_ns())
+    last = journal.append(forwarded)[0]
+    service.dsh.responses.append(response([change([row.journal_id])]))
+    try:
+        await backend.consolidate(conversation, after_journal_id=0, through_journal_id=last.journal_id)
+        prompt = json.loads(service.dsh.review_calls[0]["prompt"])
+        observed = next(message for message in prompt["messages"]
+                        if message["message_ref"] == f"journal:{last.journal_id}")
+        assert observed["evidence"][0]["kind"] == "host_observation"
+        assert observed["evidence"][0]["observation"] == {"kind": "forward_present", "segment_index": 0}
+        assert "journal_id" not in observed
+        assert "opaque-private-id" not in service.dsh.review_calls[0]["prompt"]
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["time", "media"])
+async def test_fact_review_rechecks_time_and_media_when_literal_quote_is_unchanged(tmp_path, field):
+    backend, journal, conversation, _workspace, service = make_backend(tmp_path)
+    await backend.initialize()
+    row = append(journal, conversation, 1, "900", "这是视频", direction="outbound")
+    service.dsh.responses.append(response([change([row.journal_id])]))
+
+    def update_event(**kw):
+        with sqlite3.connect(journal.path) as db:
+            if field == "time":
+                db.execute("UPDATE journal SET created_at=created_at+86400 WHERE journal_id=?", (row.journal_id,))
+            else:
+                db.execute("UPDATE journal SET content_json=? WHERE journal_id=?", (
+                    json.dumps({"text": "这是视频", "segments": [
+                        {"type": "text", "text": "这是视频"}, {"type": "video"}]}), row.journal_id))
+        return {"text": json.dumps({"changes": json.loads(kw["prompt"])["draft_changes"]})}
+
+    service.dsh.review_responses.append(update_event)
+    try:
+        with pytest.raises(MemoryUnavailable) as caught:
+            await backend.consolidate(conversation, after_journal_id=0, through_journal_id=row.journal_id)
+        assert caught.value.error_code == "MEMORY_FACT_REVIEW_SOURCE_CHANGED"
+        saved = await store_snapshot(backend)
+        assert saved["cursor"] == 0 and saved["memories"] == []
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_final_rebind_failure_reports_the_original_review_packet(tmp_path):
+    backend, journal, conversation, workspace, service = make_backend(tmp_path)
+    await backend.initialize()
+    first = append(journal, conversation, 1, "100", "第一条来源")
+    second = append(journal, conversation, 2, "200", "第二条来源")
+    service.dsh.responses.append(response([change([first.journal_id], content="第一条"),
+                                           change([second.journal_id], content="第二条")]))
+    def echo(**kw):
+        return {"text": json.dumps({"changes": json.loads(kw["prompt"])["draft_changes"]})}
+    def mutate_first(**kw):
+        with sqlite3.connect(journal.path) as db:
+            db.execute("UPDATE journal SET content_json=? WHERE journal_id=?", (
+                json.dumps({"text": "第一条已更正", "segments": []}), first.journal_id))
+        return echo(**kw)
+    service.dsh.review_responses.extend([echo, mutate_first])
+    try:
+        with pytest.raises(ValueError):
+            await backend.consolidate(conversation, after_journal_id=0, through_journal_id=second.journal_id)
+        with sqlite3.connect(workspace / ".v2-memory/state.sqlite3") as db:
+            diag = json.loads(db.execute(
+                "SELECT diagnostic_json FROM validation_diagnostics ORDER BY id DESC LIMIT 1").fetchone()[0])
+        assert diag["operation"] == "fact_review_rebind"
+        assert diag["fact_review_packet"] == 1 and diag["fact_review_packets"] == 2
+        assert diag["prompt_sha256"] == hashlib.sha256(
+            service.dsh.review_calls[0]["prompt"].encode()).hexdigest()
+        assert diag["error_path"].startswith("$.changes[0]")
+        saved = await store_snapshot(backend)
+        assert saved["cursor"] == 0 and saved["memories"] == []
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_fact_review_reduced_citations_do_not_reintroduce_200_source_cap(tmp_path):
+    backend, journal, conversation, _workspace, service = make_backend(tmp_path)
+    await backend.initialize()
+    rows = [append(journal, conversation, i, "100", f"已验证旧来源{i}") for i in range(1, 258)]
+    ids = [row.journal_id for row in rows]
+    old = change(ids, content="原记忆")
+    old["claims"][0]["sources"] = [{"journal_id": row.journal_id,
+        "quote": row.message.content["text"], "actor_id": "100", "direction": "inbound"} for row in rows]
+    initial = await backend._io("commit", 0, 0, ids[-1], [old], {})
+    old_id = initial["memories"][0]["id"]
+    latest = append(journal, conversation, 258, "100", "新经历")
+    def generate(**kw):
+        prompt = json.loads(kw["prompt"])
+        refs = prompt["existing_memories"][0]["claims"][0]["sources"]
+        assert len(refs) == 257
+        return {"text": json.dumps({"changes": [{"id": None, "members": ["100"],
+            "weight": 3, "status": "active", "content": "新理解",
+            "claims": [{"text": "新理解", "sources": refs}]}]})}
+    def reduce(**kw):
+        changes = json.loads(kw["prompt"])["draft_changes"]
+        changes[0]["claims"][0]["sources"] = changes[0]["claims"][0]["sources"][:1]
+        return {"text": json.dumps({"changes": changes})}
+    service.dsh.responses.append(generate)
+    service.dsh.review_responses.append(reduce)
+    try:
+        await backend.consolidate(conversation, after_journal_id=ids[-1], through_journal_id=latest.journal_id)
+        saved = await store_snapshot(backend)
+        preserved = next(item for item in saved["memories"] if item["id"] == old_id)
+        created = next(item for item in saved["memories"] if item["id"] != old_id)
+        assert preserved["source_ids"] == ids
+        assert created["source_ids"] == [ids[0]]
+        assert saved["cursor"] == latest.journal_id
+    finally:
+        await backend.close()
+
+
+def append_segment(journal, conversation, message_id, kind):
+    return journal.append(JOURNAL.Message(
+        platform_id=conversation.platform_id, bot_id=conversation.bot_id,
+        conversation_key=conversation.key, conversation_type="group", direction="inbound",
+        actor_id="100", actor_name="A", source="user", message_id=str(message_id), reply_to=None,
+        content={"text": "", "segments": [{"type": kind, "id": "opaque-internal-media-id"}]},
+        created_at=1793371232, observed_at_ns=time.time_ns()))[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["video", "forward"])
+async def test_pure_media_has_host_bound_persistent_source_without_fake_quote(tmp_path, kind):
+    backend, journal, conversation, _workspace, service = make_backend(tmp_path)
+    await backend.initialize()
+    first = append_segment(journal, conversation, 1, kind)
+    def generate(**kw):
+        prompt = json.loads(kw["prompt"])
+        ref = prompt["messages"][0]["evidence"][0]
+        assert ref["kind"] == "host_observation" and "quote" not in ref
+        return {"text": json.dumps({"changes": [{"id": None, "members": ["100"],
+            "weight": 2, "status": "active", "content": "A发了媒体；内容未提供。我很好奇。",
+            "claims": [{"text": "A的消息包含媒体，内容未知", "sources": [ref["evidence_id"]]}]}]})}
+    service.dsh.responses.append(generate)
+    try:
+        await backend.consolidate(conversation, after_journal_id=0, through_journal_id=first.journal_id)
+        saved = (await store_snapshot(backend))["memories"][0]
+        source = saved["claims"][0]["sources"][0]
+        expected = {"kind": "forward_present" if kind == "forward" else "media_present", "segment_index": 0}
+        if kind != "forward":
+            expected["media_type"] = kind
+        assert source == {"journal_id": first.journal_id, "actor_id": "100", "direction": "inbound",
+                          "observation": expected}
+        assert "quote" not in source and "not_provided" not in json.dumps(source)
+        assert saved["source_ids"] == [first.journal_id]
+        assert (await backend.manage("list", {}))["entries"][0]["claims"][0]["sources"][0] == source
+        # The next generation must revalidate the persisted observation and expose
+        # its reference just like an old literal quote, without reading media content.
+        last = append(journal, conversation, 2, "100", "新的讨论")
+        def reuse(**kw):
+            prompt = json.loads(kw["prompt"])
+            old = next(item for item in prompt["existing_memories"] if item["id"] == saved["id"])
+            ref = next(item for item in old["evidence"] if "observation" in item)
+            return {"text": json.dumps({"changes": [{"id": saved["id"], "members": ["100"],
+                "weight": 2, "status": "active", "content": "仍记得A发过媒体，内容未知。",
+                "claims": [{"text": "消息包含媒体", "sources": [ref["evidence_id"]]}]}]})}
+        service.dsh.responses.append(reuse)
+        await backend.consolidate(conversation, after_journal_id=first.journal_id, through_journal_id=last.journal_id)
+        revised = (await store_snapshot(backend))["memories"][0]
+        assert revised["id"] == saved["id"] and revised["claims"][0]["sources"][0] == source
+        history = await backend._io("history", saved["id"])
+        assert len(history) == 2
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_review_can_correct_generation_wrong_citation_from_full_journal_context(tmp_path):
+    backend, journal, conversation, _workspace, service = make_backend(tmp_path)
+    await backend.initialize()
+    first = append(journal, conversation, 1, "100", "我也没猜啊")
+    last = append(journal, conversation, 2, "200", "旁边另一句")
+    service.dsh.responses.append({"text": json.dumps({"changes": [{"id": None, "members": ["100"],
+        "weight": 2, "status": "active", "content": "A说自己没有猜",
+        "claims": [{"text": "A说自己没有猜", "sources": [2]}]}]})})
+    def correct(**kw):
+        prompt = json.loads(kw["prompt"])
+        valid = next(ref["evidence_id"] for msg in prompt["messages"] for ref in msg["evidence"]
+                     if ref.get("quote") == "我也没猜啊")
+        draft = prompt["draft_changes"]
+        assert draft[0]["claims"][0]["sources"] != [valid]
+        draft[0]["claims"][0]["sources"] = [valid]
+        return {"text": json.dumps({"changes": draft})}
+    service.dsh.review_responses.append(correct)
+    try:
+        await backend.consolidate(conversation, after_journal_id=0, through_journal_id=last.journal_id)
+        source = (await store_snapshot(backend))["memories"][0]["claims"][0]["sources"][0]
+        assert (source["journal_id"], source["quote"], source["actor_id"]) == (first.journal_id, "我也没猜啊", "100")
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_typed_observation_changed_during_review_prevents_commit(tmp_path):
+    backend, journal, conversation, _workspace, service = make_backend(tmp_path)
+    await backend.initialize()
+    row = append_segment(journal, conversation, 1, "video")
+    service.dsh.responses.append({"text": json.dumps({"changes": [{"id": None, "members": ["100"],
+        "weight": 2, "status": "active", "content": "A发了视频，内容未知",
+        "claims": [{"text": "消息含视频", "sources": [1]}]}]})})
+    def changed(**kw):
+        with sqlite3.connect(journal.path) as db:
+            db.execute("UPDATE journal SET content_json=? WHERE journal_id=?", (
+                json.dumps({"text": "", "segments": [{"type": "image"}]}), row.journal_id))
+        return {"text": json.dumps({"changes": json.loads(kw["prompt"])["draft_changes"]})}
+    service.dsh.review_responses.append(changed)
+    try:
+        with pytest.raises(ValueError) as caught:
+            await backend.consolidate(conversation, after_journal_id=0, through_journal_id=row.journal_id)
+        assert caught.value.error_code == "MEMORY_EVIDENCE_SOURCE_CHANGED"
+        saved = await store_snapshot(backend)
+        assert saved["cursor"] == 0 and saved["memories"] == []
+    finally:
+        await backend.close()
+
+
+def test_model_failure_http_status_is_kept_without_provider_message():
+    from v2_memory.backend import _exception_metadata
+    for status in (400, 401, 429, 503):
+        error = RuntimeError("provider-secret-body")
+        error.status = status
+        metadata = _exception_metadata(error, REPO, REPO / "astrbot-plugins/v2_memory")
+        assert metadata["provider_status"] == status
+        assert "provider-secret-body" not in json.dumps(metadata)
+    for invalid in (True, "503", 99, 600, None):
+        error = RuntimeError("provider-secret-body")
+        error.status = invalid
+        assert "provider_status" not in _exception_metadata(error, REPO, REPO / "astrbot-plugins/v2_memory")

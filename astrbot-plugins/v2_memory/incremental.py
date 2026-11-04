@@ -11,8 +11,8 @@ MAX_BACKGROUND_ROWS = 100
 class IncrementalMemoryRunner:
     """One bounded pass per group, sharing the reset/manual consolidation guard.
 
-    Failure ranges live in each group's MemoryStore. A fresh message, process
-    restart, or timer never clears that state and silently retries a failed run.
+    Failed batches are durably skipped and remain available for manual replay.
+    Automatic scheduling never retries their historical ranges.
     """
 
     def __init__(self, manager, *, poll_seconds=POLL_SECONDS, concurrency=2):
@@ -21,6 +21,7 @@ class IncrementalMemoryRunner:
         self._semaphore = asyncio.Semaphore(concurrency)
         self._loop = None
         self._workers = {}
+        self._notice_episodes = {}
         self._closed = False
 
     @property
@@ -67,8 +68,14 @@ class IncrementalMemoryRunner:
                 if not config["enabled"] or not snapshot["enabled"]:
                     await self.cancel(key)
                     continue
-                if key in self._workers or config.get("failed_through") is not None:
+                if key in self._workers:
                     continue
+                if config.get("failed_through") is not None:
+                    # Reconcile old failures after deployment/restart without
+                    # issuing another model request for their original messages.
+                    async with backend.guard(backend.conversation):
+                        await backend.archive_failure()
+                    snapshot = await backend.snapshot()
                 observation = await self.observe(key, backend, snapshot)
                 if observation["due"]:
                     self.submit(key, backend)
@@ -81,10 +88,10 @@ class IncrementalMemoryRunner:
                 self.manager.logger.warning("V2 incremental observation failed for %s: %s",
                                             key, type(error).__name__)
 
-    def submit(self, key, backend, *, force=False):
+    def submit(self, key, backend, *, force=False, retry_run_id=None):
         if key in self._workers or not self._allowed(key, backend):
             return False
-        task = asyncio.create_task(self._execute(key, backend, force=force),
+        task = asyncio.create_task(self._execute(key, backend, force=force, retry_run_id=retry_run_id),
                                    name="v2-memory-incremental:" + key)
         self._workers[key] = task
         task.add_done_callback(lambda done: self._finished(key, done))
@@ -96,11 +103,16 @@ class IncrementalMemoryRunner:
         if not task.cancelled():
             task.exception()
 
-    async def _execute(self, key, backend, *, force):
+    async def _execute(self, key, backend, *, force, retry_run_id=None):
         try:
             async with self._semaphore:
                 async with backend.guard(backend.conversation):
                     if not self._allowed(key, backend):
+                        return
+                    if retry_run_id is not None:
+                        snapshot = await backend.snapshot()
+                        if snapshot["enabled"]:
+                            await backend.replay_failure(retry_run_id)
                         return
                     observation = await self.observe(key, backend)
                     if (observation["blocked"] or not observation["enabled"]
@@ -117,13 +129,49 @@ class IncrementalMemoryRunner:
                         return
                     # Limit work per pass by existing Journal page size; the
                     # backend additionally plans by actual native capacity.
-                    await backend.consolidate(backend.conversation, after_journal_id=after,
-                                              through_journal_id=rows[-1].journal_id)
+                    try:
+                        await backend.consolidate(backend.conversation, after_journal_id=after,
+                                                  through_journal_id=rows[-1].journal_id)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        # Save the failure before advancing its scan position.
+                        # Failure of that transaction leaves the range paused.
+                        await backend.archive_failure()
+                        raise
+                    await self._notify_model(backend, recovery=getattr(backend, "last_model_recovery", None))
         except asyncio.CancelledError:
             raise
         except Exception as error:
-            self.manager.logger.warning("V2 incremental memory paused for %s: %s",
+            self.manager.logger.warning("V2 memory batch failed; inspect plugin failure records for %s: %s",
                                         key, type(error).__name__)
+            # Failure diagnostics and manual replay belong to the plugin page.
+            # Do not publish each background batch error into the QQ group.
+
+    async def _notify_model(self, backend, *, recovery=None, error=None):
+        notify = getattr(getattr(self.manager, "router", None), "notify_memory_model", None)
+        if not callable(notify) or not self._allowed_for_notification(backend):
+            return
+        key = backend.conversation
+        if recovery is None and error is None:
+            self._notice_episodes.pop(key, None)
+            return
+        if recovery and error is None:
+            episode = (recovery.get("requested_provider"), recovery.get("requested_model"))
+            if self._notice_episodes.get(key) == episode:
+                return
+            self._notice_episodes[key] = episode
+        try:
+            await notify(backend.conversation, recovery=recovery, error=error)
+        except asyncio.CancelledError:
+            raise
+        except Exception as notice_error:
+            # A QQ send may have succeeded before its acknowledgement was lost.
+            # Never replay consolidation or send a second notice on that basis.
+            self.manager.logger.warning("V2 memory model notice failed: %s", type(notice_error).__name__)
+
+    def _allowed_for_notification(self, backend):
+        return (not self._closed and self.manager.for_conversation(backend.conversation) is backend)
 
     async def cancel(self, key):
         task = self._workers.get(key)

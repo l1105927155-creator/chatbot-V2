@@ -16,6 +16,12 @@
 - 用预期容量核对发起时的原生准备结果。热改容量不匹配时明确失败，不重试；原生prepareCall绑定adapter registration后发起。
 - 去掉64KiB字符限制。私有socket请求1MiB、响应4MiB是明确的宿主内存/传输安全限制，不是模型输出token预算；响应按UTF-8字节和最终JSON封包校验。模型输出耗尽、协议超限、超时、上下文拒绝分别记录安全类别，不记录提供方原始错误文本。
 
+### 2026-11-02 订阅模型容量兼容
+
+固定版DSH的`LlmResolvedModelInfo`只公开`contextWindow`和调用默认值`defaultMaxTokens`，不公开模型描述符的`maxTokens`。已认证订阅目录中的`maxTokens`是该模型声明的输出上限，但订阅适配器没有把它设为普通聊天调用默认值；因此Terra的原生解析会有上下文窗口、没有`defaultMaxTokens`，按原合同会被批处理拒绝为容量未知。
+
+订阅适配器现在通过Cordis服务`v2SubscriptionMemoryCapacity`仅向记忆整理暴露当前账户范围内精确模型描述符的`maxTokens`。记忆整理只在标准默认值缺失时采用该目录输出上限，并把它显式传给该次记忆`prepareCall`；随后核对准备结果的上下文窗口和实际输出`maxTokens`。普通聊天仍不设置`maxTokens`默认值。未知或无效的目录输出上限仍失败关闭，目录变化仍以`MEMORY_CAPACITY_CHANGED`拒绝提交。
+
 ## 对照外部实现
 
 [Letta memory blocks](https://docs.letta.com/v1-sdk/memory/memory-blocks) 对常驻记忆块设容量限制，[Zep Memory API](https://help.getzep.com/v2/memory) 推荐逐轮添加并检索相关上下文。它们支持“增量写入、有限工作集”的方向，不能用文档推导任意输入都不会失败，也没有因此迁移它们的记忆语义、置信度或架构。

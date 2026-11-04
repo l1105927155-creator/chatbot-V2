@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { LlmError } from '../../node_modules/@deepseek-ai/dsh-llm/lib/index.js'
 import { imageOffloadProjection } from '../../node_modules/@deepseek-ai/dsh-compaction-image-offload/lib/types/projection.js'
 import { privateSourceRoot, readTurnSource, validateClaimedPrompt } from './trusted-turn-guard.mjs'
+import { classifyFailure } from './model-recovery.mjs'
 
 export const name = 'v2-turn-lifecycle'
 export const inject = ['sessions']
@@ -38,6 +39,8 @@ function writeReceipt(root, source, value) {
 }
 
 export function apply(ctx, config = {}) {
+  // Recovery is optional: older deployed Profiles still load this shared file.
+  const recoveryService = () => ctx.reflect?.get?.('v2ModelRecovery')
   ctx.sessions.registerMessageProjection(imageOffloadProjection)
   const seenTurns = new WeakMap()
   const turns = new Map()
@@ -57,7 +60,7 @@ export function apply(ctx, config = {}) {
     try {
       const source = readTurnSource(root, epoch, agent.session.id)
       validateClaimedPrompt(message, source)
-      turns.set(agent.session, { source, turn, kind: 'infrastructure', code: 'UNKNOWN',
+      turns.set(agent.session, { source, turn, agent, kind: 'infrastructure', code: 'UNKNOWN',
         calls: new Map(), finished: new Set(), finalText: false })
     } catch {
       // Subagents have no independent QQ source. They cannot create receipts
@@ -67,9 +70,13 @@ export function apply(ctx, config = {}) {
   ctx.on('agent/error', ({ agent, turn, error }) => {
     const active = turns.get(agent.session)
     if (!active || active.turn !== turn) return
+    active.agent = agent
     active.kind = error instanceof LlmError ? 'model' : 'infrastructure'
-    const code = error instanceof LlmError ? error.failure.code : 'UNKNOWN'
+    const failure = error instanceof LlmError ? error.failure : undefined
+    const classified = failure && recoveryService() ? classifyFailure(failure) : undefined
+    const code = classified?.code ?? failure?.code ?? 'UNKNOWN'
     active.code = typeof code === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? code : 'UNKNOWN'
+    active.status = classified?.status
   })
   ctx.on('session/event', (session, event) => {
     const active = turns.get(session)
@@ -89,9 +96,14 @@ export function apply(ctx, config = {}) {
     } else if (event.type === 'turn/end') {
       turns.delete(session)
       const reason = event.data.reason.kind
-      if (reason === 'completed' && !active.finalText) {
+      let recovery = recoveryService()?.consume(active.agent, active.turn)
+      if (reason === 'completed' && active.finalText && recovery?.recovered === true) {
+        active.kind = 'recovered'
+        active.code = 'MODEL_RECOVERED'
+      } else if (reason === 'completed' && !active.finalText) {
         active.kind = 'model'
         active.code = 'EMPTY_RESPONSE'
+        if (recovery?.recovered === true) recovery = { ...recovery, recovered: false }
       } else if (reason === 'max-tokens') {
         active.kind = 'model'
         active.code = 'MAX_TOKENS'
@@ -101,8 +113,10 @@ export function apply(ctx, config = {}) {
       const names = ids => [...ids].map(id => active.calls.get(id)).filter(Boolean).slice(0, 100)
       writeReceipt(root, source, { version: 1, session_id: session.id, epoch, nonce: source.nonce,
         turn: active.turn, terminal: true, kind: active.kind, code: active.code,
+        ...(active.status ? { status: active.status } : {}),
         tools_started: names(active.calls.keys()), tools_finished: names(active.finished),
-        unfinished_tools: names([...active.calls.keys()].filter(id => !active.finished.has(id))) })
+        unfinished_tools: names([...active.calls.keys()].filter(id => !active.finished.has(id))),
+        ...(recovery ? { recovery } : {}) })
     }
   })
   ctx.on('agent/disposed', ({ agent }) => { seenTurns.delete(agent); turns.delete(agent.session) })

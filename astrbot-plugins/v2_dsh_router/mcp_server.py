@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import logging
 import inspect
 import json
@@ -13,7 +14,7 @@ import socket
 import hmac
 import ipaddress
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Annotated, Any, AsyncIterator, Awaitable, Callable, TypedDict
 
 import uvicorn
@@ -46,6 +47,7 @@ class _Turn:
     actor_id: str | None = None
     source_message_id: str | None = None
     games: Any = None
+    lifetime: Any = None
 
 
 class JournalEntry(TypedDict):
@@ -137,7 +139,30 @@ class _BearerAuth:
                                     (b"content-length", str(len(body)).encode())]})
             await send({"type": "http.response.body", "body": body})
             return
-        await self.app(scope, receive, send)
+        turn = self.server._active_tokens.get(token)
+        lifetime = turn.lifetime if turn is not None else None
+        # Streamable HTTP may keep GET event streams open for the whole MCP
+        # session. Tool calls and mutations are POST messages; counting a
+        # transport subscription as in-flight would make cancellation wait
+        # forever for an idle stream.
+        if scope.get("method") != "POST":
+            lifetime = None
+        if lifetime is not None:
+            if not lifetime.active:
+                body = b'{"error":"unauthorized"}'
+                await send({"type": "http.response.start", "status": 401,
+                            "headers": [(b"content-type", b"application/json"),
+                                        (b"content-length", str(len(body)).encode())]})
+                await send({"type": "http.response.body", "body": body})
+                return
+            # No await between validating the child lease and taking this
+            # request lease: revocation either wins first or drains this call.
+            lifetime.enter()
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            if lifetime is not None:
+                lifetime.exit()
 
     @staticmethod
     async def _response(send, status: int, payload: dict[str, str]) -> None:
@@ -197,9 +222,26 @@ class _BearerAuth:
         except Exception as exc:
             server.logger.warning("Background callback handler failed (%s)", type(exc).__name__)
             return await self._response(send, 503, {"error": "unavailable"})
-        if accepted is not True:
+        if accepted is True:
+            return await self._response(send, 202, {"accepted": "true"})
+        if (not isinstance(accepted, dict) or accepted.get("accepted") is not True or
+                set(accepted) - {"accepted", "mcp"}):
             return await self._response(send, 404, {"error": "unknown_task"})
-        return await self._response(send, 202, {"accepted": "true"})
+        mcp = accepted.get("mcp")
+        if mcp is None:
+            payload = {"accepted": True, "mcp": None}
+        elif (isinstance(mcp, dict) and set(mcp) == {"url", "token"} and
+              isinstance(mcp["url"], str) and mcp["url"] == server.url and
+              isinstance(mcp["token"], str) and 32 <= len(mcp["token"]) <= 256):
+            payload = {"accepted": True, "mcp": mcp}
+        else:
+            return await self._response(send, 503, {"error": "unavailable"})
+        body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        await send({"type": "http.response.start", "status": 202,
+                    "headers": [(b"content-type", b"application/json"),
+                                (b"cache-control", b"no-store"),
+                                (b"content-length", str(len(body)).encode())]})
+        await send({"type": "http.response.body", "body": body})
 
 
 def _unique_json_object(pairs):
@@ -222,6 +264,7 @@ class McpServer:
         self.health = health
         self._tokens: dict[tuple[str, str, str], str] = {}
         self._active_tokens: dict[str, _Turn] = {}
+        self._background_tokens: dict[tuple[str, str], str] = {}
         self._active_conversations: set[tuple[str, str, str]] = set()
         self._lock = asyncio.Lock()
         self._server: uvicorn.Server | None = None
@@ -277,6 +320,8 @@ class McpServer:
 
             需要创建、修改、启停或取消任务时先加载 scheduled-tasks Skill。
             任务归当前群工作区；不接受其他群号，不根据记忆猜测启用情况。
+            助理任务 status=completed 只表示轮次结束；查看 result.outcome 和 summary，
+            它们是 Agent 的自报结果，unknown 或旧记录不表示成功。
             """
             turn = self._turn(ctx)
             if not turn.conversation.key.startswith("group:") or self.task_manager is None:
@@ -608,6 +653,7 @@ class McpServer:
                 await turn.messaging.prepare_reply(mention_user_ids or [], reply_to_journal_id)
             except ValueError as exc:
                 raise ToolError(str(exc)) from exc
+            turn.messaging._v2_reply_prepared = True
             return {"prepared": True, "sent": False}
 
         @server.tool(structured_output=False)
@@ -915,7 +961,67 @@ class McpServer:
         turn = self._active_tokens.get(token)
         if not turn:
             raise ToolError("MCP turn is no longer active")
+        if turn.lifetime is not None and not turn.lifetime.active:
+            raise ToolError("MCP background task is no longer active")
         return turn
+
+    async def fork_background_turn(self, conversation: Any, task_key: tuple[str, str], *,
+                                   send, files_send, invoke, lifetime, trace=None,
+                                   parent_task_key=None) -> dict[str, str]:
+        """Issue a task-specific bearer derived from the active parent MCP turn."""
+        identity = self._identity(conversation)
+        async with self._lock:
+            if self._task is None or self._task.done() or self._shutdown_task is not None:
+                raise RuntimeError("MCP server is not running")
+            existing = self._background_tokens.get(task_key)
+            if existing is not None:
+                if existing in self._active_tokens:
+                    return {"url": self.url, "token": existing}
+                self._background_tokens.pop(task_key, None)
+            if parent_task_key is not None:
+                parent_token = self._background_tokens.get(parent_task_key)
+                parent = self._active_tokens.get(parent_token) if parent_token else None
+                if (parent is None or self._identity(parent.conversation) != identity
+                        or parent.lifetime is None or not parent.lifetime.active):
+                    raise RuntimeError("active parent background MCP turn is unavailable")
+            else:
+                parent = next((turn for turn in self._active_tokens.values()
+                               if self._identity(turn.conversation) == identity and
+                               turn.execution_kind in {"chat", "owner-host"} and
+                               turn.lifetime is None), None)
+            if parent is None:
+                raise RuntimeError("active parent MCP turn is unavailable")
+            token = secrets.token_urlsafe(32)
+            files = copy.copy(parent.files) if parent.files is not None else None
+            if files is not None:
+                files.send = lambda path, name: files_send(parent.files, path, name)
+                files.trace = trace
+            messaging = copy.copy(parent.messaging) if parent.messaging is not None else None
+            if messaging is not None:
+                messaging._mention_user_ids = list(getattr(parent.messaging, "_mention_user_ids", []))
+                messaging._reply_to_journal_id = getattr(parent.messaging, "_reply_to_journal_id", None)
+                messaging._v2_reply_prepared = bool(getattr(parent.messaging, "_v2_reply_prepared", False))
+                forwards = getattr(parent.messaging, "forwards", None)
+                if forwards is not None:
+                    messaging.forwards = copy.copy(forwards)
+                    messaging.forwards.messaging = messaging
+            child = replace(parent, token=token, send=send, files=files,
+                            messaging=messaging, invoke=invoke, lifetime=lifetime)
+            self._active_tokens[token] = child
+            self._background_tokens[task_key] = token
+            return {"url": self.url, "token": token}
+
+    def background_messaging(self, task_key: tuple[str, str]):
+        """Return the isolated messaging adapter for a live child task."""
+        token = self._background_tokens.get(task_key)
+        turn = self._active_tokens.get(token) if token is not None else None
+        return turn.messaging if turn is not None else None
+
+    def revoke_background_turn(self, task_key: tuple[str, str]) -> None:
+        """Invalidate a child credential synchronously on the event loop."""
+        token = self._background_tokens.pop(task_key, None)
+        if token is not None:
+            self._active_tokens.pop(token, None)
 
     async def start(self, port: int = 6210) -> None:
         if self._task is not None:
@@ -984,6 +1090,7 @@ class McpServer:
                 sock.close()
             async with self._lock:
                 self._active_tokens.clear()
+                self._background_tokens.clear()
                 self._active_conversations.clear()
             self._task = None
             self._server = None
@@ -1039,7 +1146,8 @@ class McpServer:
             raise ValueError("journal_id must be a positive integer")
         identity = self._identity(conversation)
         token = next((key for key, turn in self._active_tokens.items()
-                      if self._identity(turn.conversation) == identity), None)
+                      if self._identity(turn.conversation) == identity and
+                      turn.lifetime is None), None)
         if token is None:
             raise RuntimeError("MCP turn is not active for this conversation")
         from dataclasses import replace

@@ -1,5 +1,5 @@
 // Test-only real ACP adapter and controllably blocked native Web provider.
-import { appendFileSync, existsSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync } from 'node:fs'
 import { LlmAdapter } from '../../dsh/node_modules/@deepseek-ai/dsh-llm/lib/index.js'
 export const name = 'background-research-acp-probe'
 export const inject = ['llm', 'web']
@@ -33,6 +33,12 @@ function findTaskId(value, label, seen = new Set()) {
 class Adapter extends LlmAdapter {
   seen = new Set()
   children = new Map()
+  parentToolSchemas = []
+  schemaOf(tools) {
+    return (tools ?? []).map(tool => Object.fromEntries(
+      ['name','description','parameters','inputSchema','schema']
+        .filter(key => Object.hasOwn(tool, key)).map(key => [key, tool[key]])))
+  }
   async resolveModel(provider, model) { return { provider, id: model, name: model } }
   async *stream(options) {
     const users = options.messages.filter(m => m.role === 'user')
@@ -48,6 +54,7 @@ class Adapter extends LlmAdapter {
       source = lines.slice(1).find(line => JSON.parse(line).journal_id === header.latest_user_journal_id) ?? raw
     } catch {}
     const key = options.sessionId + ':' + (last?.id ?? source)
+    if (!child) this.parentToolSchemas = this.schemaOf(options.tools)
     log({ kind: 'model', session: options.sessionId, source,
           tools: (options.tools ?? []).map(t => t.name) })
     if (child) {
@@ -56,12 +63,54 @@ class Adapter extends LlmAdapter {
       const tools = (options.tools ?? []).map(t => t.name)
       const profile = process.env.V2_EXECUTION_PROFILE
       log({kind:'child-tools', profile, tools})
+      const childSchemas = this.schemaOf(options.tools)
+      const parentByName = new Map(this.parentToolSchemas.map(tool => [tool.name, tool]))
+      const childByName = new Map(childSchemas.map(tool => [tool.name, tool]))
+      const sameNameMcp = [...parentByName.keys()].filter(name => name.startsWith('mcp__'))
+      const differences = {
+        parent_only: [...parentByName.keys()].filter(name => !childByName.has(name)).sort(),
+        child_only: [...childByName.keys()].filter(name => !parentByName.has(name)).sort(),
+        schema_changed: [...parentByName.keys()].filter(name => childByName.has(name)
+          && JSON.stringify(parentByName.get(name)) !== JSON.stringify(childByName.get(name))).sort(),
+      }
+      const allParentMcpVisible = sameNameMcp.every(name => childByName.has(name))
+      const backgroundResearch = {
+        parent: parentByName.get('background_research') ?? null,
+        child: childByName.get('background_research') ?? null,
+      }
+      log({kind:'tool-schema-comparison', profile, all_parent_mcp_visible:allParentMcpVisible,
+           parent_mcp_names:sameNameMcp.sort(), differences, background_research:backgroundResearch})
+      if (!allParentMcpVisible) throw new Error('one or more parent MCP tools are missing in the child')
       const childText = users.flatMap(m => m.content ?? [])
         .filter(b => b.type === 'text').map(b => b.text).join('\n')
-      const parallel = childText.match(/BG_CHILD_([A-D])/)
-      if (tools.some(t => t.startsWith('mcp__') || t === 'background_research')) {
-        throw new Error('unexpected child authority')
+      if (childText.includes('nested-background-probe')) {
+        if (childText.includes('PARENT_FINISHES_EARLY') && stage === 0) {
+          yield* call('web_fetch', {url:'https://background.fixture/research?grandchild=1'}, 'grandchild-gate-' + options.sessionId)
+          return
+        }
+        log({kind:'nested-child-completed'})
+        yield* text('NESTED_RESEARCH_COMPLETE')
+        return
       }
+      if (childText.includes('BG_NESTED_PROBE')) {
+        if (stage === 0) {
+          yield* call('background_research', {action:'start', prompt:'nested-background-probe: verify nested research.'},
+            'generic-nested-start-' + options.sessionId)
+        } else if (stage === 1) {
+          const result = JSON.stringify(options.messages.at(-1))
+          if (!result.includes('running')) throw new Error('generic nested start failed: ' + result)
+          yield* call('web_fetch', {url:'https://background.fixture/research?wait_nested=1'},
+            'generic-nested-gate-' + options.sessionId)
+        } else {
+          const relayed = JSON.stringify(options.messages).includes('NESTED_RESEARCH_COMPLETE')
+          log({kind:'generic-nested-result', profile, relayed})
+          if (!relayed) throw new Error('nested result not relayed')
+          yield* text('GENERIC_NESTED_PARENT_DONE')
+        }
+        return
+      }
+      const historyProbe = childText.includes('BG_HISTORY_PROBE')
+      const parallel = childText.match(/BG_CHILD_([A-D])/)
       if (profile !== 'owner-host' && tools.some(t => t === 'write' || t === 'edit')) {
         throw new Error('unexpected child write authority')
       }
@@ -72,7 +121,57 @@ class Adapter extends LlmAdapter {
         throw new Error('group application tool is unavailable to the sandbox child')
       }
       const fileTool = tools.includes('read') || tools.includes('bash')
-      if (stage === 0 && fileTool) {
+      if (historyProbe && !tools.includes('mcp__astrbot__history_recent')) {
+        throw new Error('history_recent is unavailable to the background child')
+      }
+      if (historyProbe && stage === 0) {
+        yield* call('web_fetch', { url: 'https://background.fixture/research?history=1' },
+          'history-gate-' + options.sessionId)
+      } else if (historyProbe && stage === 1) {
+        yield* call('mcp__astrbot__history_recent', { limit: 100 },
+          'history-' + options.sessionId)
+      } else if (historyProbe && stage === 2) {
+        const previous = JSON.stringify(options.messages)
+        const localSeen = previous.includes('LOCAL_HISTORY_SENTINEL')
+        const foreignSeen = previous.includes('FOREIGN_GROUP_SENTINEL')
+        log({kind:'history-verified', profile, localSeen, foreignSeen, tools})
+        if (!localSeen || foreignSeen) {
+          throw new Error(`history scope mismatch: local=${localSeen} foreign=${foreignSeen}`)
+        }
+        yield* call('mcp__astrbot__qq_send_origin', {text:'BACKGROUND_CHILD_TEXT_SEND'},
+          'history-text-send-' + options.sessionId)
+      } else if (historyProbe && stage === 3) {
+        yield* call('mcp__astrbot__qq_file_send',
+          {content:'BACKGROUND_CHILD_FILE_SEND', name:'child-report.md'},
+          'history-file-send-' + options.sessionId)
+      } else if (historyProbe && stage === 4) {
+        log({kind:'child-send-tools-verified', profile,
+             results: JSON.stringify(options.messages).includes('BACKGROUND_CHILD_TEXT_SEND')})
+        yield* call('background_research', {
+          action:'start', prompt:'nested-background-probe: bounded test-only child capability check; do not send QQ messages or modify files.' +
+            (childText.includes('PARENT_FINISHES_EARLY') ? ' PARENT_FINISHES_EARLY' : '')
+        }, 'nested-background-start-' + options.sessionId)
+      } else if (historyProbe && stage === 5) {
+        const nestedResult = options.messages
+          .filter(m => m.role === 'tool'
+            && m.source?.callId?.startsWith('nested-background-start-'))
+          .flatMap(m => m.content ?? []).filter(b => b.type === 'text')
+          .map(b => b.text).join('\n')
+        log({kind:'background-research-recursion-probe', profile,
+             toolsAvailable:tools.includes('background_research'),
+             nestedResult})
+        if (!nestedResult.includes('running')) throw new Error('nested start failed: ' + nestedResult)
+        if (childText.includes('PARENT_FINISHES_EARLY')) {
+          yield* text('BACKGROUND_PARENT_FINISHED_EARLY')
+          return
+        }
+        yield* call('web_fetch', {url:'https://background.fixture/research?wait_nested=1'},
+          'nested-gate-' + options.sessionId)
+      } else if (historyProbe && stage === 6) {
+        log({kind:'nested-parent-result', session: options.sessionId,
+             messages: JSON.stringify(options.messages).includes('NESTED_RESEARCH_COMPLETE')})
+        yield* text('BACKGROUND_HISTORY_READ_OK')
+      } else if (stage === 0 && fileTool) {
         yield* call(profile === 'owner-host' || !tools.includes('read') ? 'bash' : 'read',
           profile === 'owner-host'
             ? { command: 'printf OWNER_HOST_SELF_CHECK_OK', description: 'Check the owner host runtime' }
@@ -115,7 +214,9 @@ class Adapter extends LlmAdapter {
       }
       return
     }
-    const match = source.match(/BG_(PAR_)?(START|STATUS|UPDATE|CANCEL)(?:_([A-D]))?/)
+    const match = source.includes('BG_HISTORY_START') || source.includes('BG_NESTED_START')
+      ? ['BG_START', undefined, 'START', undefined]
+      : source.match(/BG_(PAR_)?(START|STATUS|UPDATE|CANCEL)(?:_([A-D]))?/)
     if (match && !this.seen.has(key)) {
       this.seen.add(key)
       const parallel = match[1] === 'PAR_'
@@ -127,6 +228,9 @@ class Adapter extends LlmAdapter {
       yield* call('background_research', {
         action, ...(action === 'start' ? { prompt: parallel
           ? label : 'BG_CHILD: verify the implementation using web tools.' +
+            (source.includes('BG_HISTORY_START') ? ' BG_HISTORY_PROBE' : '') +
+            (source.includes('BG_NESTED_START') ? ' BG_NESTED_PROBE' : '') +
+            (source.includes('PARENT_FINISHES_EARLY') ? ' PARENT_FINISHES_EARLY' : '') +
             (source.includes('BG_START_LONG_RESULT') ? ' LONG_RESULT' : '') }
           : { task_id: taskId }),
         ...(action === 'update' ? { prompt: 'ADDITIONAL_REQUIREMENT: focus on group chat.' } : {}),
@@ -141,11 +245,20 @@ export function apply(ctx) {
   ctx.web.registerFetchProvider({
     id: 'background-fixture', available: () => true,
     async fetch(request, signal) {
-      const child = new URL(request.url).searchParams.get('child')
+      const parsed = new URL(request.url)
+      const child = parsed.searchParams.get('child')
+      if (parsed.searchParams.has('wait_nested')) {
+        while (!existsSync(process.env.V2_BG_PROBE_LOG) || !readFileSync(process.env.V2_BG_PROBE_LOG, 'utf8').includes('nested-child-completed')) {
+          signal?.throwIfAborted()
+          await new Promise(resolve => setTimeout(resolve, 20))
+        }
+        await new Promise(resolve => setTimeout(resolve, 100))
+      }
       log({ kind: 'fetch-start', url: request.url, ...(child ? {child} : {}) })
-      const release = child
-        ? process.env[`V2_BG_PROBE_RELEASE_${child}`]
-        : process.env.V2_BG_PROBE_RELEASE
+      const release = parsed.searchParams.has('grandchild')
+        ? process.env.V2_BG_PROBE_NESTED_RELEASE
+        : child ? process.env[`V2_BG_PROBE_RELEASE_${child}`]
+          : process.env.V2_BG_PROBE_RELEASE
       while (!existsSync(release)) {
         signal?.throwIfAborted()
         await new Promise(resolve => setTimeout(resolve, 20))

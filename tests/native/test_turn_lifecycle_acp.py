@@ -1,12 +1,14 @@
 """Real pinned ACP: visual lifetime, private terminal facts and scoped image MCP."""
 import os
+import pytest
 import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_native_visual_lifetime_terminal_evidence_and_history_image(tmp_path):
+@pytest.mark.parametrize("legacy_profile", [False, True])
+def test_native_visual_lifetime_terminal_evidence_and_history_image(tmp_path, legacy_profile):
     script = r'''
 import asyncio,base64,io,json,os,sys
 from pathlib import Path
@@ -24,7 +26,11 @@ async def scenario():
  profile=base/'dsh/profile';profile.mkdir(parents=True)
  (profile.parent/'skills').symlink_to(root/'dsh/skills',target_is_directory=True)
  patch=profile/'v2-agent-group-sandbox.patch.yml'
- patch.write_text((root/'dsh/profile'/patch.name).read_text().replace('../plugins/agent-profile/',str(root/'dsh/plugins/agent-profile')+'/')+
+ profile_text=(root/'dsh/profile'/patch.name).read_text()
+ if os.environ['V2_LEGACY_PROFILE']=='1':
+  profile_text=profile_text.replace('    - id: v2-model-recovery\n      name: ../plugins/agent-profile/model-recovery.mjs\n','')
+  profile_text=profile_text.replace('../plugins/agent-profile/model-recovery-compaction.mjs', "'@deepseek-ai/dsh-compaction-basic'")
+ patch.write_text(profile_text.replace('../plugins/agent-profile/',str(root/'dsh/plugins/agent-profile')+'/')+
  '\n- insert:\n    - id: lifecycle-fixture\n      name: '+str(root/'tests/native/turn-lifecycle-acp-probe.mjs')+'\n')
  log=base/'calls.jsonl';cmd=base/'command.json'
  os.environ['V2_LIFECYCLE_LOG']=str(log);os.environ['V2_LIFECYCLE_COMMAND']=str(cmd)
@@ -128,7 +134,7 @@ async def scenario():
 asyncio.run(scenario())
 '''
     env = {**os.environ, 'V2_REPO_ROOT': str(ROOT), 'V2_LIFECYCLE_TEST': str(tmp_path),
-           'PYTHONPATH': str(ROOT/'.runtime/dsh-runtime/python/sdk/src')}
+           'PYTHONPATH': str(ROOT/'.runtime/dsh-runtime/python/sdk/src'), 'V2_LEGACY_PROFILE': str(int(legacy_profile))}
     result = subprocess.run([str(ROOT/'.runtime/astrbot/.venv/bin/python'), '-c', script],
                             env=env, cwd=ROOT, text=True, capture_output=True, timeout=180)
     assert result.returncode == 0, result.stdout + result.stderr

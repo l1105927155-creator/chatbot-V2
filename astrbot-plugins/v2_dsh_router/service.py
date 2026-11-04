@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import threading
 import time
 from collections import OrderedDict
@@ -12,12 +13,14 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 try:
+    from .model_failure import model_failure_notice, recovery_notice, validate_recovery
     from .reply_safety import validate_reply, ReplyContentError
     from .runtime_audit import CURRENT_TRACE, trace_scope
     from .dsh_client import DshTurnCancelled, DshModelTurnFailure, DshTurnFailure
     from .background import BackgroundTask, validate_event, task_key
     from .console_settings import configured_store, session_settings
 except ImportError:
+    from model_failure import model_failure_notice, recovery_notice, validate_recovery
     from reply_safety import validate_reply, ReplyContentError
     from runtime_audit import CURRENT_TRACE, trace_scope
     from dsh_client import DshTurnCancelled, DshModelTurnFailure, DshTurnFailure
@@ -32,8 +35,10 @@ class PendingTurnError(RuntimeError):
 class ModelTurnError(RuntimeError):
     """A terminal model failure whose turn had no tool calls or side effects."""
 
-    def __init__(self, code="UNKNOWN", *, tools_completed=False):
+    def __init__(self, code="UNKNOWN", *, tools_completed=False, recovery=None, status=None):
         self.tools_completed = tools_completed
+        self.recovery = validate_recovery(recovery)
+        self.status = status if type(status) is int and 100 <= status <= 599 else None
         self.code = code if isinstance(code, str) else "UNKNOWN"
         super().__init__("model request failed after a confirmed terminal response")
 
@@ -109,6 +114,25 @@ class _SendLifetime:
     active: bool = True
 
 
+@dataclass
+class _BackgroundLifetime:
+    active: bool = True
+    in_flight: int = 0
+    drained: asyncio.Event = field(default_factory=asyncio.Event)
+
+    def __post_init__(self):
+        self.drained.set()
+
+    def enter(self):
+        self.in_flight += 1
+        self.drained.clear()
+
+    def exit(self):
+        self.in_flight -= 1
+        if self.in_flight == 0:
+            self.drained.set()
+
+
 class ChatService:
     MAX_DELTA_ROWS = 100
     MAX_DELTA_BYTES = 32 * 1024
@@ -143,12 +167,47 @@ class ChatService:
         self._reset_cancelled_wakes: set[tuple[tuple[str, str, str], str]] = set()
         self._disabled_identities: set[tuple[str, str, str]] = set()
         self._background_tasks: dict[tuple[str, str], BackgroundTask] = {}
+        self._background_starting: dict[tuple[str, str], tuple[tuple, asyncio.Future]] = {}
         self._background_terminal_lru: OrderedDict[tuple[str, str], None] = OrderedDict()
         self._background_delivery_tasks: set[asyncio.Task] = set()
         self._background_closing = False
         self.console_store = configured_store()
 
-    async def handle_background_event(self, raw_event: dict) -> bool:
+    async def handle_background_event(self, raw_event: dict) -> Any:
+        try:
+            event = validate_event(raw_event)
+        except (TypeError, ValueError):
+            return False
+        key = task_key(event)
+        if event["event"] == "started":
+            pending_entry = self._background_starting.get(key)
+            if pending_entry is not None:
+                if pending_entry[0] != (event["requester_id"], event.get("parent_task_id"), event.get("depth")):
+                    return False
+                return await asyncio.shield(pending_entry[1])
+            pending = asyncio.get_running_loop().create_future()
+            pending_entry = ((event["requester_id"], event.get("parent_task_id"), event.get("depth")), pending)
+            self._background_starting[key] = pending_entry
+            try:
+                result = await self._handle_background_event(event)
+                if not pending.done():
+                    pending.set_result(result)
+                return result
+            except BaseException:
+                if not pending.done():
+                    pending.set_result(False)
+                raise
+            finally:
+                if self._background_starting.get(key) == pending_entry:
+                    self._background_starting.pop(key, None)
+        pending_entry = self._background_starting.get(key)
+        if pending_entry is not None:
+            if (pending_entry[0] != (event["requester_id"], event.get("parent_task_id"), event.get("depth")) or
+                    not await asyncio.shield(pending_entry[1])):
+                return False
+        return await self._handle_background_event(event)
+
+    async def _handle_background_event(self, raw_event: dict) -> Any:
         """Accept a native DSH lifecycle callback without waiting for chat delivery."""
         if self._background_closing:
             return False
@@ -160,7 +219,11 @@ class ChatService:
         task = self._background_tasks.get(key)
         if event["event"] == "started":
             if task is not None:
-                return task.requester_id == event["requester_id"]
+                if (task.requester_id != event["requester_id"] or task.status != "running"
+                        or task.parent_task_id != event.get("parent_task_id")
+                        or task.depth != event.get("depth", 1)):
+                    return False
+                return {"accepted": True, "mcp": task.mcp}
             existing = next((item for item in self._background_tasks.values()
                              if item.parent_session_id == event["parent_session_id"] and
                              item.status == "running"), None)
@@ -171,27 +234,106 @@ class ChatService:
             if (active_count >= self.BACKGROUND_ACTIVE_LIMIT or
                     len(self._background_tasks) >= self.BACKGROUND_TOTAL_LIMIT):
                 return False
-            active = next((run for run in self._active_runs.values()
-                           if run.session_id == event["parent_session_id"]), None)
-            if (active is None or active.finished or active.messaging is None or
+            ancestor = None
+            parent_task_id = event.get("parent_task_id")
+            if parent_task_id is not None:
+                ancestor = self._background_tasks.get((event["parent_session_id"], parent_task_id))
+                if (ancestor is None or ancestor.status != "running" or ancestor.lifetime is None
+                        or not ancestor.lifetime.active or ancestor.requester_id != event["requester_id"]
+                        or event.get("depth") != ancestor.depth + 1):
+                    return False
+                active = ancestor
+            else:
+                active = next((run for run in self._active_runs.values()
+                               if run.session_id == event["parent_session_id"]), None)
+            if (active is None or (ancestor is None and active.finished) or active.messaging is None or
                     active.requester_id != event["requester_id"] or
                     active.conversation is None or not active.inbound_message_id):
                 return False
             identity = (str(active.conversation.platform_id), str(active.conversation.bot_id),
                         str(active.conversation.key))
-            self._background_tasks[key] = BackgroundTask(
+            lifetime = _BackgroundLifetime()
+            trace = self.audit.trace(active.conversation, active.inbound_message_id, self.domain) if self.audit else None
+            child_messaging_ref = {}
+
+            async def operation(callback):
+                self._delivery_enter(identity, lifetime)
+                lifetime.enter()
+                try:
+                    with trace_scope(trace):
+                        return await callback()
+                finally:
+                    lifetime.exit()
+                    self._delivery_exit(identity)
+
+            async def child_send(text, **metadata):
+                validate_reply(text)
+                async def send():
+                    target = child_messaging_ref.get("messaging", active.messaging)
+                    async def sender(value):
+                        return await target.send_origin(value, **metadata)
+                    return await trace.send(sender, text, "mcp") if trace else await sender(text)
+                return await operation(send)
+
+            async def child_invoke(callback):
+                return await operation(callback)
+
+            async def child_files_send_for(source_files, path, name):
+                async def send():
+                    base_send = getattr(source_files, "_v2_base_send", None)
+                    if not callable(base_send):
+                        raise RuntimeError("background file delivery is unavailable")
+                    return await base_send(path, name)
+                return await operation(send)
+
+            task_record = BackgroundTask(
                 parent_session_id=event["parent_session_id"], task_id=event["task_id"],
                 requester_id=active.requester_id, identity=identity,
                 conversation=active.conversation, messaging=active.messaging,
                 inbound_message_id=active.inbound_message_id,
+                parent_task_id=parent_task_id, depth=event.get("depth", 1),
+                lifetime=lifetime,
             )
-            return True
-        if task is None or task.requester_id != event["requester_id"]:
+            if self.mcp is not None and callable(getattr(self.mcp, "fork_background_turn", None)):
+                try:
+                    task_record.mcp = await self.mcp.fork_background_turn(
+                        active.conversation, key, send=child_send,
+                        files_send=child_files_send_for, invoke=child_invoke,
+                        lifetime=lifetime, trace=trace,
+                        parent_task_key=ancestor.key if ancestor is not None else None,
+                    )
+                    child_messaging_ref["messaging"] = self.mcp.background_messaging(key)
+                    task_record.delivery_messaging = child_messaging_ref["messaging"]
+                except Exception as exc:
+                    logging.getLogger(__name__).warning(
+                        "Background MCP delegation failed (%s)", type(exc).__name__
+                    )
+                    lifetime.active = False
+                    self.mcp.revoke_background_turn(key)
+                    return False
+                if (self._background_closing or identity in self._reset_barriers
+                        or identity in self._disabled_identities
+                        or (ancestor is None and (active.finished or self._active_runs.get(identity) is not active))
+                        or (ancestor is not None and (ancestor.status != "running" or not ancestor.lifetime.active))):
+                    lifetime.active = False
+                    self.mcp.revoke_background_turn(key)
+                    return False
+            self._background_tasks[key] = task_record
+            return {"accepted": True, "mcp": task_record.mcp}
+        if (task is None or task.requester_id != event["requester_id"]
+                or task.parent_task_id != event.get("parent_task_id")
+                or task.depth != event.get("depth", 1)):
             return False
         if task.terminal_event is not None:
             return task.terminal_event == event
         task.status = event["status"]
         task.terminal_event = event
+        descendants = self._background_subtree(task)
+        for item in descendants:
+            self._revoke_background_task(item)
+        await asyncio.gather(*(item.lifetime.drained.wait() for item in descendants if item.lifetime is not None))
+        if task.parent_task_id is not None:
+            return True
         delivery = asyncio.create_task(self._deliver_background(task, event),
                                        name="v2-background-delivery")
         task.delivery_task = delivery
@@ -206,6 +348,26 @@ class ChatService:
     def _background_delivery_done(self, delivery, key):
         self._background_delivery_tasks.discard(delivery)
         self._prune_background_tasks()
+
+    def _background_subtree(self, task):
+        result = [task]
+        for item in result:
+            result.extend(child for child in self._background_tasks.values()
+                          if child.parent_session_id == item.parent_session_id
+                          and child.parent_task_id == item.task_id and child not in result)
+        return result
+
+    def _revoke_background_task(self, task):
+        if task.lifetime is not None:
+            task.lifetime.active = False
+        revoke = getattr(self.mcp, "revoke_background_turn", None)
+        if callable(revoke):
+            revoke(task.key)
+
+    def _revoke_background_matching(self, predicate):
+        for task in tuple(self._background_tasks.values()):
+            if predicate(task):
+                self._revoke_background_task(task)
 
     def _prune_background_tasks(self):
         """Retain a bounded terminal idempotency window and all live tasks."""
@@ -251,6 +413,8 @@ class ChatService:
                         "task_id": task.task_id, "requester_id": task.requester_id,
                         "status": "failed",
                         "text": "后台任务因 DSH 运行时退出而中断，未能确认完成。",
+                        **({"parent_task_id": task.parent_task_id, "depth": task.depth}
+                           if task.parent_task_id is not None else {}),
                     })
                 return
             unverifiable = (isinstance(runtime_health, dict) and
@@ -270,6 +434,7 @@ class ChatService:
     def _discard_background_session(self, identity, session_id):
         for key, task in tuple(self._background_tasks.items()):
             if task.identity == identity and task.parent_session_id == session_id:
+                self._revoke_background_task(task)
                 self._background_tasks.pop(key, None)
                 self._background_terminal_lru.pop(key, None)
 
@@ -291,15 +456,27 @@ class ChatService:
                 text = event.get("text", "").strip()
                 if status == "completed":
                     message = text
+                    notice = recovery_notice(event.get("recovery"))
+                    if notice:
+                        message = notice + "\n\n" + message
                 elif status == "cancelled":
                     message = text or "后台检索已停止。"
                 else:
-                    message = text or "后台检索遇到错误，未能完成。"
+                    message = (model_failure_notice(event["model_error"], event.get("recovery"),
+                                                    subject="后台任务")
+                               if event.get("model_error") else text or "后台检索遇到错误，未能完成。")
                 if event.get("label") and not message.startswith(event["label"]):
                     message = f"{event['label']}：{message}"
-                mentions = [task.requester_id] if task.conversation.key.startswith("group:") else []
-                sender = lambda value: task.messaging.send_origin(
-                    value, mention_user_ids=mentions, reply_to_journal_id=None)
+                target = task.delivery_messaging or task.messaging
+                prepared_mentions = getattr(target, "_mention_user_ids", [])
+                if getattr(target, "_v2_reply_prepared", False):
+                    mentions = list(prepared_mentions)
+                else:
+                    mentions = [task.requester_id] if task.conversation.key.startswith("group:") else []
+                reply_to = getattr(target, "_reply_to_journal_id", None)
+                async def sender(value):
+                    return await target.send_origin(
+                        value, mention_user_ids=mentions, reply_to_journal_id=reply_to)
                 # Keep reset admission and actual AstrBot send atomic on the
                 # event loop; no await may occur between this lease and send.
                 self._delivery_enter(identity)
@@ -320,6 +497,11 @@ class ChatService:
     async def close_background(self) -> None:
         """Stop callback acceptance and cancel queued sends before DSH shutdown."""
         self._background_closing = True
+        self._revoke_background_matching(lambda _task: True)
+        lifetimes = [task.lifetime for task in self._background_tasks.values()
+                     if task.lifetime is not None]
+        if lifetimes:
+            await asyncio.gather(*(lifetime.drained.wait() for lifetime in lifetimes))
         scheduled = tuple((identity, run) for identity, run in self._scheduled_runs.items())
         if scheduled:
             results = await asyncio.gather(*(self._cancel_scheduled(identity, run)
@@ -349,6 +531,7 @@ class ChatService:
         barrier = _ResetBarrier()
         barrier.trace = trace
         self._reset_barriers[identity] = barrier
+        self._revoke_background_matching(lambda task: task.identity == identity)
         return barrier
 
     def _delivery_enter(self, identity, lifetime=None):
@@ -514,6 +697,10 @@ class ChatService:
                 return False
         active = self._active_runs.get(identity)
         if active is not None:
+            matching_background = [task for task in self._background_tasks.values()
+                                   if task.identity == identity and
+                                   task.parent_session_id == active.session_id and
+                                   task.status == "running"]
             def request():
                 # A delayed worker must not cancel the next turn of the same SID.
                 with active.lock:
@@ -525,9 +712,16 @@ class ChatService:
 
             accepted = await self._dsh_call(request)
             if accepted:
+                for task in matching_background:
+                    self._revoke_background_task(task)
                 # Confirmed cancellation closes the native Session and drains
                 # its children before DshClient releases trusted turn state.
                 await asyncio.to_thread(active.done.wait)
+                if matching_background:
+                    await asyncio.gather(*(task.lifetime.drained.wait()
+                                           for task in matching_background
+                                           if task.lifetime is not None))
+                    self._discard_background_session(identity, active.session_id)
                 return True
             if not active.done.is_set():
                 return False
@@ -553,6 +747,14 @@ class ChatService:
             )
             if not has_background:
                 return False
+            matching = [item for item in self._background_tasks.values()
+                        if item.identity == tuple(map(str, identity)) and
+                        item.parent_session_id == state.session_id and item.status == "running"]
+            for item in matching:
+                self._revoke_background_task(item)
+            if matching:
+                await asyncio.gather(*(item.lifetime.drained.wait()
+                                       for item in matching if item.lifetime is not None))
             await self._dsh_call(self.dsh.close_session, state.session_id)
             self._discard_background_session(identity, state.session_id)
             return True
@@ -906,6 +1108,25 @@ class ChatService:
                 try:
                     reply = await self._dsh_call(
                         self.dsh.run, session_id, prompt, servers, source, **options)
+                except DshModelTurnFailure as error:
+                    if send is not None:
+                        try:
+                            await scheduled_send(model_failure_notice(error.code, error.recovery,
+                                                                       subject="定时任务"))
+                        except Exception as notice_error:
+                            logging.getLogger(__name__).warning("Scheduled model failure notice failed: %s",
+                                                type(notice_error).__name__)
+                    raise
+                else:
+                    take_recovery = getattr(self.dsh, "take_model_recovery", None)
+                    recovery = take_recovery(session_id) if callable(take_recovery) else None
+                    notice = recovery_notice(recovery, subject="定时任务")
+                    if notice and send is not None:
+                        try:
+                            await scheduled_send(notice)
+                        except Exception as notice_error:
+                            logging.getLogger(__name__).warning("Scheduled model recovery notice failed: %s",
+                                                type(notice_error).__name__)
                 finally:
                     # Client-side MCP cancellation can end the native model turn
                     # while the HTTP server is still draining a submitted send.
@@ -1044,6 +1265,13 @@ class ChatService:
         identity = (conversation.platform_id, conversation.bot_id, conversation.key)
         trace = barrier.trace
         barrier.command_journal_id = floor_cursor
+
+        # begin_reset revoked child credentials synchronously. Drain requests
+        # already admitted by MCP before touching the native Session state.
+        children = [task.lifetime for task in self._background_tasks.values()
+                    if task.identity == tuple(map(str, identity)) and task.lifetime is not None]
+        if children:
+            await asyncio.gather(*(lifetime.drained.wait() for lifetime in children))
 
         # Only a run active at reset admission may have its exact pending
         # row skipped. Unknown persisted pending state is never inferred
@@ -1243,13 +1471,13 @@ class ChatService:
                 barrier.succeeded = True
                 return new_state
 
-    async def resolve_pending(self, conversation, expected_pending: int, get_group=None):
+    async def resolve_pending(self, conversation, expected_pending: int, get_group=None, *, wait_for_lock=False):
         """Drain and consume the Owner-reviewed uncertain delta without replay."""
         if (isinstance(expected_pending, bool) or not isinstance(expected_pending, int)
                 or expected_pending <= 0):
             raise RecoveryError("待核对 Journal 编号必须为正整数。")
         lock = self._lock(conversation)
-        if lock.locked():
+        if lock.locked() and not wait_for_lock:
             raise RecoveryError("当前会话仍在执行或发送，请先取消并等待结束后再核对恢复。")
         async with lock:
             identity = (conversation.platform_id, conversation.bot_id, conversation.key)
@@ -1553,6 +1781,7 @@ class ChatService:
         lifetime = _SendLifetime()
         if files is not None:
             original_file_send = files.send
+            files._v2_base_send = original_file_send
 
             async def guarded_file_send(*args, _send=original_file_send, **kwargs):
                 self._delivery_enter(identity, lifetime)
@@ -1913,7 +2142,8 @@ class ChatService:
             # before any tool was called. Consume only this wake so later
             # requests remain available; never replay it automatically.
             await asyncio.to_thread(self.state.complete_turn, *identity, state.session_id, upper)
-            raise ModelTurnError(error.code, tools_completed=bool(error.tools_finished)) from error
+            raise ModelTurnError(error.code, tools_completed=bool(error.tools_finished),
+                                 recovery=error.recovery, status=error.status) from error
         except DshTurnFailure as error:
             kind = "infrastructure" if error.kind == "infrastructure" else "unknown"
             await asyncio.to_thread(self.state.mark_pending_fault, *identity, state.session_id,
@@ -1946,6 +2176,12 @@ class ChatService:
             if trace:
                 trace.emit("delivery/content_rejected", code=error.code, reply_chars=len(reply))
             raise
+        take_recovery = getattr(self.dsh, "take_model_recovery", None)
+        recovery = take_recovery(state.session_id) if callable(take_recovery) else None
+        if recovery is not None:
+            notice = recovery_notice(recovery)
+            if notice:
+                reply = notice + "\n\n" + reply
         try:
             self._delivery_enter(identity, send_lifetime)
         except ResetError:

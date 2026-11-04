@@ -122,7 +122,7 @@ class V2Memory(star.Star):
                 return error_response("请求格式无效。", status_code=400)
             action = payload.get("action")
             if action not in {"status", "list", "get", "edit", "enable", "export", "clear", "cancel",
-                              "configure_incremental", "retry_incremental"}:
+                              "configure_incremental", "retry_incremental", "failures", "retry_failure"}:
                 return error_response("不支持此管理操作。", status_code=400)
             manager = self._manager
             if manager is None or self._bound_router is not self._ready_router():

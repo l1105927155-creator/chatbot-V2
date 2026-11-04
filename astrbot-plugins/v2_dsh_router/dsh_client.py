@@ -23,6 +23,7 @@ DIRECT_NETWORK_ENV = {name: "" for name in (
     "all_proxy", "ALL_PROXY", "no_proxy", "NO_PROXY",
 )} | {"NODE_USE_ENV_PROXY": "0"}
 try:  # Support both AstrBot package loading and the isolated contract tests.
+    from .model_failure import validate_recovery
     from .model_selection import model_route as validate_model_route, model_view
     from .shared_models import SharedModels
     from .turn_source import TurnSourcePublisher
@@ -30,6 +31,7 @@ try:  # Support both AstrBot package loading and the isolated contract tests.
     from .scene_state import SceneStateStore
     from .runtime_audit import CURRENT_TRACE, call_id
 except ImportError:  # pragma: no cover - exercised by tests loading this file directly
+    from model_failure import validate_recovery
     from model_selection import model_route as validate_model_route, model_view
     from shared_models import SharedModels
     from turn_source import TurnSourcePublisher
@@ -582,12 +584,20 @@ class AcpRuntime:
                           "MEMORY_RESPONSE_TOO_LARGE", "MODEL_INVALID_RESPONSE",
                           "CONTEXT_WINDOW_EXCEEDED", "INVALID_CREDENTIAL", "QUOTA_EXCEEDED",
                           "MISSING_CREDENTIAL", "NO_ADAPTER", "EMPTY_RESPONSE",
-                          "MEMORY_CAPACITY_CHANGED"}
+                          "MEMORY_CAPACITY_CHANGED", "MEMORY_CAPACITY_UNKNOWN",
+                          "MODEL_UNAVAILABLE", "MEMORY_CAPACITY_INSUFFICIENT",
+                          "MEMORY_REQUEST_TOO_LARGE"}
             if isinstance(code, str) and code in safe_codes:
                 status = result.get("status")
                 if isinstance(status, bool) or not isinstance(status, int) or not 100 <= status <= 599:
                     status = None
-                raise MemoryModelError(code, status)
+                try:
+                    recovery = validate_recovery(result.get("recovery"),
+                        requested_route=(payload.get("provider"), payload.get("model")),
+                        actual_route=(result.get("provider"), result.get("model")))
+                except ValueError as error:
+                    raise MemoryModelError("MODEL_INVALID_RESPONSE") from error
+                raise MemoryModelError(code, status, recovery=recovery)
             raise MemoryModelError("MODEL_INVALID_RESPONSE")
         return result
 
@@ -631,8 +641,17 @@ class AcpRuntime:
                                               cancel_event=cancel_event, on_progress=on_progress)
         text = result.get("text")
         usage = result.get("usage")
-        if ((result.get("provider"), result.get("model")) != route
-                or not isinstance(text, str) or not text):
+        actual = (result.get("provider"), result.get("model"))
+        try:
+            recovery = validate_recovery(result.get("recovery"), requested_route=route,
+                                         actual_route=actual)
+        except ValueError as error:
+            raise MemoryModelError("MODEL_INVALID_RESPONSE") from error
+        if (not isinstance(text, str) or not text
+                or (actual != route and not (recovery and recovery["recovered"]))
+                or (recovery is not None and recovery["recovered"] is not True)
+                or (("requested_provider" in result or "requested_model" in result)
+                    and (result.get("requested_provider"), result.get("requested_model")) != route)):
             raise MemoryModelError("MODEL_INVALID_RESPONSE")
         response_wire = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n"
         if len(response_wire) > 4 * 1024 * 1024:
@@ -642,7 +661,8 @@ class AcpRuntime:
                     or any(isinstance(usage.get(key), bool) or not isinstance(usage.get(key), int)
                            or usage[key] < 0 for key in ("inputTokens", "outputTokens"))):
                 raise MemoryModelError("MODEL_INVALID_RESPONSE")
-        return {"provider": route[0], "model": route[1], "text": text, "usage": usage}
+        return {"provider": actual[0], "model": actual[1], "text": text, "usage": usage,
+                **({"recovery": recovery} if recovery is not None else {})}
 
     def memory_capacity(self, *, provider, model, cancel_event=None):
         path = getattr(self, "_memory_control_path", None)
@@ -652,9 +672,11 @@ class AcpRuntime:
         result = self._memory_control_request({"action": "capacity", "provider": route[0],
                                                "model": route[1]}, cancel_event=cancel_event)
         if ((result.get("provider"), result.get("model")) != route
-                or result.get("capacitySource") != "native_adapter"):
+                or not isinstance(result.get("capacitySource"), str)
+                or result["capacitySource"] not in {"native_adapter", "native_subscription_catalog"}):
             raise MemoryModelError("MODEL_INVALID_RESPONSE")
-        capacity = {"provider": route[0], "model": route[1], "capacitySource": "native_adapter"}
+        capacity = {"provider": route[0], "model": route[1],
+                    "capacitySource": result["capacitySource"]}
         for key in ("contextWindow", "defaultMaxTokens"):
             value = result.get(key)
             if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value <= 0):
@@ -711,23 +733,26 @@ class DshTurnCancelled(RuntimeError):
 class MemoryModelError(RuntimeError):
     """Safe, provider-neutral memory model failure metadata."""
 
-    def __init__(self, error_code="MODEL_ERROR", status=None):
+    def __init__(self, error_code="MODEL_ERROR", status=None, *, recovery=None):
         if not isinstance(error_code, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", error_code):
             error_code = "MODEL_ERROR"
         if isinstance(status, bool) or not isinstance(status, int) or not 100 <= status <= 599:
             status = None
         self.error_code = error_code
         self.status = status
+        self.recovery = validate_recovery(recovery)
         super().__init__("memory model call failed")
 
 
 class DshTurnFailure(RuntimeError):
     """A bounded terminal classification backed by a native turn receipt."""
 
-    def __init__(self, kind, code="UNKNOWN", *, tools_started=(), tools_finished=(), unfinished_tools=()):
+    def __init__(self, kind, code="UNKNOWN", *, tools_started=(), tools_finished=(), unfinished_tools=(), recovery=None, status=None):
         if kind not in {"model", "infrastructure", "unknown"}:
             kind = "unknown"
         self.kind = kind
+        self.recovery = validate_recovery(recovery)
+        self.status = status if type(status) is int and 100 <= status <= 599 else None
         self.code = code if isinstance(code, str) and re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", code) else "UNKNOWN"
         self.tools_started = tuple(tools_started) if isinstance(tools_started, (list, tuple)) else ()
         self.tools_finished = tuple(tools_finished) if isinstance(tools_finished, (list, tuple)) else ()
@@ -1026,6 +1051,7 @@ class DshClient:
         servers = copy.deepcopy(mcp_servers or [])
         with self._session_lock(session_id):
             with self._lock:
+                self.__dict__.setdefault("_model_recoveries", {}).pop(session_id, None)
                 if session_id in self._quarantined_sessions:
                     raise RuntimeError(
                         "DSH session is quarantined after an undrained turn; runtime shutdown is required"
@@ -1096,7 +1122,8 @@ class DshClient:
                             unfinished_tools=unfinished,
                         )
                     elif kind == "model" and not unfinished and Counter(started) == Counter(finished):
-                        classified = DshModelTurnFailure(code, tools_started=started, tools_finished=finished)
+                        classified = DshModelTurnFailure(code, tools_started=started, tools_finished=finished,
+                                                         recovery=receipt.get("recovery"), status=receipt.get("status"))
                     else:
                         classified = DshTurnOutcomeUnknown(
                             code, tools_started=started, tools_finished=finished,
@@ -1133,6 +1160,12 @@ class DshClient:
                 raise DshTurnOutcomeUnknown("NO_TERMINAL_RECEIPT") from failure
             else:
                 try:
+                    receipt = self.turn_sources.terminal_evidence(session_id, nonce)
+                except Exception:
+                    receipt = None
+                recovery = (receipt.get("recovery") if isinstance(receipt, dict)
+                            and receipt.get("kind") == "recovered" else None)
+                try:
                     if not self.turn_sources.cleanup(session_id, nonce):
                         raise RuntimeError("trusted source nonce or file did not match during cleanup")
                 except BaseException as cleanup_error:
@@ -1142,7 +1175,16 @@ class DshClient:
                         "DSH turn completed but trusted source cleanup failed; session quarantined "
                         "until runtime shutdown"
                     ) from cleanup_error
+                if recovery is not None:
+                    with self._lock:
+                        self.__dict__.setdefault("_model_recoveries", {})[session_id] = recovery
                 return result
+
+    def take_model_recovery(self, session_id):
+        """Consume only the nonce-validated recovery for this completed turn."""
+        with self._lock:
+            return self.__dict__.setdefault("_model_recoveries", {}).pop(session_id, None)
+
     def cancel_session(self, session_id, cancel_token=None):
         """Cancel an active turn without acquiring its per-session run lock."""
         with self._lock:

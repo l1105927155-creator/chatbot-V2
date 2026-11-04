@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { apply, terminalEvents } from '../../dsh/plugins/agent-profile/background-research.mjs'
 import { researchDelegation } from '../../dsh/plugins/agent-profile/background-authority.mjs'
+import { LlmError } from '../../dsh/node_modules/@deepseek-ai/dsh-llm/lib/index.js'
 
 const temp = mkdtempSync(join(tmpdir(), 'v2-background-research-'))
 chmodSync(temp, 0o700)
@@ -26,6 +27,7 @@ let settleChild
 let registered
 let running
 let spawnedChild
+let recoverySummaryForTest
 let childSequence = 0
 let rejectNextSpawn = false
 let spawnCreationGate
@@ -65,7 +67,7 @@ const server = createServer(async (request, response) => {
     return
   }
   response.writeHead(200, {'content-type':'application/json'})
-  response.end(JSON.stringify({accepted:true}))
+  response.end(JSON.stringify({accepted:true, mcp:null}))
 })
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
 const {port} = server.address()
@@ -77,6 +79,15 @@ const parent = {
 }
 const ctx = {
   logger:{info(){}, warn(){}},
+  reflect:{get(name) {
+    if (name !== 'v2ModelRecovery') return undefined
+    return {
+      peek(){ return recoverySummaryForTest },
+      classifyFailure(failure){
+        return {code:failure?.code === 'TIMEOUT' ? 'MODEL_TIMEOUT' : 'MODEL_ERROR'}
+      },
+    }
+  }},
   on(event, callback) {
     const entries = listeners.get(event) ?? []
     entries.push(callback)
@@ -113,8 +124,8 @@ const ctx = {
   subagents:{
     async start(provider, request) {
       assert.equal(provider, 'spawn')
-      assert.deepEqual(request.toolFilter.allow, ['web_search','web_fetch','skill'])
-      assert.equal(request.maxDepth, 1)
+      assert.equal(request.toolFilter, undefined)
+      assert.equal(request.maxDepth, 3)
       if (rejectNextSpawn) {
         rejectNextSpawn = false
         throw new Error('simulated child creation failure')
@@ -170,6 +181,11 @@ try {
 
   for (let attempt=0; attempt<20 && !settleChild; attempt++) await new Promise(resolve => setTimeout(resolve, 5))
   assert.equal(typeof settleChild, 'function', 'research starts after the callback acknowledges task registration')
+  for (const handler of listeners.get('agent/pre-step') ?? []) {
+    await handler({agent:spawnedChild, turn:7}, async () => {})
+  }
+  recoverySummaryForTest = {requested_provider:'wb', requested_model:'deepseek-v4.1-flash',
+    provider:'wb', model:'space-bunny', code:'MODEL_TIMEOUT', attempted:true, recovered:true}
   const status = await definition.execute({action:'status', task_id:started.task_id},
     {agent:parent, signal:new AbortController().signal})
   assert.equal(status.status, 'running')
@@ -187,6 +203,8 @@ try {
   assert.equal(outcome.status, 'completed')
   assert.equal(calls.at(-1).event, 'settled')
   assert.equal(calls.at(-1).text, 'Verified result with source.')
+  assert.deepEqual(calls.at(-1).recovery, recoverySummaryForTest,
+    'terminal callback carries only the bounded native recovery summary')
   assert.deepEqual(terminalEvents(parentId), [calls.at(-1)],
     'the native read-only cache retains the immutable terminal callback payload')
   assert.ok(registered)
@@ -197,6 +215,7 @@ try {
   const terminalStatusAgain = await definition.execute({action:'status', task_id:started.task_id},
     {agent:parent, signal:new AbortController().signal})
   assert.equal(terminalStatusAgain.status, 'completed', 'the bounded task record preserves the terminal status')
+  recoverySummaryForTest = undefined
 
   rejectNextStartedCallback = true
   await assert.rejects(definition.execute({action:'start', prompt:'This callback will fail'},
@@ -219,12 +238,22 @@ try {
   assert.match(next.label, /\[已截断\]$/, 'the label is taken from its first non-empty line')
   for (let attempt=0; attempt<20 && !settleChild; attempt++) await new Promise(resolve => setTimeout(resolve, 5))
   assert.equal(typeof settleChild, 'function')
+  const failedChild = spawnedChild
+  for (const handler of listeners.get('agent/pre-step') ?? []) {
+    await handler({agent:failedChild, turn:8}, async () => {})
+  }
+  for (const handler of listeners.get('agent/error') ?? []) {
+    handler({agent:failedChild, turn:8,
+      error:new LlmError('provider body must not escape', 'TIMEOUT', {status:503})})
+  }
   settleChild({stopReason:'error', output:[{type:'text', text:'x'.repeat(13000)}]})
   const failed = await running.done
   assert.equal(failed.status, 'failed')
   const failureCallback = calls.at(-1)
   assert.equal(failureCallback.event, 'settled')
   assert.equal(failureCallback.status, 'failed')
+  assert.equal(failureCallback.model_error, 'MODEL_TIMEOUT')
+  assert.equal(JSON.stringify(failureCallback).includes('provider body must not escape'), false)
   assert.equal(failureCallback.detail, undefined, 'host callback payload uses only the documented fields')
   assert.ok(failureCallback.text.length <= 12000, 'callback text stays within its documented character cap')
   assert.match(failureCallback.text, /\[已截断\]$/)

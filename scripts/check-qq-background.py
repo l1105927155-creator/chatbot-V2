@@ -59,6 +59,69 @@ class Check(helper.Check):
         return any(row.get('kind')=='fetch-start' and row.get('child')==tag
                    for row in map(json.loads,path.read_text().splitlines()))
 
+    def history_scope(self):
+        self.seed('LOCAL_HISTORY_SENTINEL',key='group:91000')
+        self.request('POST','/api/conversations',{'type':'group','id':'91001',
+                                                  'title':'隔离对照群'})
+        self.seed('FOREIGN_GROUP_SENTINEL',key='group:91001')
+        release=self.directory/'release';release.unlink(missing_ok=True)
+        probe=self.directory/'native-probe.jsonl'
+        before=probe.read_text().count('fetch-start') if probe.exists() else 0
+        _,started=self.converse('BG_HISTORY_START')
+        assert 'running' in json.dumps(started),started
+        def gated():
+            if not probe.exists():return False
+            rows=[json.loads(line) for line in probe.read_text().splitlines()]
+            return any(row.get('kind')=='fetch-start' and 'history=1' in row.get('url','')
+                       for row in rows) and len([row for row in rows if row.get('kind')=='fetch-start'])>before
+        self.wait(gated,'history-capable child reached the post-parent gate')
+        # This second complete turn proves the delegated work retained its
+        # independent credential after the parent turn had already returned.
+        _,ordinary=self.converse('ordinary conversation while history child is gated')
+        assert 'FOREGROUND_RESPONSIVE' in json.dumps(ordinary),ordinary
+        (self.directory/'release').touch()
+        self.wait(lambda:probe.exists() and any(
+            row.get('kind')=='history-verified' for row in
+            map(json.loads,probe.read_text().splitlines())),
+            'child read canonical history with group isolation')
+        rows=[row for row in map(json.loads,probe.read_text().splitlines())
+              if row.get('kind')=='history-verified']
+        assert rows[-1]['localSeen'] is True and rows[-1]['foreignSeen'] is False,rows
+        schema_rows=[row for row in map(json.loads,probe.read_text().splitlines())
+                     if row.get('kind')=='tool-schema-comparison']
+        assert schema_rows and schema_rows[-1]['all_parent_mcp_visible'],schema_rows
+        assert schema_rows[-1]['background_research']['parent'] is not None,schema_rows
+        self.wait(lambda:probe.exists() and any(
+            row.get('kind')=='background-research-recursion-probe' for row in
+            map(json.loads,probe.read_text().splitlines())),
+            'child background_research start call returned')
+        recursion_rows=[row for row in map(json.loads,probe.read_text().splitlines())
+                        if row.get('kind')=='background-research-recursion-probe']
+        assert recursion_rows[-1]['toolsAvailable'] and 'running' in recursion_rows[-1]['nestedResult'],recursion_rows
+        self.wait(lambda:any(row.get('kind')=='nested-parent-result' and row.get('messages')
+                             for row in map(json.loads,probe.read_text().splitlines())),
+                  'nested result relayed to parent')
+        self.wait(lambda:any(any(seg.get('data',{}).get('name')=='child-report.md'
+                                  for seg in row.get('event',{}).get('message',[]))
+                             for row in self.events() if row['direction']=='outbound'),
+                  'child file appears in simulated QQ')
+        rows_out=[row for row in self.events() if row['direction']=='outbound'
+                  and row['conversation']=={'type':'group','id':'91000'}]
+        assert any('BACKGROUND_CHILD_TEXT_SEND' in json.dumps(row,ensure_ascii=False)
+                   for row in rows_out),rows_out
+        assert any(any(seg.get('data',{}).get('name')=='child-report.md'
+                       for seg in row.get('event',{}).get('message',[]))
+                   for row in rows_out),rows_out
+        self.wait(lambda:any('BACKGROUND_HISTORY_READ_OK' in json.dumps(row,ensure_ascii=False)
+                             for row in self.events() if row['direction']=='outbound'),
+                  'history result delivered to the original group')
+        return {'child_mcp_history_after_parent_turn':True,'same_group_history':True,
+                'cross_group_history_isolated':True,
+                'child_text_and_file_delivery':True,
+                'nested_background_research_call_result':recursion_rows[-1]['nestedResult'],
+                'tool_schema_differences':schema_rows[-1]['differences'],
+                'background_research_schema':schema_rows[-1]['background_research']}
+
     def completion(self):
         return [r for r in self.events() if r['direction']=='outbound'
                 and 'BACKGROUND_COMPLETE' in json.dumps(r,ensure_ascii=False)]
@@ -183,7 +246,7 @@ class Check(helper.Check):
         self.converse('BG_START')
         self.wait(lambda:self.fetch_count()==before+1,'reset background started')
         sid=self.state('group:91000')['session_id']
-        self._deterministic('/new','已开始新的 Agent 对话',key='group:91000',sender=self.owner)
+        self._deterministic('/new skip_mem','已开始新的 Agent 对话',key='group:91000',sender=self.owner)
         assert self.state('group:91000')['session_id']!=sid
         release.touch()
         _,reply=self.converse('ordinary conversation')
@@ -194,6 +257,7 @@ class Check(helper.Check):
     def run_checks(self):
         try:
             self.start()
+            self.case('background-child-inherits-scoped-history-tools',self.history_scope)
             for key,sender in [('group:91000','90001'),('private:90009','90009'),('private:90002','90002')]:
                 self.case(key+'-background-with-responsive-foreground',lambda k=key,s=sender:self.exercise(k,s))
             self.case('same-parent-parallel-child-isolation',self.parallel_isolation)

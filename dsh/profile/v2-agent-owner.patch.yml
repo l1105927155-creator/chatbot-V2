@@ -24,6 +24,8 @@
 - insert:
     - id: v2-turn-lifecycle
       name: ../plugins/agent-profile/turn-lifecycle.mjs
+    - id: v2-model-recovery
+      name: ../plugins/agent-profile/model-recovery.mjs
     - id: v2-shared-model-credentials
       name: '@deepseek-ai/dsh-credentials-local'
       disabled: !!js Boolean(!process.env.V2_SHARED_MODELS_PROFILE)
@@ -133,7 +135,7 @@
     - id: tool-call-timeout-policy
       name: '@deepseek-ai/dsh-tool-call-timeout-policy'
     - id: compaction-basic
-      name: '@deepseek-ai/dsh-compaction-basic'
+      name: ../plugins/agent-profile/model-recovery-compaction.mjs
       config:
         auto: true
         thresholdRatio: 0.8

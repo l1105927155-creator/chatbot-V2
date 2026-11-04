@@ -36,8 +36,14 @@ const credentials = {
 let adapter
 let registeredRoutes = []
 let updates = 0
+let providedMemoryCapacity
 const ctx = {
   get(key) { return key === 'credentials' ? credentials : undefined },
+  async provide(key, value) {
+    assert.equal(key, 'v2SubscriptionMemoryCapacity')
+    providedMemoryCapacity = value
+    return async () => { providedMemoryCapacity = undefined }
+  },
   logger: { warn() {} },
   llm: {
     registerAdapter(routes, value) {
@@ -158,6 +164,16 @@ try {
   assert.deepEqual((await adapter.listModels('openai-codex')).map(item => item.name), ['Renamed GPT', model('gpt-5.5').name, model('gpt-6.1-terra').name])
   const terraInfo = await adapter.resolveModel('openai-codex', 'gpt-6.1-terra')
   assert.equal(terraInfo.reasoning.defaultEffort, 'medium', 'Terra advertises medium as its adapter default')
+  const terraMemoryLimit = installed.memoryOutputLimit('openai-codex', 'gpt-6.1-terra')
+  assert.deepEqual(terraMemoryLimit, { provider: 'openai-codex', model: 'gpt-6.1-terra',
+    maxOutputTokens: model('gpt-6.1-terra').maxTokens },
+  'memory can read the exact output ceiling from the authenticated native catalog')
+  assert.equal(installed.memoryOutputLimit('openai-codex', 'not-in-catalog'), undefined,
+    'unknown models do not inherit another catalog entry capacity')
+  assert.equal(installed.memoryOutputLimit('wb', 'gpt-6.1-terra'), undefined,
+    'catalog limits remain provider scoped')
+  assert.equal(terraInfo.defaultMaxTokens, undefined,
+    'catalog output ceiling is not silently promoted to the normal chat default')
   const preparedTerra = await adapter.prepareCall('openai-codex', 'gpt-6.1-terra')
   assert.equal(preparedTerra.model.reasoning.defaultEffort, 'medium', 'prepared calls retain the model-specific default')
   assert.equal((await adapter.resolveModel('openai-codex', 'gpt-5.5')).reasoning.defaultEffort, undefined, 'other subscription models keep their existing default')
@@ -178,6 +194,8 @@ try {
   }
   const defaultLlmCall = await llm.prepareCall({ provider: 'openai-codex', model: 'gpt-6.1-terra' })
   assert.equal(defaultLlmCall.config.reasoningEffort, 'medium', 'LlmRuntime materializes Terra medium as the call default')
+  assert.equal(defaultLlmCall.config.maxTokens, undefined,
+    'memory output planning does not change the ordinary chat output default')
   for await (const _chunk of defaultLlmCall.stream({ ...defaultLlmCall.config, messages: [] })) {}
   assert.equal(dispatchedEfforts.at(-1), 'medium', 'the prepared native stream receives default medium')
   const explicitLlmCall = await llm.prepareCall({ provider: 'openai-codex', model: 'gpt-6.1-terra', reasoningEffort: 'high' })
@@ -211,6 +229,8 @@ try {
   assert.equal(await scopedStore.read('openai-codex'), undefined, 'a prepared adapter scope cannot read a newly active account')
   await assert.rejects(scopedStore.modify('openai-codex', async old => old), /scope-changed/, 'a prepared adapter scope cannot write a newly active account')
   await installed.flush()
+  assert.equal(installed.memoryOutputLimit('openai-codex', 'gpt-6.1-terra'), undefined,
+    'memory capacity is withdrawn with the account-scoped model route')
   assert.deepEqual(registeredRoutes, [], 'changing active account withdraws models scoped to the previous account')
   record.payload.activeId = 'account-a'
   await installed.flush()
@@ -304,12 +324,15 @@ try {
   await mkdir(join(root, 'profiles', 'web'), { recursive: true })
   const previousProfile = process.env.V2_SHARED_MODELS_PROFILE
   process.env.V2_SHARED_MODELS_PROFILE = profile
+  await writeSnapshot(snapshot([model('gpt-5.4')]))
   let teardown
   ctx.effect = effect => { teardown = effect() }
   const entrypointInstalled = await apply(ctx)
   assert.equal(entrypointInstalled, undefined)
-  await writeSnapshot(snapshot([model('gpt-5.4')]))
+  assert.equal(providedMemoryCapacity?.outputLimit('openai-codex', 'gpt-5.4')?.provider,
+    'openai-codex', 'the plugin publishes its catalog capability through a Cordis service')
   await teardown()
+  assert.equal(providedMemoryCapacity, undefined, 'the capability service is removed with its adapter')
   if (previousProfile === undefined) delete process.env.V2_SHARED_MODELS_PROFILE
   else process.env.V2_SHARED_MODELS_PROFILE = previousProfile
   console.log(JSON.stringify({

@@ -59,9 +59,6 @@ export class Authority extends Service {
         const binding = this.binding(exec.agent)
         if (exec.signal.aborted || binding.signal?.aborted) throw new Error('inactive turn')
         const name = exec.name
-        if (binding.delegated && !['web_search', 'web_fetch', 'skill'].includes(name)) {
-          throw new Error('tool unavailable to background safe-chat research')
-        }
         if (!safeMcp.has(name) && !globals.includes(name)) throw new Error('unavailable tool')
         if (exec.arguments?.sandbox_permissions && exec.arguments.sandbox_permissions !== 'workspace-write') {
           throw new Error('sandbox escalation is unavailable')
@@ -133,9 +130,6 @@ export class Authority extends Service {
     const current = this.local.getStore()
     if (!current || current.execution.signal.aborted) throw new Error('no trusted execution')
     const binding = this.binding(current.agent)
-    if (binding.delegated && !['web_search', 'web_fetch', 'skill'].includes(current.execution.name)) {
-      throw new Error('tool unavailable to background safe-chat research')
-    }
     if (binding.turn !== current.turn || binding.source.nonce !== current.source.nonce) throw new Error('expired execution')
     return current.source
   }

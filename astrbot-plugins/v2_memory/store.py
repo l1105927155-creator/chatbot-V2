@@ -17,6 +17,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote
 
+from .evidence import validate_observation
+
 
 class MemoryStoreError(RuntimeError):
     """Base class for storage contract failures."""
@@ -53,7 +55,7 @@ class MemoryStore:
         self._verify()
         with self._db() as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, 1, 2):
+            if version not in (0, 1, 2, 3):
                 raise MemoryStoreError("unsupported memory schema")
             db.execute("PRAGMA journal_mode=DELETE")
             db.execute("PRAGMA synchronous=FULL")
@@ -94,7 +96,9 @@ class MemoryStore:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     status TEXT NOT NULL, after_id INTEGER, through_id INTEGER,
                     duration_ms INTEGER, model TEXT, usage_json TEXT NOT NULL,
-                    error_code TEXT, created_at TEXT NOT NULL
+                    error_code TEXT, created_at TEXT NOT NULL,
+                    skipped_after INTEGER, skipped_through INTEGER,
+                    retry_cursor INTEGER, retry_state TEXT, error_details_json TEXT
                 );
                 PRAGMA user_version=1;
             """)
@@ -124,7 +128,16 @@ class MemoryStore:
             for name, definition in migrations.items():
                 if name not in workspace_columns:
                     db.execute(f"ALTER TABLE workspace ADD COLUMN {name} {definition}")
-            db.execute("PRAGMA user_version=2")
+            run_columns = {row[1] for row in db.execute("PRAGMA table_info(runs)")}
+            run_migrations = {
+                "skipped_after": "INTEGER", "skipped_through": "INTEGER",
+                "retry_cursor": "INTEGER", "retry_state": "TEXT",
+                "error_details_json": "TEXT",
+            }
+            for name, definition in run_migrations.items():
+                if name not in run_columns:
+                    db.execute(f"ALTER TABLE runs ADD COLUMN {name} {definition}")
+            db.execute("PRAGMA user_version=3")
             row = db.execute("SELECT platform_id,bot_id,conversation_key FROM workspace").fetchone()
             if row is None:
                 db.execute("INSERT INTO workspace(singleton,platform_id,bot_id,conversation_key) "
@@ -250,7 +263,8 @@ class MemoryStore:
         return self._apply(expected_revision, changes, provenance,
                            after_id=None, through_id=None)
 
-    def _apply(self, expected_revision, changes, provenance, *, after_id, through_id):
+    def _apply(self, expected_revision, changes, provenance, *, after_id, through_id,
+               replay=None):
         expected_revision = _nonnegative(expected_revision, "expected_revision")
         if (after_id is None) != (through_id is None):
             raise ValueError("both cursor bounds are required")
@@ -272,6 +286,17 @@ class MemoryStore:
                 raise RevisionConflict("memory revision changed")
             if after_id is not None and ws["cursor"] != after_id:
                 raise CursorConflict("memory cursor changed")
+            replay_row = None
+            if replay is not None:
+                run_id, replay_after, replay_through = replay
+                replay_row = db.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
+                if (replay_row is None or replay_row["skipped_after"] is None
+                        or replay_row["retry_state"] != "pending"
+                        or replay_row["retry_cursor"] != replay_after
+                        or replay_after < replay_row["skipped_after"]
+                        or replay_through > replay_row["skipped_through"]
+                        or ws["cursor"] < replay_row["skipped_through"]):
+                    raise CursorConflict("failed run replay state changed")
             next_revision = ws["revision"] + 1
             now = _now()
             seen = set()
@@ -337,6 +362,12 @@ class MemoryStore:
             new_cursor = through_id if through_id is not None else ws["cursor"]
             db.execute("UPDATE workspace SET revision=?,cursor=? WHERE singleton=1",
                        (next_revision, new_cursor))
+            if replay_row is not None:
+                retry_cursor = replay_through
+                retry_state = ("completed" if retry_cursor >= replay_row["skipped_through"]
+                               else "pending")
+                db.execute("UPDATE runs SET retry_cursor=?,retry_state=? WHERE id=?",
+                           (retry_cursor, retry_state, replay[0]))
             failed_through = ws["failed_through"]
             if failed_through is not None and new_cursor >= failed_through:
                 db.execute("UPDATE workspace SET failed_after=NULL,failed_through=NULL,"
@@ -519,8 +550,8 @@ class MemoryStore:
                 raise MemoryStoreError("invalid revision history metadata")
             if row["action"] not in {"create", "update"}:
                 raise MemoryStoreError("invalid memory revision action")
-            before = _load_json(row["before_json"], 262_144) if row["before_json"] else None
-            after = _load_json(row["after_json"], 262_144) if row["after_json"] else None
+            before = _load_json(row["before_json"], None) if row["before_json"] else None
+            after = _load_json(row["after_json"], None) if row["after_json"] else None
             if before is not None:
                 _validate_memory_object(before)
             if after is None:
@@ -591,6 +622,114 @@ class MemoryStore:
                         error_code, _now()))
             run_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
         return self._run_by_id(run_id)
+
+    def skip_failed_run(self, run_id: int, after_id: int, through_id: int,
+                        diagnostic: dict) -> dict:
+        """Record an explicit skip and move only the Journal cursor past the failed run."""
+        run_id = _positive(run_id, "run_id")
+        after_id = _nonnegative(after_id, "after_id")
+        through_id = _nonnegative(through_id, "through_id")
+        if through_id <= after_id:
+            raise ValueError("skipped range must extend beyond the starting cursor")
+        if not isinstance(diagnostic, dict):
+            raise ValueError("diagnostic must be an object")
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            ws = self._workspace(db)
+            run = db.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
+            if run is None or run["status"] not in {"failed", "interrupted"}:
+                raise ValueError("only a recorded failed run can be skipped")
+            if run["skipped_after"] is not None:
+                if (run["skipped_after"], run["skipped_through"]) != (after_id, through_id):
+                    raise CursorConflict("failed run was already skipped with another range")
+                return self._failed_run(run)
+            if (run["after_id"] is None or run["after_id"] > after_id
+                    or run["through_id"] < through_id):
+                raise CursorConflict("skipped range is outside the failed run")
+            if ws["cursor"] != after_id:
+                raise CursorConflict("skip range must begin at the current cursor")
+            if (ws["failed_after"] is None or ws["failed_through"] is None
+                    or ws["failed_after"] > after_id or ws["failed_through"] < through_id):
+                raise CursorConflict("skip range is not covered by the recorded failure")
+            diagnostic = dict(diagnostic)
+            diagnostic.setdefault("original_error_code", run["error_code"])
+            diagnostic_json = _diagnostic_json(diagnostic)
+            db.execute("UPDATE runs SET skipped_after=?,skipped_through=?,retry_cursor=?,"
+                       "retry_state='pending',error_details_json=? WHERE id=?",
+                       (after_id, through_id, after_id, diagnostic_json, run_id))
+            db.execute("UPDATE workspace SET cursor=?,revision=revision+1,"
+                       "incremental_revision=incremental_revision+1,failed_after=NULL,"
+                       "failed_through=NULL,incremental_error_code=NULL WHERE singleton=1",
+                       (through_id,))
+            run = db.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
+            return self._failed_run(run)
+
+    def failed_runs(self, limit: int = 20, offset: int = 0) -> dict:
+        limit = _bounded_int(limit, "limit", 1, 100)
+        offset = _nonnegative(offset, "offset")
+        with self._db() as db:
+            self._workspace(db)
+            total = db.execute("SELECT count(*) FROM runs WHERE skipped_after IS NOT NULL").fetchone()[0]
+            rows = db.execute("SELECT * FROM runs WHERE skipped_after IS NOT NULL "
+                              "ORDER BY id DESC LIMIT ? OFFSET ?", (limit, offset)).fetchall()
+            return {"items": [self._failed_run(row) for row in rows], "total": total}
+
+    def get_failed_run(self, run_id: int) -> dict | None:
+        run_id = _positive(run_id, "run_id")
+        with self._db() as db:
+            self._workspace(db)
+            row = db.execute("SELECT * FROM runs WHERE id=? AND skipped_after IS NOT NULL", (run_id,)).fetchone()
+            return self._failed_run(row) if row else None
+
+    def commit_replay(self, expected_revision: int, run_id: int, after_id: int,
+                      through_id: int, changes: list[dict], provenance: dict) -> dict:
+        run_id = _positive(run_id, "run_id")
+        after_id = _nonnegative(after_id, "after_id")
+        through_id = _nonnegative(through_id, "through_id")
+        if through_id <= after_id:
+            raise ValueError("replay range must extend beyond its starting cursor")
+        return self._apply(expected_revision, changes, provenance, after_id=None,
+                           through_id=None, replay=(run_id, after_id, through_id))
+
+    def record_retry_error(self, run_id: int, error_code: str, diagnostic: dict) -> dict:
+        run_id = _positive(run_id, "run_id")
+        error_code = _safe_code(error_code, "error_code")
+        latest = _diagnostic_json(diagnostic)
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT * FROM runs WHERE id=? AND skipped_after IS NOT NULL", (run_id,)).fetchone()
+            if row is None or row["retry_state"] != "pending":
+                raise ValueError("failed run is not awaiting replay")
+            details = _load_json(row["error_details_json"], 262_144) if row["error_details_json"] else {}
+            details = dict(details)
+            details.setdefault("original_error_code", row["error_code"])
+            details["latest_retry_error_code"] = error_code
+            details["latest_retry_diagnostic"] = _load_json(latest, 262_144)
+            details_json = _diagnostic_json(details)
+            db.execute("UPDATE runs SET error_details_json=? WHERE id=?", (details_json, run_id))
+            row = db.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
+            return self._failed_run(row)
+
+    @staticmethod
+    def _failed_run(row):
+        run = MemoryStore._run(row)
+        try:
+            diagnostic = (_load_json(row["error_details_json"], 262_144)
+                          if row["error_details_json"] is not None else {})
+            if not isinstance(diagnostic, dict):
+                raise ValueError("diagnostic must be an object")
+            skipped_after = _nonnegative(row["skipped_after"], "skipped_after")
+            skipped_through = _nonnegative(row["skipped_through"], "skipped_through")
+            retry_cursor = _nonnegative(row["retry_cursor"], "retry_cursor")
+            if skipped_through <= skipped_after or not skipped_after <= retry_cursor <= skipped_through:
+                raise ValueError("invalid replay cursor")
+            if row["retry_state"] not in {"pending", "completed"}:
+                raise ValueError("invalid replay state")
+        except (TypeError, ValueError) as error:
+            raise MemoryStoreError("invalid skipped memory run metadata") from error
+        return {**run, "skipped_after": skipped_after, "skipped_through": skipped_through,
+                "retry_cursor": retry_cursor, "retry_state": row["retry_state"],
+                "diagnostic": diagnostic}
 
     def last_run(self) -> dict | None:
         with self._db() as db:
@@ -703,7 +842,7 @@ class MemoryStore:
                 raise ValueError("invalid evidence review flag")
             item = {"id": row["id"], "content": row["content"],
                     "members": _load_json(row["members_json"]),
-                    "source_ids": _load_json(row["source_ids_json"]),
+                    "source_ids": _load_json(row["source_ids_json"], None),
                     "claims": _load_json(raw_claims, 131_072) if raw_claims is not None else None,
                     "claims_review_required": bool(review_required),
                     "evidence_status": row["evidence_status"],
@@ -728,6 +867,21 @@ def _nonnegative(value, name):
     if type(value) is not int or value < 0:
         raise ValueError(f"{name} must be a non-negative integer")
     return value
+
+
+def _positive(value, name):
+    if type(value) is not int or value < 1:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
+def _diagnostic_json(value):
+    if not isinstance(value, dict):
+        raise ValueError("diagnostic must be an object")
+    result = _json(value)
+    if len(result.encode("utf-8")) > 262_144:
+        raise ValueError("diagnostic is too large")
+    return result
 
 
 def _bounded_int(value, name, minimum, maximum):
@@ -769,12 +923,18 @@ def _change(value):
         raise ValueError("members must be a list of at most 50 stable IDs")
     members = sorted({_member(member) for member in members})
     sources = value.get("source_ids")
-    if not isinstance(sources, list) or len(sources) > 200:
-        raise ValueError("source_ids must be a list of at most 200 Journal IDs")
+    if not isinstance(sources, list):
+        raise ValueError("source_ids must be a list of Journal IDs")
     if any(type(source) is not int or source < 1 for source in sources):
         raise ValueError("source IDs must be positive Journal IDs")
     sources = sorted(set(sources))
     claims = _claims(value["claims"]) if value.get("claims") is not None else None
+    # Bound claims already have a 128 KiB physical budget. Their redundant ID
+    # index must accept every validated citation, including revisions of old
+    # memories. Preserve the legacy input bound only for IDs without claims.
+    cited = {source["journal_id"] for claim in claims or [] for source in claim["sources"]}
+    if len(set(sources) - cited) > 200:
+        raise ValueError("source_ids without claim evidence exceed 200 Journal IDs")
     review_required = value.get("claims_review_required")
     if review_required is not None and type(review_required) is not bool:
         raise ValueError("claims_review_required must be a boolean")
@@ -797,19 +957,33 @@ def _claims(value):
             raise ValueError("invalid claim fields")
         text = _text(claim["text"], "claim text", 1000)
         sources = claim["sources"]
-        if not isinstance(sources, list) or not 1 <= len(sources) <= 5:
-            raise ValueError("claim sources must contain 1..5 sources")
+        if not isinstance(sources, list) or not sources:
+            raise ValueError("claim sources must be a non-empty list")
         normalized = []
         identities = {}
-        seen_quotes = set()
+        seen_sources = set()
         for source in sources:
-            if not isinstance(source, dict) or set(source) != {
-                    "journal_id", "quote", "actor_id", "direction"}:
+            if not isinstance(source, dict):
+                raise ValueError("invalid claim source fields")
+            common_fields = {"journal_id", "actor_id", "direction"}
+            fields = set(source)
+            if fields == common_fields | {"quote"}:
+                quote = _text(source["quote"], "claim quote", 320)
+                normalized_source = {"journal_id": source["journal_id"], "quote": quote}
+                source_key = ("quote", quote)
+            elif fields == common_fields | {"observation"}:
+                try:
+                    observation = validate_observation(source["observation"])
+                except (TypeError, ValueError) as error:
+                    raise ValueError("invalid claim source observation") from error
+                normalized_source = {"journal_id": source["journal_id"],
+                                     "observation": observation}
+                source_key = ("observation", _json(observation))
+            else:
                 raise ValueError("invalid claim source fields")
             journal_id = source["journal_id"]
             if type(journal_id) is not int or journal_id < 1:
                 raise ValueError("invalid claim Journal ID")
-            quote = _text(source["quote"], "claim quote", 320)
             actor_id = _member(source["actor_id"])
             direction = source["direction"]
             if direction not in {"inbound", "outbound"}:
@@ -818,12 +992,12 @@ def _claims(value):
             if journal_id in identities and identities[journal_id] != identity:
                 raise ValueError("conflicting claim source identity")
             identities[journal_id] = identity
-            key = (journal_id, quote)
-            if key in seen_quotes:
+            key = (journal_id, *source_key)
+            if key in seen_sources:
                 continue
-            seen_quotes.add(key)
-            normalized.append({"journal_id": journal_id, "quote": quote,
-                               "actor_id": actor_id, "direction": direction})
+            seen_sources.add(key)
+            normalized.append({**normalized_source, "actor_id": actor_id,
+                               "direction": direction})
         result.append({"text": text, "sources": normalized})
     if len(_json(result).encode("utf-8")) > 131_072:
         raise ValueError("claim evidence is too large")
@@ -907,7 +1081,9 @@ def _usage_json(value):
 
 
 def _load_json(value, maximum=32_768):
-    if not isinstance(value, str) or len(value) > maximum:
+    # None is reserved for cumulative, host-written source indexes and their
+    # revision snapshots; their decoded structure is validated by the caller.
+    if not isinstance(value, str) or (maximum is not None and len(value) > maximum):
         raise ValueError("invalid JSON metadata size")
     try:
         return json.loads(value)

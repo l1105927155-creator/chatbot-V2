@@ -3,7 +3,7 @@ import { bindParentTurn, endParentTurn, currentParentTurn,
   createResearchAuthority, bindResearchChild, researchDelegation,
   revokeResearchChild, revokeResearchAuthority } from '../../dsh/plugins/agent-profile/background-authority.mjs'
 
-const parent = {}
+const parent = {session:{id:"root-session"}}
 const child = {}
 const other = {}
 const source = Object.freeze({requester_id:'member-1', nonce:'trusted-nonce'})
@@ -16,6 +16,16 @@ const token = createResearchAuthority(parent, 7, source, 'background-research-1'
 const binding = bindResearchChild(child, token)
 assert.equal(researchDelegation(child), binding, 'authority belongs to the exact child object')
 assert.equal(researchDelegation(other), undefined, 'another child cannot borrow the delegation')
+const nestedToken = createResearchAuthority(child, 'background-research-1', source,
+  'background-research-nested', 'safe-chat', controller.signal,
+  {rootSessionId:'root-session', parentTaskId:'background-research-1', depth:2})
+const grandchild = {}
+bindResearchChild(grandchild, nestedToken)
+assert.equal(researchDelegation(grandchild).rootSessionId, 'root-session')
+assert.throws(() => createResearchAuthority(child, 'background-research-1', source,
+  'forged', 'safe-chat', controller.signal,
+  {rootSessionId:'other', parentTaskId:'background-research-1', depth:2}), /delegation changed/)
+revokeResearchAuthority(nestedToken)
 assert.throws(() => bindResearchChild(other, {}), /token is revoked/, 'model-created object cannot mint delegated authority')
 
 endParentTurn(parent, 6)

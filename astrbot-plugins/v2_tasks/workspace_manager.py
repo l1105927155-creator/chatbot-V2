@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import inspect
+import json
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -21,6 +22,25 @@ from .workspace_store import (RevisionConflict, RunStore, WorkspaceTaskStore,
 
 RECONCILE_JOB_ID = "v2_tasks.workspace_reconcile"
 RECONCILE_SECONDS = 5
+
+
+def agent_outcome(reply: object) -> dict:
+    """Keep a bounded, explicitly declared result; never infer success from turn termination."""
+    unknown = {"outcome": "unknown", "summary": "Agent 未返回可识别的任务结果。"}
+    if not isinstance(reply, str):
+        return unknown
+    try:
+        value = json.loads(reply)
+    except (ValueError, TypeError):
+        return unknown
+    if not isinstance(value, dict) or value.get("outcome") not in ("succeeded", "failed", "unknown"):
+        return unknown
+    summary = value.get("summary")
+    if not isinstance(summary, str) or not summary.strip() or len(summary) > 1000:
+        return unknown
+    if any(ord(c) < 32 and c not in "\n\t" for c in summary):
+        return unknown
+    return {"outcome": value["outcome"], "summary": summary.strip()}
 
 
 def parse_group_scope(raw: str | None) -> frozenset[str]:
@@ -271,6 +291,12 @@ class WorkspaceTaskManager:
         for task in selected:
             registration = await asyncio.to_thread(self.run_store.registration, identity, task)
             job = self.scheduler.get_job(self._job_id(identity, task["id"]))
+            recent_runs = await asyncio.to_thread(self.run_store.recent, identity, task["id"], 10)
+            if task["kind"] == "agent":
+                for run in recent_runs:
+                    if run["status"] == "completed" and not (run.get("result") or {}).get("outcome"):
+                        run["result"] = {**(run.get("result") or {}), "outcome": "unknown",
+                                         "summary": "旧记录仅表明轮次结束，任务结果未保存。"}
             rows.append({"task": task, "registered": registration is not None,
                          "scheduled": bool(job and task["enabled"] is True
                                             and registration is not None
@@ -278,8 +304,7 @@ class WorkspaceTaskManager:
                          "next_run": (job.next_run_time.isoformat()
                                       if job and job.next_run_time else None),
                          "creator_id": registration["actor_id"] if registration else None,
-                         "recent_runs": await asyncio.to_thread(
-                             self.run_store.recent, identity, task["id"], 10)})
+                         "recent_runs": recent_runs})
         return {"revision": manifest["revision"], "tasks": rows}
 
     async def manage(self, conversation: Any, action: str, task_id: str | None = None,
@@ -698,7 +723,9 @@ class WorkspaceTaskManager:
                 f"你正在执行群工作区中的定时任务“{task['name']}”（任务 ID：{task_id}）。\n"
                 f"本次实际执行时间：{execution_time}\n"
                 "请依据任务要求完成工作；任务要求需要时，可使用 qq_send_origin 向当前群发送消息，使用 qq_file_send 交付文件。\n"
-                "最终正文仅记录在本次任务结果中，不会自动投递到群里。\n\n"
+                "最终正文不会自动投递到群里。请在最终正文只返回 JSON 对象，包含 "
+                "outcome（succeeded、failed 或 unknown）和 summary（简短说明实际结果；失败时说明原因）。"
+                "未完成全部要求不得标记 succeeded；不确定时用 unknown。不要在摘要中包含敏感凭据。\n\n"
                 f"任务要求：\n{task['prompt']}"
             )
             send = lambda text: self.router.deliver_scheduled(  # noqa: E731
@@ -712,8 +739,9 @@ class WorkspaceTaskManager:
             status = result.get("status") if isinstance(result, dict) else None
             if status != "completed":
                 raise RuntimeError("scheduled Agent did not report completion")
-            # Session IDs and model output are intentionally not persisted.
-            await self._finish_run(identity, task, slot, "completed", {"status": "completed"})
+            outcome = agent_outcome(result.get("reply"))
+            await self._finish_run(identity, task, slot, "completed",
+                                   {"status": "completed", **outcome})
         except asyncio.CancelledError:
             if claimed and task is not None:
                 await self._finish_run(identity, task, slot, "cancelled", {"status": "cancelled"})

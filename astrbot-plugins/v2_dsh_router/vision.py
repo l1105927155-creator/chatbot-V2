@@ -59,6 +59,36 @@ def _validate_image(data: bytes, mime: str) -> bool:
         return False
 
 
+def _project_animation(data: bytes, mime: str) -> tuple[bytes, str, bool]:
+    """Project the first four GIF frames into a bounded static contact sheet."""
+    if mime != "image/gif":
+        return data, mime, False
+    with Image.open(io.BytesIO(data)) as image:
+        if not getattr(image, "is_animated", False):
+            return data, mime, False
+        if image.width * image.height > 4_000_000:
+            raise _VisionFailure("animated_image_size_limit")
+        frames = []
+        for index in range(4):
+            try:
+                image.seek(index)
+            except EOFError:
+                break
+            if max(image.size) > MAX_IMAGE_SIDE or image.width * image.height > 4_000_000:
+                raise _VisionFailure("animated_image_size_limit")
+            frame = image.convert("RGB")
+            frame.thumbnail((512, 512))
+            frames.append(frame)
+        width = max(frame.width for frame in frames)
+        height = max(frame.height for frame in frames)
+        sheet = Image.new("RGB", (width * len(frames), height), "white")
+        for index, frame in enumerate(frames):
+            sheet.paste(frame, (index * width, 0))
+        output = io.BytesIO()
+        sheet.save(output, format="PNG")
+        return output.getvalue(), "image/png", True
+
+
 def _safe_name(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
@@ -175,7 +205,13 @@ class QQVision:
                         self._cache_put(cache_key, data)
                 if mime is None or not _validate_image(data, mime):
                     raise _VisionFailure("invalid_image_data")
+                data, mime, animated = await asyncio.wait_for(
+                    asyncio.to_thread(_project_animation, data, mime),
+                    timeout=max(0.001, deadline - time.monotonic()),
+                )
                 reference = self._reference(row, index, segment, status="available")
+                if animated:
+                    reference["status"] = "animated_gif_first_four_frames_left_to_right"
                 out["images"].append({
                     "type": "image",
                     "data": base64.b64encode(data).decode("ascii"),

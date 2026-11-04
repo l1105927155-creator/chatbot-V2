@@ -17,7 +17,8 @@ from astrbot.api.message_components import File
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.core.star.filter.command import GreedyStr
 
-from .dsh_client import DshTurnCancelled, start_client
+from .dsh_client import DshTurnCancelled, MemoryModelError, start_client
+from .model_failure import model_failure_notice, recovery_notice
 from .routing import addresses_bot, should_route
 from .service import ChatService, PendingTurnError, RecoveryError, ResetError, FinalReplyDeliveryError, ModelTurnError, AgentDisabledError
 from .delivery_error import notify_delivery_error
@@ -652,9 +653,14 @@ class V2DshRouter(star.Star):
                                 raise RuntimeError("memory consolidation did not complete")
                 except Exception as error:
                     self.logger.warning("V2 manual memory consolidation failed: %s", type(error).__name__)
-                    await reply("记忆整理失败，当前对话上下文未重置；本次不自动重试。")
+                    if isinstance(error, MemoryModelError):
+                        detail = model_failure_notice(error.error_code, error.recovery, subject="记忆整理")
+                        await reply(detail + " 当前对话上下文保留，未完成的批次未推进。")
+                    else:
+                        await reply("记忆整理失败，当前对话上下文未重置；本次不自动重试。")
                 else:
-                    await reply("记忆整理完成，当前对话上下文已保留。")
+                    notice = recovery_notice(getattr(backend, "last_model_recovery", None), subject="记忆整理")
+                    await reply((notice + "\n" if notice else "") + "记忆整理完成，当前对话上下文已保留。")
                 return
             if (message.conversation_key.startswith("group:") and
                     Owner(message.platform_id, message.bot_id, message.actor_id) not in self.owners):
@@ -780,8 +786,9 @@ class V2DshRouter(star.Star):
         if getattr(self, "_closing", False):
             return False
         for service in tuple(getattr(self, "services", {}).values()):
-            if await service.handle_background_event(event):
-                return True
+            result = await service.handle_background_event(event)
+            if result:
+                return result
         return False
 
     async def _ensure_group_service(self, platform_id: str, bot_id: str, group_id: str):
@@ -906,6 +913,20 @@ class V2DshRouter(star.Star):
         route = Event({"self_id": conversation.bot_id})
         await AiocqhttpMessageEvent.send_message(
             client, chain, event=route, is_group=True, session_id=group_id)
+
+    async def notify_memory_model(self, conversation, *, recovery=None, error=None):
+        if error is not None:
+            if isinstance(error, MemoryModelError):
+                text = model_failure_notice(error.error_code, error.recovery, subject="后台记忆整理")
+            elif str(getattr(error, "error_code", "")).startswith("MODEL_OUTPUT_"):
+                text = "后台记忆整理：模型输出未符合整理协议。"
+            else:
+                text = "后台记忆整理未完成，具体原因已记录。"
+            text += " 未完成的批次未推进，已暂停此范围，原消息保留供后续核查；正常聊天可以继续。"
+        else:
+            text = recovery_notice(recovery, subject="后台记忆整理")
+        if text:
+            await self.deliver_scheduled(conversation, text)
 
     async def deliver_scheduled(self, conversation, text: str) -> None:
         await self._send_scheduled_chain(conversation, MessageChain().message(text))
@@ -1315,11 +1336,12 @@ class V2DshRouter(star.Star):
                 await notify_delivery_error(event, message.conversation, self.owners, exc, self.logger,
                                             log_location)
         except ModelTurnError as exc:
-            self.logger.warning("V2 model turn terminated before any tool call for QQ message %s (code=%s)",
-                                raw.get("message_id"), exc.code)
+            self.logger.warning("V2 model turn terminated for QQ message %s (code=%s status=%s backup_attempted=%s tools_completed=%s)",
+                                raw.get("message_id"), exc.code, exc.status,
+                                bool(exc.recovery), exc.tools_completed)
             if turn_started and message is not None and self._console_accepts(message):
                 await notify_turn_error(event, message.conversation, self.owners, "model", self.logger,
-                                        code=exc.code, tools_completed=exc.tools_completed)
+                                        code=exc.code, tools_completed=exc.tools_completed, recovery=exc.recovery)
         except DshTurnCancelled:
             self.logger.info("V2 DSH cancellation confirmed for QQ message %s; outcome pending review",
                              raw.get("message_id"))
@@ -1346,8 +1368,34 @@ class V2DshRouter(star.Star):
                     notices.difference_update({key for key in notices if key[:3] == notice_key[:3]})
                     notices.add(notice_key)
                     fault_kind = status.get("pending_fault_kind")
-                    notice_kind = fault_kind if fault_kind in {"infrastructure", "unknown"} else "pending"
-                    await notify_turn_error(event, message.conversation, self.owners, notice_kind, self.logger)
+                    if type(pending_cursor) is int and pending_cursor > 0 and fault_kind in {"infrastructure", "unknown"}:
+                        details = status.get("pending_fault_details") or {}
+                        if not isinstance(details, dict):
+                            details = {}
+                        def safe_tools(key):
+                            values = details.get(key, [])
+                            if not isinstance(values, list):
+                                return []
+                            return [value for value in values[:30] if isinstance(value, str)
+                                    and len(value) <= 128 and value.isascii()
+                                    and all(c.isalnum() or c in "_.:-" for c in value)]
+                        code = status.get("pending_fault_code")
+                        if not isinstance(code, str) or not code.isascii() or not code.replace("_", "").isalnum() or len(code) > 48:
+                            code = "UNKNOWN"
+                        self.logger.warning("V2 automatic skip evidence conversation=%s journal=%s kind=%s code=%s confirmed_tools=%s unknown_tools=%s",
+                                            message.conversation.key, pending_cursor, fault_kind, code,
+                                            safe_tools("confirmed_tools"), safe_tools("unknown_tools"))
+                        await notify_turn_error(event, message.conversation, self.owners, "auto_skip", self.logger)
+                        try:
+                            await service.resolve_pending(message.conversation, pending_cursor, get_group=event.get_group,
+                                                          wait_for_lock=True)
+                            self.logger.warning("V2 automatically skipped failed Journal %s; execution outcome may be unknown", pending_cursor)
+                        except Exception:
+                            self.logger.exception("V2 automatic skip failed for Journal %s; conversation remains paused", pending_cursor)
+                            notices.discard(notice_key)
+                            await notify_turn_error(event, message.conversation, self.owners, "skip_failed", self.logger)
+                    else:
+                        await notify_turn_error(event, message.conversation, self.owners, "pending", self.logger)
         except Exception:
             self.logger.exception("V2 DSH turn failed for QQ message %s", raw.get("message_id"))
             if (message is not None and message.conversation_key in self.allowed_conversations

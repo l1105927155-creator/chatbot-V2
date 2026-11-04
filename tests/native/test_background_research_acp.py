@@ -17,6 +17,7 @@ from journal import Conversation, JournalStore, message_from_onebot
 from mcp_server import McpServer
 from service import ChatService
 from state import StateStore
+from file_transfer import FileTransfer
 
 
 @pytest.mark.parametrize('profile', ['safe-chat', 'owner-host', 'group-sandbox'])
@@ -27,6 +28,12 @@ def test_native_background_foreground_update_completion_and_stop(tmp_path, monke
     if profile == 'group-sandbox':
         sys.path.insert(0, str(ROOT/'dsh/plugins/agent-profile'))
         import group_volume
+        # Preserve the real bounded mount and sandbox checks while avoiding a
+        # 1 GiB image per test process on constrained CI/desktop disks.
+        monkeypatch.setattr(group_volume, 'GROUP_BYTES', 64 * 1024 ** 2)
+        monkeypatch.setattr(group_volume, 'DEFAULT_TOTAL_BYTES', 128 * 1024 ** 2)
+        monkeypatch.setenv('V2_GROUP_TOTAL_STORAGE_MIB', '128')
+        monkeypatch.setenv('V2_GROUP_MIN_FREE_MIB', '32')
         volume = group_volume.prepare_group(tmp_path, 'qq', '1', '3')
         workspace = Path(volume['workspace'])
         group_runtime = {'workspaceRoot':str(workspace),'platformId':'qq','botId':'1','groupId':'3'}
@@ -36,6 +43,8 @@ def test_native_background_foreground_update_completion_and_stop(tmp_path, monke
     parallel_releases = {tag: tmp_path/f'release-{tag}' for tag in 'ABCD'}
     monkeypatch.setenv('V2_BG_PROBE_LOG', str(log))
     monkeypatch.setenv('V2_BG_PROBE_RELEASE', str(release))
+    nested_release = tmp_path/'nested-release'
+    monkeypatch.setenv('V2_BG_PROBE_NESTED_RELEASE', str(nested_release))
     monkeypatch.setenv('V2_EXECUTION_PROFILE', profile)
     for tag, path in parallel_releases.items():
         monkeypatch.setenv(f'V2_BG_PROBE_RELEASE_{tag}', str(path))
@@ -60,6 +69,7 @@ def test_native_background_foreground_update_completion_and_stop(tmp_path, monke
     store = StateStore(tmp_path/'state.sqlite3')
     conv = Conversation('qq','1','group:3' if group_runtime else 'private:2')
     sent = []
+    file_sends = []
     sequence = 0
     lose_next_settled_callback = False
     killed_process_for_test = False
@@ -84,6 +94,13 @@ def test_native_background_foreground_update_completion_and_stop(tmp_path, monke
         async def send_origin(self, text, mention_user_ids, reply_to_journal_id):
             metadata = {'mention_user_ids':mention_user_ids,'reply_to_journal_id':reply_to_journal_id}
             sent.append((text, metadata)); append(text, outbound=True)
+
+    def test_files():
+        async def send_file(path, name):
+            file_sends.append((Path(path).read_text(), name))
+            return {'submitted':True}
+        return FileTransfer(journal, conv, workspace, profile='group-sandbox',
+                            resolve=lambda path: Path(path), send=send_file)
 
     async def wait_for(predicate, timeout=15):
         async with asyncio.timeout(timeout):
@@ -123,7 +140,8 @@ def test_native_background_foreground_update_completion_and_stop(tmp_path, monke
         async def send(text): sent.append((text,{})); append(text,outbound=True)
         async def turn(text):
             mid=append(text)
-            return await service.handle(conv,mid,send,messaging=Messaging())
+            return await service.handle(conv,mid,send,messaging=Messaging(),
+                                        files=test_files() if group_runtime else None)
         try:
             started = await asyncio.wait_for(turn('BG_START'),20)
             assert 'running' in started, started
@@ -146,20 +164,113 @@ def test_native_background_foreground_update_completion_and_stop(tmp_path, monke
             assert completed[0][1]['mention_user_ids']==(['2'] if group_runtime else [])
             assert not service.active_background(conv)
 
+            # All three execution domains can use the delegated task tool,
+            # and the nested result returns to its immediate parent.
+            assert 'running' in await asyncio.wait_for(turn('BG_NESTED_START'),20)
+            await wait_for(lambda: any('GENERIC_NESTED_PARENT_DONE' in text for text, _ in sent))
+            nested_rows = [row for row in probe_rows() if row.get('kind') == 'generic-nested-result']
+            assert nested_rows and nested_rows[-1]['relayed'] is True, nested_rows
+            await wait_for(lambda: not service.active_background(conv))
+
+            if profile == 'group-sandbox':
+                # A child receives a task-scoped history credential. It waits
+                # until the parent turn has returned, then reads only this
+                # group's canonical Journal entries.
+                append('LOCAL_HISTORY_SENTINEL')
+                foreign = {'post_type':'message','message_type':'group','group_id':4,
+                           'self_id':1,'user_id':8,'message_id':'foreign-1',
+                           'message':[{'type':'text','data':{'text':'FOREIGN_GROUP_SENTINEL'}}]}
+                journal.append(message_from_onebot('qq', foreign))
+                release.unlink()
+                fetches_before = log.read_text().count('fetch-start')
+                assert 'running' in await asyncio.wait_for(turn('BG_HISTORY_START'),20)
+                history_task = next(item for item in service._background_tasks.values()
+                                    if item.status == 'running')
+                history_token = history_task.mcp['token']
+                assert history_token in server._active_tokens
+                await wait_for(lambda: log.read_text().count('fetch-start') == fetches_before + 1)
+                assert await asyncio.wait_for(turn('ordinary conversation after delegation'),5) == 'FOREGROUND_RESPONSIVE'
+                release.touch()
+                await wait_for(lambda: any(row.get('kind') == 'history-verified'
+                                           for row in probe_rows()))
+                history_rows = [row for row in probe_rows() if row.get('kind') == 'history-verified']
+                assert history_rows[-1]['localSeen'] is True, history_rows
+                assert history_rows[-1]['foreignSeen'] is False, history_rows
+                await wait_for(lambda: any(row.get('kind') == 'child-send-tools-verified'
+                                           for row in probe_rows()))
+                assert any(text == 'BACKGROUND_CHILD_TEXT_SEND' for text,meta in sent),sent
+                assert file_sends[-1] == ('BACKGROUND_CHILD_FILE_SEND','child-report.md'),file_sends
+                await wait_for(lambda: not service.active_background(conv))
+                nested = [row for row in probe_rows() if row.get('kind') == 'background-research-recursion-probe']
+                assert nested and 'running' in nested[-1]['nestedResult'], nested
+                relayed = [row for row in probe_rows() if row.get('kind') == 'nested-parent-result']
+                assert relayed, 'parent never resumed after starting nested research'
+                # The child may settle after the parent's first model call.
+                # Verify delivery to that same parent, including a later steer.
+                parent_session = relayed[-1]['session']
+                await wait_for(lambda: relayed[-1]['messages'] is True or any(
+                    row.get('kind') == 'model' and row.get('session') == parent_session
+                    and 'NESTED_RESEARCH_COMPLETE' in row.get('source', '')
+                    for row in probe_rows()))
+                assert not any('NESTED_RESEARCH_COMPLETE' in text for text, _ in sent)
+                assert history_token not in server._active_tokens, 'terminal child credential must be revoked'
+                await wait_for(lambda: any('BACKGROUND_HISTORY_READ_OK' in text for text,_ in sent))
+
+                # If the parent model finishes before its nested child, keep
+                # the subtree alive and deliver the late result with its parent.
+                release.unlink()
+                assert 'running' in await asyncio.wait_for(turn('BG_HISTORY_START PARENT_FINISHES_EARLY'),20)
+                await wait_for(lambda: any(row.get('kind') == 'fetch-start'
+                                           and 'history=1' in row.get('url', '') for row in probe_rows()))
+                release.touch()
+                await wait_for(lambda: any(row.get('kind') == 'fetch-start'
+                                           and 'grandchild=1' in row.get('url', '') for row in probe_rows()))
+                assert not any('BACKGROUND_PARENT_FINISHED_EARLY' in text for text, _ in sent)
+                nested_release.touch()
+                await wait_for(lambda: any('BACKGROUND_PARENT_FINISHED_EARLY' in text
+                                           and 'NESTED_RESEARCH_COMPLETE' in text for text, _ in sent))
+                await wait_for(lambda: not service.active_background(conv))
+
+                # Stop a root task while its nested child is still blocked.
+                nested_release.unlink()
+                release.unlink()
+                prior_grandchild = sum(row.get('kind') == 'fetch-start'
+                                       and 'grandchild=1' in row.get('url', '') for row in probe_rows())
+                prior_parent = sum('BACKGROUND_PARENT_FINISHED_EARLY' in text for text, _ in sent)
+                assert 'running' in await asyncio.wait_for(turn('BG_HISTORY_START PARENT_FINISHES_EARLY'),20)
+                release.touch()
+                await wait_for(lambda: sum(row.get('kind') == 'fetch-start'
+                                           and 'grandchild=1' in row.get('url', '') for row in probe_rows()) > prior_grandchild)
+                tokens = [item.mcp['token'] for item in service._background_tasks.values()
+                          if item.status == 'running' and item.mcp]
+                assert len(tokens) >= 2
+                assert await asyncio.wait_for(service.cancel(conv), 10)
+                await wait_for(lambda: all(token not in server._active_tokens for token in tokens))
+                nested_release.touch()
+                assert sum('BACKGROUND_PARENT_FINISHED_EARLY' in text for text, _ in sent) == prior_parent
+                await wait_for(lambda: not service.active_background(conv))
+
             # A second detached run is stopped even while its foreground is idle.
             release.unlink()
+            fetches_before_cancel = log.read_text().count('fetch-start')
             await turn('BG_START')
-            await wait_for(lambda: log.read_text().count('fetch-start')==2)
+            await wait_for(lambda: log.read_text().count('fetch-start')==fetches_before_cancel + 1)
             assert service.active_background(conv)
+            cancellable = next(item for item in service._background_tasks.values()
+                               if item.status == 'running')
+            cancelled_token = cancellable.mcp['token'] if cancellable.mcp else None
             assert await asyncio.wait_for(service.cancel(conv),10)
             await wait_for(lambda: not service.active_background(conv))
+            if cancelled_token:
+                assert cancelled_token not in server._active_tokens, 'cancelled child credential must be revoked'
             release.touch()
             assert await asyncio.wait_for(turn('conversation after stop'),10) == 'FOREGROUND_RESPONSIVE'
             assert len([text for text,_ in sent if 'BACKGROUND_COMPLETE' in text])==1
             # Reset cancels the previous generation before releasing a clean session.
             release.unlink()
+            fetches_before_reset = log.read_text().count('fetch-start')
             await turn('BG_START')
-            await wait_for(lambda: log.read_text().count('fetch-start')==3)
+            await wait_for(lambda: log.read_text().count('fetch-start')==fetches_before_reset + 1)
             before=store.get('qq','1',conv.key)
             # This lifecycle fixture has no memory backend. Explicitly skip
             # collection while checking native cancellation and Session reset.

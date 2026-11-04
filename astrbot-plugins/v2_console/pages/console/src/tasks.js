@@ -27,6 +27,24 @@ function dateLabel(value) {
   return Number.isNaN(date.getTime()) ? String(value) : new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
 
+function runStatusLabel(taskKind, run) {
+  if (taskKind !== "agent" || run?.status !== "completed") {
+    return statusLabels[run?.status] || run?.status || "未知";
+  }
+  switch (run?.result?.outcome) {
+    case "succeeded": return "Agent 报告成功";
+    case "failed": return "Agent 报告失败";
+    case "unknown": return "结果未确认";
+    default: return "执行结束，结果未确认";
+  }
+}
+
+function runSummary(run) {
+  return typeof run?.result?.summary === "string" && run.result.summary.trim()
+    ? ` · ${run.result.summary}`
+    : "";
+}
+
 export function createTasksView({ root, api, notice, confirmAction }) {
   const state = { snapshot: null, selected: null, dirty: false, busy: false, loaded: false };
   root.innerHTML = `
@@ -178,8 +196,8 @@ export function createTasksView({ root, api, notice, confirmAction }) {
     const recentRuns = Array.isArray(row.recent_runs) ? row.recent_runs.slice(0, 10) : [];
     const latest = recentRuns[0];
     if (latest) {
-      const runLine = document.createElement("p"); runLine.className = `task-run-summary${latest.status === "failed" ? " failed" : ""}`;
-      runLine.textContent = `最近：${statusLabels[latest.status] || latest.status || "未知"} · ${dateLabel(latest.finished_at || latest.started_at)}${latest.error_code ? ` · ${latest.error_code}` : ""}`;
+      const runLine = document.createElement("p"); runLine.className = `task-run-summary${latest.status === "failed" || latest.result?.outcome === "failed" ? " failed" : ""}`;
+      runLine.textContent = `最近：${runStatusLabel(task.kind, latest)} · ${dateLabel(latest.finished_at || latest.started_at)}${latest.error_code ? ` · ${latest.error_code}` : ""}${runSummary(latest)}`;
       card.append(runLine);
     }
     const buttons = document.createElement("div"); buttons.className = "task-actions";
@@ -199,7 +217,7 @@ export function createTasksView({ root, api, notice, confirmAction }) {
       for (const item of recentRuns) {
         const line = document.createElement("div"); line.className = "task-history-row";
         const info = document.createElement("span");
-        info.textContent = `${statusLabels[item.status] || item.status || "未知"} · ${dateLabel(item.finished_at || item.started_at)}${item.error_code ? ` · ${item.error_code}` : ""}`;
+        info.textContent = `${runStatusLabel(task.kind, item)} · ${dateLabel(item.finished_at || item.started_at)}${item.error_code ? ` · ${item.error_code}` : ""}${runSummary(item)}`;
         line.append(info);
         if (item.status === "running" && item.run_id) {
           const cancel = button("取消", "outline", () => cancelRun(group, item));

@@ -24,6 +24,7 @@ Before changing code, read:
 - Resolve technical uncertainty yourself when evidence can answer it.
 - Ask the user only when a decision depends on product/business intent or information that cannot be verified.
 - Do not invent product behavior, permission rules, routing rules, or compatibility requirements.
+- 开发和测试前检查可用磁盘空间，避免不必要的大型副本；完成后检查并清理本次创建的临时目录、虚拟磁盘和挂载，保留正在使用的数据及必要的验收证据。不能安全清理时报告路径、占用和原因，不把清理留给用户自行发现。
 
 ## Architecture constraints
 
