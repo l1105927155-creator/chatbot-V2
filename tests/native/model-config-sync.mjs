@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
+import fs from 'node:fs'
 import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { resolveConfig } from '../../dsh/node_modules/@deepseek-ai/cordis/lib/index.js'
@@ -98,6 +101,20 @@ async function replace(text) {
   await rename(temp, profile)
 }
 
+async function waitForHash(path, expected) {
+  const deadline = Date.now() + 4000
+  while (Date.now() < deadline) {
+    try {
+      const value = JSON.parse(await readFile(path, 'utf8'))
+      if (value.ok === true && value.source_sha256 === expected) return value
+    } catch { /* wait for the next publication */ }
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  assert.fail(`model catalog did not confirm source hash ${expected}`)
+}
+
+const sha256 = text => createHash('sha256').update(text).digest('hex')
+
 try {
   const initial = yaml(['model-one', 'model-two'], '        defaultMaxTokens: 4096\n')
   const parsed = _extractProfileForTest(initial)
@@ -124,9 +141,7 @@ try {
 
   const changed = yaml(['model-two', 'model-three'])
   await replace(changed)
-  await new Promise(resolve => setTimeout(resolve, 100))
-  await sync.flush()
-  const secondStatus = JSON.parse(await readFile(status, 'utf8'))
+  const secondStatus = await waitForHash(status, sha256(changed))
   assert.equal(secondStatus.ok, true)
   assert.deepEqual(secondStatus.catalog.find(item => item.provider === 'test-route').models, ['model-two', 'model-three'])
   assert.deepEqual(piEntry.options.config.providers['test-route'].models.map(model => model.id), ['model-two', 'model-three'])
@@ -191,12 +206,36 @@ try {
   const bootstrapped = await installModelConfigSync(ctx, { profilePath: profile, statusPath: status })
   assert.deepEqual(JSON.parse(await readFile(status, 'utf8')).catalog.find(row => row.provider === 'openai-codex').models,
     ['arrived-during-bootstrap'], 'registration during initial enumeration cannot be lost')
+  const immediatelyChanged = yaml(['published', 'then-replaced'])
+  await replace(immediatelyChanged)
+  const afterReadyStatus = await waitForHash(status, sha256(immediatelyChanged))
+  assert.deepEqual(afterReadyStatus.catalog.find(row => row.provider === 'test-route').models,
+    ['published', 'then-replaced'], 'an atomic replacement immediately after readiness is confirmed without manual flush')
   await bootstrapped.dispose()
+  const originalWatch = fs.watch
+  fs.watch = () => { throw new Error('watch unavailable in test') }
+  syncBuiltinESMExports()
+  let pollingOnly
+  try {
+    pollingOnly = await installModelConfigSync(ctx, { profilePath: profile, statusPath: status })
+  } finally {
+    fs.watch = originalWatch
+    syncBuiltinESMExports()
+  }
+  const pollingChange = yaml(['polling-fallback'])
+  await replace(pollingChange)
+  const pollingStatus = await waitForHash(status, sha256(pollingChange))
+  assert.deepEqual(pollingStatus.catalog.find(row => row.provider === 'test-route').models,
+    ['polling-fallback'], 'periodic hash checks recover when fs.watch is unavailable')
+  await pollingOnly.dispose()
   console.log(JSON.stringify({
     safeProfileParsing: true,
     unrelatedEntriesIgnored: true,
     nativePiAiAndDeepSeekSchemas: true,
     atomicRenameHotReload: true,
+    atomicRenameDetectedWithoutFlush: true,
+    postReadinessAtomicRenameConfirmed: true,
+    pollingFallbackWhenWatchUnavailable: true,
     actualCatalogMarker: true,
     invalidEditKeepsLastValidCatalog: true,
     providerRemovalAndReaddition: true,

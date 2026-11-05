@@ -31,6 +31,7 @@ MASKED_BUILTIN_HANDLERS = frozenset(
 )
 
 V2_COMMAND_HELP = """V2 Agent 命令
+群聊使用命令时，请先 @本 Bot，再输入命令；私聊无需 @。
 /new：群聊先整理记忆，成功后开始新的 DSH 对话上下文；整理失败则不重置、不自动重试。群聊仅 Bot Owner 可用；准入私聊中由当前使用者管理自己的会话。
 /new skip_mem 或 /new 跳过记忆：跳过记忆整理，直接重置上下文。
 /reset：与 /new 相同，也接受 skip_mem 或 跳过记忆。

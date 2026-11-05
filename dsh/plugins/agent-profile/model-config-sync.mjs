@@ -207,7 +207,13 @@ export async function installModelConfigSync(ctx, { profilePath, statusPath, epo
   let queued = Promise.resolve()
   let timer
   let watcher
+  let poller
+  let syncPending = false
+  let topologyPending = false
+  let drainPending = false
+  let applyingAdapterUpdate = false
   let currentHash
+  let currentChanges
   let lastStatusOk = false
   const baselines = new Map()
 
@@ -217,6 +223,7 @@ export async function installModelConfigSync(ctx, { profilePath, statusPath, epo
       if (!info.isFile() || info.isSymbolicLink()) throw new Error('profile-read-failed')
       const bytes = await readFile(sourcePath)
       const hash = createHash('sha256').update(bytes).digest('hex')
+      if (hash === currentHash && lastStatusOk) return { hash, changes: currentChanges, unchanged: true }
       return { hash, changes: extractProfile(bytes.toString('utf8')) }
     } catch (error) {
       if (error?.message === 'invalid-profile') throw error
@@ -289,7 +296,8 @@ export async function installModelConfigSync(ctx, { profilePath, statusPath, epo
         await entry.update({ config: next.get(id) })
         applied.push(id)
       }
-      await notifyAdaptersUpdated(ctx)
+      applyingAdapterUpdate = true
+      try { await notifyAdaptersUpdated(ctx) } finally { applyingAdapterUpdate = false }
       candidate.catalog = await collectCatalog(candidate.changes)
     } catch (error) {
       for (const id of applied.reverse()) {
@@ -307,6 +315,7 @@ export async function installModelConfigSync(ctx, { profilePath, statusPath, epo
       if (candidate.hash === currentHash && lastStatusOk) return
       await applyCandidate(candidate)
       currentHash = candidate.hash
+      currentChanges = candidate.changes
       await publishCatalog(candidate)
       lastStatusOk = true
     } catch (error) {
@@ -318,51 +327,94 @@ export async function installModelConfigSync(ctx, { profilePath, statusPath, epo
     }
   }
 
+  function drain() {
+    if (drainPending || stopped) return queued
+    drainPending = true
+    queued = queued.catch(() => {}).then(async () => {
+      try {
+        while (!stopped && (syncPending || topologyPending)) {
+          if (syncPending) {
+            syncPending = false
+            await syncOnce()
+            continue
+          }
+          topologyPending = false
+          const candidate = await loadCandidate()
+          if (candidate.hash !== currentHash) {
+            syncPending = true
+            continue
+          }
+          try {
+            candidate.catalog = await collectCatalog(candidate.changes)
+            await publishCatalog(candidate)
+            lastStatusOk = true
+          } catch {
+            lastStatusOk = false
+            await atomicStatus(statusPath, { ok: false, source_sha256: candidate.hash, epoch, error: 'catalog-not-ready' })
+          }
+        }
+      } finally {
+        drainPending = false
+        if (!stopped && (syncPending || topologyPending)) drain()
+      }
+    })
+    return queued
+  }
+
+  function requestSync() {
+    if (stopped) return queued
+    syncPending = true
+    return drain()
+  }
+
+  function requestTopology() {
+    if (stopped) return queued
+    topologyPending = true
+    return drain()
+  }
+
   // Plugin-owned directories can change without touching the Web YAML. Publish
   // native topology independently; never reapply configuration or emit recursively.
   const offAdapters = ctx.on?.('llm/adapters-updated', () => {
-    queued = queued.then(async () => {
-      if (stopped) return
-      const candidate = await loadCandidate()
-      if (candidate.hash !== currentHash) return
-      try {
-        candidate.catalog = await collectCatalog(candidate.changes)
-        await publishCatalog(candidate)
-        lastStatusOk = true
-      } catch {
-        lastStatusOk = false
-        await atomicStatus(statusPath, { ok: false, source_sha256: candidate.hash, epoch, error: 'catalog-not-ready' })
-      }
-    }).catch(() => {})
+    if (applyingAdapterUpdate) return
+    requestTopology().catch(() => {})
   })
 
-  // Subscribe before bootstrapping, and serialize bootstrap with topology
-  // refreshes. A plugin can finish registering while the initial catalog is
-  // being enumerated; that notification must run after this publication.
-  const initial = queued = queued.then(syncOnce)
-  try { await initial; await queued } catch (error) {
+  // Install both detectors before readiness is published. Atomic profile
+  // replacement during bootstrap is then caught by the watcher or poller.
+  const parent = dirname(sourcePath)
+  try {
+    watcher = await watch(parent, { persistent: false }, (_event, filename) => {
+      if (filename && String(filename) !== basename(sourcePath)) return
+      clearTimeout(timer)
+      timer = setTimeout(() => { requestSync().catch(() => {}) }, debounceMs)
+    })
+    watcher.on('error', () => {
+      watcher?.close()
+      watcher = undefined
+    })
+  } catch {
+    // Periodic polling remains available when filesystem watching fails.
+  }
+  poller = setInterval(() => { requestSync().catch(() => {}) }, 1000)
+  poller.unref?.()
+
+  try { await requestSync() } catch (error) {
     stopped = true
+    clearTimeout(timer)
+    clearInterval(poller)
+    watcher?.close()
     offAdapters?.()
     throw error
   }
 
-  const parent = dirname(sourcePath)
-  watcher = await watch(parent, { persistent: false }, (_event, filename) => {
-    if (filename && String(filename) !== basename(sourcePath)) return
-    clearTimeout(timer)
-    timer = setTimeout(() => {
-      queued = queued.then(syncOnce, syncOnce)
-      queued.catch(() => {})
-    }, debounceMs)
-  })
-  watcher.on('error', () => {})
-
   return {
     get sourceSha256() { return currentHash },
-    async flush() { queued = queued.then(syncOnce, syncOnce); await queued },
+    async flush() { await requestSync() },
     async dispose() {
       stopped = true
       clearTimeout(timer)
+      clearInterval(poller)
       watcher?.close()
       offAdapters?.()
       await queued

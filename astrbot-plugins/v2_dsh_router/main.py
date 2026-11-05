@@ -495,13 +495,15 @@ class V2DshRouter(star.Star):
         self.bind_send_guard_clients()
         from .command_surface import install_command_surface
         self._command_surface = await install_command_surface(previous=self._command_surface)
+        from astrbot.core.star.star_handler import star_handlers_registry
+        from .command_mention import install
+        install(star_handlers_registry)
         self._commands_ready = True
 
     @filter.on_plugin_loaded()
     async def refresh_agent_commands(self, metadata):
-        """Keep the same surface when the router or native commands reload."""
-        if (getattr(self, "_initialized", False) and not self._closing and
-                getattr(metadata, "name", None) in {"v2_dsh_router", "builtin_commands"}):
+        """Apply the command surface to newly loaded plugins too."""
+        if getattr(self, "_initialized", False) and not self._closing:
             await self.install_agent_commands()
 
     @filter.command("new")
@@ -1454,6 +1456,9 @@ class V2DshRouter(star.Star):
             await self._close_runtime()
         finally:
             if getattr(self, "_command_surface", None) is not None:
+                from astrbot.core.star.star_handler import star_handlers_registry
+                from .command_mention import restore
+                restore(star_handlers_registry)
                 from .command_surface import restore_command_surface
                 await restore_command_surface(self._command_surface)
                 self._command_surface = None

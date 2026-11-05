@@ -107,6 +107,7 @@ class _ResetBarrier:
     done: asyncio.Event = field(default_factory=asyncio.Event)
     trace: Any = None
     succeeded: bool = False
+    phase: str = "admission"
 
 
 @dataclass
@@ -621,6 +622,17 @@ class ChatService:
         key = (conversation.platform_id, conversation.bot_id, conversation.key)
         return self._locks.setdefault(key, asyncio.Lock())
 
+    def _selected_model_route(self, conversation):
+        """Read the current authority on every operation, without a cached legacy route."""
+        console = getattr(self, "console_store", None)
+        if console is not None:
+            model = session_settings(console, conversation)["model"]
+            return model["provider"], model["model"]
+        if hasattr(self.state, "get_model_route"):
+            return self.state.get_model_route(
+                conversation.platform_id, conversation.bot_id, conversation.key)
+        return None
+
     def _ensure_enabled(self, identity) -> None:
         store = getattr(self, "console_store", None)
         if store is not None:
@@ -1064,14 +1076,7 @@ class ChatService:
 
                 # Preserve the live group's selected model, persona, and scene,
                 # while making every mutation to a short-lived independent SID.
-                model_route = None
-                if self.console_store is not None:
-                    settings = session_settings(self.console_store, conversation)
-                    configured_model = settings.get("model")
-                    if isinstance(configured_model, dict):
-                        model_route = (configured_model["provider"], configured_model["model"])
-                elif hasattr(self.state, "get_model_route"):
-                    model_route = await asyncio.to_thread(self.state.get_model_route, *identity)
+                model_route = await asyncio.to_thread(self._selected_model_route, conversation)
                 front_session = getattr(current, "session_id", None)
                 if front_session:
                     personas = getattr(self.dsh, "personas", None)
@@ -1213,7 +1218,10 @@ class ChatService:
             raise
         except BaseException as error:
             if trace:
-                trace.emit("session/reset_failed")
+                trace.emit("session/reset_failed", error_type=type(error).__name__)
+            logging.getLogger(__name__).warning(
+                "Conversation reset failed conversation=%s phase=%s error_type=%s",
+                conversation.key, barrier.phase, type(error).__name__)
             raise ResetError("会话重置未完成，原会话映射保持不变。") from error
         finally:
             barrier.done.set()
@@ -1252,7 +1260,10 @@ class ChatService:
             raise
         except BaseException as error:
             if barrier.trace:
-                barrier.trace.emit("session/reset_failed")
+                barrier.trace.emit("session/reset_failed", error_type=type(error).__name__)
+            logging.getLogger(__name__).warning(
+                "Conversation reset failed conversation=%s phase=%s error_type=%s",
+                conversation.key, barrier.phase, type(error).__name__)
             raise ResetError("会话重置未完成，原会话映射保持不变。") from error
         finally:
             barrier.done.set()
@@ -1388,23 +1399,28 @@ class ChatService:
                         created["session_id"] = session_id
                         return session_id
 
+                    barrier.phase = "create_session"
                     created_session = await self._dsh_call(create_and_record)
-                    saved_model = (await asyncio.to_thread(self.state.get_model_route, *identity)
-                                   if hasattr(self.state, 'get_model_route') else None)
+                    barrier.phase = "select_model"
+                    saved_model = await asyncio.to_thread(self._selected_model_route, conversation)
                     if saved_model is not None:
                         await self._dsh_call(lambda: self.dsh.model_status(
                             created_session, *args, model_route=saved_model))
                     if old_persona is not None and getattr(self.dsh, "personas", None) is not None:
+                        barrier.phase = "select_persona"
                         value = old_persona.get("persona")
                         if value is not None:
                             await self._dsh_call(self.dsh.select_persona, created_session, value)
                     if old_scene is not None and getattr(self.dsh, "scenes", None) is not None:
+                        barrier.phase = "select_scene"
                         value = old_scene.get("scene")
                         if value is not None:
                             await self._dsh_call(self.dsh.select_scene, created_session, value)
                     if current is not None:
+                        barrier.phase = "drain_session"
                         drain_args = () if servers is None else (servers,)
                         await self._dsh_call(self.dsh.drain_session, current.session_id, *drain_args)
+                    barrier.phase = "commit_mapping"
                     new_state = await self._dsh_call(
                         self.state.rotate_session,
                         *identity,
@@ -1662,10 +1678,7 @@ class ChatService:
                 return {"compacted": False, "reason": "no_session"}
             if state.pending_upper_cursor is not None:
                 raise PendingTurnError("存在待核对轮次，请先核对再压缩。")
-            route = self.state.get_model_route(*identity)
-            if getattr(self, "console_store", None) is not None:
-                model = session_settings(self.console_store, conversation)["model"]
-                route = (model["provider"], model["model"])
+            route = await asyncio.to_thread(self._selected_model_route, conversation)
 
             async def perform(servers=None):
                 return await self._dsh_call(lambda: self.dsh.compact_session(
@@ -1697,11 +1710,8 @@ class ChatService:
             state = await asyncio.to_thread(self.state.get, *identity)
             if state is not None and state.pending_upper_cursor is not None:
                 raise PendingTurnError('存在待核对的DSH轮次，请先核对再管理模型。')
-            previous = await asyncio.to_thread(self.state.get_model_route, *identity)
+            previous = await asyncio.to_thread(self._selected_model_route, conversation)
             console = getattr(self, "console_store", None)
-            if console is not None:
-                settings = session_settings(console, conversation)
-                previous = (settings["model"]["provider"], settings["model"]["model"])
             async def perform(servers=None):
                 nonlocal state
                 if state is None:
@@ -2100,11 +2110,7 @@ class ChatService:
             if not mcp_args:
                 run_args += (None,)
             run_args += (trusted_source,)
-        selected_route = (await asyncio.to_thread(self.state.get_model_route, *identity)
-                          if hasattr(self.state, 'get_model_route') else None)
-        if getattr(self, "console_store", None) is not None:
-            settings = session_settings(self.console_store, conversation)
-            selected_route = (settings["model"]["provider"], settings["model"]["model"])
+        selected_route = await asyncio.to_thread(self._selected_model_route, conversation)
         run_options = {'images': image_blocks} if image_blocks else {}
         if selected_route is not None:
             run_options['model_route'] = selected_route
