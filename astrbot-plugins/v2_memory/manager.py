@@ -15,6 +15,33 @@ _GROUP_NAME = re.compile(r"group:[a-zA-Z0-9_-]{1,128}\Z")
 _MAX_MANIFEST_BYTES = 1024 * 1024
 
 
+def _settings_api():
+    try:
+        from ..v2_console.workspace_settings import SettingsConflict, SettingsFile
+    except ImportError:  # standalone plugin tests load v2_memory as a top-level package
+        from v2_console.workspace_settings import SettingsConflict, SettingsFile
+    return SettingsConflict, SettingsFile
+
+
+def _validate_incremental_workspace(value):
+    if not isinstance(value, dict) or set(value) != {
+        "enabled", "min_messages", "max_wait_seconds"
+    }:
+        raise ValueError("invalid incremental workspace settings")
+    from .store import _validate_incremental
+
+    _validate_incremental({"revision": 0, **value, "failed_after": None,
+                           "failed_through": None, "error_code": None})
+    return dict(value)
+
+
+def _validate_memory_enabled_workspace(value):
+    if (not isinstance(value, dict) or set(value) != {"enabled"}
+            or type(value["enabled"]) is not bool):
+        raise ValueError("invalid memory workspace settings")
+    return {"enabled": value["enabled"]}
+
+
 class MemoryManager:
     """Own one immutable initial cohort of admitted group memory services."""
 
@@ -27,6 +54,8 @@ class MemoryManager:
         self._services: dict[str, object] = {}
         self._reset_hooks: dict[str, object] = {}
         self._previous_bindings: dict[str, tuple[object, object]] = {}
+        self._settings_files: dict[str, dict[str, object]] = {}
+        self._settings_status: dict[str, dict[str, dict]] = {}
         self._mcp = getattr(router, "mcp", None)
         self._previous_mcp_binding = None
         self._started = False
@@ -38,6 +67,73 @@ class MemoryManager:
     @property
     def incremental_ready(self):
         return self._started and not self._closing and self._incremental.ready
+
+    def _workspace_backend(self, identity):
+        if (not isinstance(identity, (tuple, list)) or len(identity) != 3
+                or any(not isinstance(part, str) or not part for part in identity)
+                or not self._started or self._closing or not self._router_ready()):
+            return None
+        for key, backend in tuple(self._backends.items()):
+            if tuple(getattr(backend, "identity", ())) != tuple(identity):
+                continue
+            record = self._groups.get(key)
+            binding = self._resolve_group(key, record) if record is not None else None
+            service = self._services.get(key)
+            if (binding is not None and binding[0] is service
+                    and getattr(service, "memory_backend", None) is backend
+                    and backend in self._backends.values()):
+                return key, backend
+        return None
+
+    def workspace_settings(self) -> list[dict]:
+        """Return file projections for currently bound, admitted group backends."""
+        if not self._started or self._closing or not self._router_ready():
+            return []
+        if not any(self._workspace_backend(getattr(backend, "identity", None)) is not None
+                   for backend in tuple(self._backends.values())):
+            return []
+        definitions = []
+        for name, domain, validate in (
+            ("memory", "memory", _validate_incremental_workspace),
+            ("memory-enabled", "memory-enabled", _validate_memory_enabled_workspace),
+        ):
+            async def read(identity, selected=domain):
+                found = self._workspace_backend(identity)
+                if found is None:
+                    raise PermissionError("group memory service is unavailable")
+                return await self._read_workspace_setting(found[1], selected)
+
+            async def apply(identity, before, desired, selected=domain):
+                found = self._workspace_backend(identity)
+                if found is None:
+                    raise PermissionError("group memory service is unavailable")
+                return await self._apply_workspace_setting(
+                    found[1], selected, before, desired
+                )
+
+            def adapter(identity, selected=domain):
+                found = self._workspace_backend(identity)
+                if found is None:
+                    return None
+                return self._settings_files.get(found[0], {}).get(selected)
+
+            definitions.append({
+                "name": name,
+                "domain": domain,
+                "validate": validate,
+                "read": read,
+                "apply": apply,
+                "adapter": adapter,
+                "after_sync": self._workspace_after_sync,
+            })
+        return definitions
+
+    async def _workspace_after_sync(self, identity):
+        found = self._workspace_backend(identity)
+        if found is not None:
+            key, backend = found
+            for domain in ("memory", "memory-enabled"):
+                await self._drain_disabled_settings(key, backend, domain)
 
     async def start(self) -> None:
         async with self._lock:
@@ -214,6 +310,31 @@ class MemoryManager:
         self._backends[key] = backend
         self._services[key] = service
         await backend.initialize()
+        # Workspace settings are projections of the existing per-group memory
+        # store.  Old test harnesses and incomplete runtimes without a verified
+        # workspace volume keep the pre-existing DB-only behavior.
+        volume = runtime.get("volume_module")
+        if callable(getattr(volume, "verified_group_workspace", None)):
+            try:
+                _, SettingsFile = _settings_api()
+                identity = backend.identity
+                self._settings_files[key] = {
+                    "memory": SettingsFile(
+                        backend.workspace, volume, self.data_dir / "workspace-settings",
+                        identity, "memory", _validate_incremental_workspace,
+                    ),
+                    "memory-enabled": SettingsFile(
+                        backend.workspace, volume, self.data_dir / "workspace-settings",
+                        identity, "memory-enabled", _validate_memory_enabled_workspace,
+                    ),
+                }
+                for domain in ("memory", "memory-enabled"):
+                    await self.sync_workspace_settings(key, domain)
+            except Exception as error:
+                # Invalid/conflicting files must remain visible and untouched;
+                # the existing store remains the last-good runtime authority.
+                self.logger.warning("V2 memory workspace settings unavailable for %s (%s)",
+                                    key, type(error).__name__)
         # Initialization may take time; bind only if the exact runtime remains valid.
         current = self._resolve_group(key, record)
         if current is None or current[0] is not service:
@@ -349,6 +470,105 @@ class MemoryManager:
             })
         return {"groups": rows}
 
+    async def _read_workspace_setting(self, backend, domain):
+        if domain == "memory":
+            value = await backend._io("incremental_state")
+            return {"enabled": value["enabled"], "min_messages": value["min_messages"],
+                    "max_wait_seconds": value["max_wait_seconds"]}
+        if domain == "memory-enabled":
+            value = await backend.snapshot()
+            return {"enabled": value["enabled"]}
+        raise ValueError("unknown memory settings domain")
+
+    async def _apply_workspace_setting(self, backend, domain, before, desired):
+        # Runtime-only revision changes (failure bookkeeping, cursor progress)
+        # may race with a settings edit. Retry only while the projected fields
+        # still match the trusted baseline.
+        for _attempt in range(4):
+            if domain == "memory":
+                state = await backend._io("incremental_state")
+                current = {"enabled": state["enabled"],
+                           "min_messages": state["min_messages"],
+                           "max_wait_seconds": state["max_wait_seconds"]}
+                if current != before:
+                    SettingsConflict, _ = _settings_api()
+                    raise SettingsConflict("incremental settings changed in dashboard")
+                try:
+                    await backend._io("configure_incremental", state["revision"],
+                                      desired["enabled"], desired["min_messages"],
+                                      desired["max_wait_seconds"])
+                    return
+                except Exception as error:
+                    if type(error).__name__ != "RevisionConflict":
+                        raise
+            elif domain == "memory-enabled":
+                state = await backend.snapshot()
+                current = {"enabled": state["enabled"]}
+                if current != before:
+                    SettingsConflict, _ = _settings_api()
+                    raise SettingsConflict("memory settings changed in dashboard")
+                try:
+                    await backend._io("set_enabled", desired["enabled"], state["revision"])
+                    return
+                except Exception as error:
+                    if type(error).__name__ != "RevisionConflict":
+                        raise
+            else:
+                raise ValueError("unknown memory settings domain")
+        SettingsConflict, _ = _settings_api()
+        raise SettingsConflict("memory settings changed repeatedly")
+
+    async def sync_workspace_settings(self, key, domain):
+        backend = self._backends.get(key)
+        adapter = self._settings_files.get(key, {}).get(domain)
+        if backend is None or adapter is None:
+            return None
+        try:
+            result = await adapter.sync(
+                lambda: self._read_workspace_setting(backend, domain),
+                lambda before, desired: self._apply_workspace_setting(
+                    backend, domain, before, desired),
+            )
+            self._settings_status.setdefault(key, {})[domain] = result
+            return result
+        finally:
+            # The adapter has released its private protocol lock before this
+            # drain. Never cancel a worker while holding either file lock.
+            await self._drain_disabled_settings(key, backend, domain)
+
+    async def _drain_disabled_settings(self, key, backend, domain):
+        try:
+            current = await self._read_workspace_setting(backend, domain)
+        except Exception:
+            return
+        if current.get("enabled") is not False:
+            return
+        await self._incremental.cancel(key)
+        if domain == "memory-enabled":
+            progress = backend.progress_snapshot()
+            if progress.get("active"):
+                await backend.manage("cancel", {"run_id": progress["run_id"]})
+
+    async def _edit_workspace_setting(self, key, domain, operation):
+        backend = self._backends[key]
+        adapter = self._settings_files.get(key, {}).get(domain)
+        if adapter is None:
+            return await operation()
+        try:
+            async with adapter.edit(
+                    lambda: self._read_workspace_setting(backend, domain),
+                    lambda before, desired: self._apply_workspace_setting(
+                        backend, domain, before, desired)):
+                result = await operation()
+        finally:
+            # edit() can import a disable before the requested DB CAS fails.
+            # Re-read and drain after its protocol lock has been released.
+            await self._drain_disabled_settings(key, backend, domain)
+        if domain in self._settings_status.get(key, {}):
+            self._settings_status[key][domain] = {"status": "applied",
+                                                 "message": "设置已生效；无需重启。"}
+        return result
+
     def _session_enabled_from_status(self, record: dict, service) -> bool:
         if self.router is None:
             return False
@@ -391,7 +611,10 @@ class MemoryManager:
             return {"scheduled": self._incremental.submit(key, backend, force=True,
                                                         retry_run_id=run["id"])}
         if action == "configure_incremental":
-            result = await backend._io("configure_incremental", **arguments)
+            result = await self._edit_workspace_setting(
+                key, "memory",
+                lambda: backend._io("configure_incremental", **arguments),
+            )
             if arguments.get("enabled") is False:
                 await self._incremental.cancel(key)
                 result = await backend._io("incremental_state")
@@ -407,12 +630,15 @@ class MemoryManager:
                 raise ValueError("enable background memory before retrying")
             result = await backend._io("resume_incremental", **arguments)
             return {"incremental": result, "scheduled": self._incremental.submit(key, backend, force=True)}
-        if action == "enable" and arguments.get("enabled") is False:
-            result = await backend.manage(action, arguments)
-            await self._incremental.cancel(key)
-            progress = backend.progress_snapshot()
-            if progress.get("active"):
-                await backend.manage("cancel", {"run_id": progress["run_id"]})
+        if action == "enable":
+            result = await self._edit_workspace_setting(
+                key, "memory-enabled", lambda: backend.manage(action, arguments),
+            )
+            if arguments.get("enabled") is False:
+                await self._incremental.cancel(key)
+                progress = backend.progress_snapshot()
+                if progress.get("active"):
+                    await backend.manage("cancel", {"run_id": progress["run_id"]})
             return result
         if action == "cancel" and not isinstance(arguments.get("run_id"), str):
             raise ValueError("cancel requires the observed memory run_id")

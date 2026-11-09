@@ -15,3 +15,19 @@ description: 文件检查与修改的方法指南；先核对当前 Profile 实�
 QQ图片通过原生视觉理解；文件落盘服务于用户明确的保存或处理任务。这类任务中，用 qq_file_receive 指定当前 Journal 条目及 content.segments 中从0开始的下标，工具将原始字节导入当前工作区并返回路径、大小、SHA256。不要把二进制改成txt，也不要把附件ID或下载URL当成本地文件。缺少附件引用时按需查询当前会话历史；普通文件上传通知也可检索。
 
 需要交付新生成的长文本或Markdown时，直接用 qq_file_send 的 content 参数和可选 name；默认文件名为 output.md，省略扩展名会补上 .md。宿主仅在私有发送快照中临时创建该文件，不写入本群工作区，因此不需要成员拥有工作区编辑权限。已有文件仍用 path 参数：群聊路径只属于本群/workspace，Owner使用实际主机路径；safe-chat只能保管和返回本会话收到的附件，不能据此执行文件。path 与 content 必须且只能提供一个。所有文件格式均可作为附件发送。接收/发送成功不代表模型能理解文件内容，理解PDF、表格、音视频等需使用当前环境实际可用的方法。遇到容量、过期或平台错误如实报告；发送失败或回执不确定不自动重发。
+
+## 本群功能设置
+
+修改白名单成员可要求调整 `settings/tasks.json`（本群自动任务总开关，`enabled: null`表示继承后台默认）、`settings/memory.json`（后台记忆开关、`min_messages`条数阈值、`max_wait_seconds`最长等待）和 `settings/memory-enabled.json`（记忆总开关）。读取当前文件后只修改`settings`字段，保留`version`、`domain`和`revision`。模型、Agent总开关与修改白名单由Owner在后台管理。
+
+保存无需重启：自动任务在下一次约5秒扫描同步，记忆在下一次约30秒扫描同步。将修改和状态检查分为不同工具调用，让Shell释放文件锁；不要在同一Shell调用内轮询等同步。读取对应`*.status.json`，确认`status`为`applied`、`revision`与配置文件一致且`settings`等于目标值后，再说明已生效。尚未确认时说明待同步；格式错误或冲突时保留草稿，向用户说明并核对后台当前设置，不擅自删除或覆盖配置。
+
+## 本群功能设置
+
+修改白名单成员可要求调整 `settings/tasks.json`（本群自动任务总开关，`enabled: null`表示继承后台默认）、`settings/memory.json`（后台记忆开关、`min_messages`条数阈值、`max_wait_seconds`最长等待）和 `settings/memory-enabled.json`（记忆总开关）。读取当前文件后只修改`settings`字段，保留`version`、`domain`和`revision`。模型、Agent总开关与修改白名单由Owner在后台管理。
+
+保存无需重启：自动任务在下一次约5秒扫描同步，记忆在下一次约30秒扫描同步。将修改和状态检查分为不同工具调用，让Shell释放文件锁；不要在同一Shell调用内轮询等同步。读取对应`*.status.json`，确认`status`为`applied`、`revision`与配置文件一致且`settings`等于目标值后，再说明已生效。尚未确认时说明待同步；格式错误或冲突时保留草稿，向用户说明并核对后台当前设置，不擅自删除或覆盖配置。
+
+插件声明的本群设置会自动出现在 `settings/<插件名>.<配置域>.json`，已有任务与记忆文件名保持兼容；统一自动发现扫描约5秒。沿用相同的版本保留、状态核验及修改白名单规则。
+
+插件声明的本群设置会自动出现在 `settings/<插件名>.<配置域>.json`，已有任务与记忆文件名保持兼容；统一自动发现扫描约5秒。沿用相同的版本保留、状态核验及修改白名单规则。

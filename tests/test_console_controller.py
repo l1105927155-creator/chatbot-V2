@@ -55,6 +55,9 @@ def test_binary_transfer_and_stale_file_save(tmp_path):
     root.mkdir()
     result = Controller.file_action(root, "files.upload", {"path": "raw.bin", "data_base64": "AP8="})
     assert Controller.file_action(root, "files.download", {"path": "raw.bin"})["data_base64"] == "AP8="
+    binary = Controller.file_action(root, "files.read", {"path": "raw.bin"})
+    assert binary["content"] is None
+    assert binary["size"] == 2
     Controller.file_action(root, "files.upload", {"path": "raw.bin", "data_base64": "YQ==",
                                                 "expected_version": result["version"]})
     with pytest.raises(FileExistsError):

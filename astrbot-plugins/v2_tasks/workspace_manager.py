@@ -17,6 +17,10 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
+try:
+    from ..v2_console.workspace_settings import SettingsConflict, SettingsFile
+except ImportError:  # standalone plugin-package tests add astrbot-plugins to sys.path
+    from v2_console.workspace_settings import SettingsConflict, SettingsFile
 from .workspace_store import (RevisionConflict, RunStore, WorkspaceTaskStore,
                               normalize_task, task_digest)
 
@@ -126,6 +130,66 @@ class WorkspaceTaskManager:
         _name, runtime = found
         return WorkspaceTaskStore(Path(runtime["workspace"]), runtime["volume_module"])
 
+    @staticmethod
+    def _validate_group_settings(settings: object) -> dict:
+        if (not isinstance(settings, dict) or set(settings) != {"enabled"}
+                or (settings["enabled"] is not None
+                    and type(settings["enabled"]) is not bool)):
+            raise ValueError("task settings must contain only a boolean or null enabled value")
+        return {"enabled": settings["enabled"]}
+
+    def _settings_file(self, identity: tuple[str, str, str]) -> SettingsFile:
+        found = self._runtime(identity)
+        if found is None:
+            raise PermissionError("group task workspace is not currently admitted")
+        _name, runtime = found
+        return SettingsFile(
+            Path(runtime["workspace"]), runtime["volume_module"],
+            self.run_store.path.parent / "workspace-settings", identity, "tasks",
+            self._validate_group_settings,
+        )
+
+    async def _read_group_settings(self, identity: tuple[str, str, str]) -> dict:
+        if identity not in self._scoped_identities() or self._runtime(identity) is None:
+            raise PermissionError("group task workspace is not currently admitted")
+        policy = await asyncio.to_thread(self.run_store.policy_snapshot)
+        override = next((item["enabled"] for item in policy["overrides"]
+                         if tuple(item["identity"]) == identity), None)
+        return {"enabled": override}
+
+    async def _apply_group_settings(self, identity: tuple[str, str, str],
+                                    before_settings: dict, desired_settings: dict) -> None:
+        if identity not in self._scoped_identities() or self._runtime(identity) is None:
+            raise PermissionError("group task workspace is not currently admitted")
+        before = self._validate_group_settings(before_settings)
+        desired = self._validate_group_settings(desired_settings)
+        for _attempt in range(8):
+            policy = await asyncio.to_thread(self.run_store.policy_snapshot)
+            current = next((item["enabled"] for item in policy["overrides"]
+                            if tuple(item["identity"]) == identity), None)
+            if current != before["enabled"]:
+                raise SettingsConflict("group task settings changed in the dashboard")
+            if desired == before:
+                return
+            try:
+                await asyncio.to_thread(
+                    self.run_store.set_policy, policy["revision"],
+                    identity=identity, enabled=desired["enabled"],
+                )
+                return
+            except RevisionConflict:
+                # Policy revision is shared across groups. Retry against the
+                # latest snapshot so an unrelated group's edit is preserved.
+                continue
+        raise SettingsConflict("task policy kept changing during workspace edit")
+
+    async def _sync_group_settings(self, identity: tuple[str, str, str]) -> None:
+        adapter = self._settings_file(identity)
+        await adapter.sync(
+            lambda: self._read_group_settings(identity),
+            lambda before, desired: self._apply_group_settings(identity, before, desired),
+        )
+
     async def _identity(self, conversation: Any) -> tuple[str, str, str]:
         identity = (getattr(conversation, "platform_id", None),
                     getattr(conversation, "bot_id", None),
@@ -170,6 +234,17 @@ class WorkspaceTaskManager:
                 await self._cancel_and_drain(legacy_callbacks)
             if self._incremental_memory_ready():
                 await self._remove_built_in_daily_tasks()
+
+            # The workspace file is an edit surface, while RunStore remains
+            # the authority. Import/project every admitted group before the
+            # enabled set is calculated; a broken file leaves the last
+            # committed policy in force and must not cancel existing jobs.
+            for identity in sorted(self._scoped_identities()):
+                try:
+                    await self._sync_group_settings(identity)
+                except Exception as error:  # noqa: BLE001 - preserve committed policy
+                    self.logger.warning("workspace task settings sync failed for %s: %s",
+                                        identity[2], type(error).__name__)
 
             desired: dict[str, tuple[tuple[str, str, str], dict, str, Any]] = {}
             consumed_once: set[str] = set()
@@ -418,9 +493,26 @@ class WorkspaceTaskManager:
             # Validate any group override against the live, exact admitted set.
             if identity is not None and identity not in self._scoped_identities():
                 raise PermissionError("group is not currently admitted")
-            policy = await asyncio.to_thread(
-                self.run_store.set_policy, expected, default_enabled=default_enabled,
-                identity=identity, enabled=enabled)
+            if identity is None:
+                policy = await asyncio.to_thread(
+                    self.run_store.set_policy, expected, default_enabled=default_enabled)
+            else:
+                adapter = self._settings_file(identity)
+                try:
+                    async with adapter.edit(
+                        lambda: self._read_group_settings(identity),
+                        lambda before, desired: self._apply_group_settings(identity, before, desired),
+                    ):
+                        policy = await asyncio.to_thread(
+                            self.run_store.set_policy, expected, identity=identity, enabled=enabled)
+                finally:
+                    # The authoritative commit may succeed before publishing
+                    # the workspace projection fails. Reconcile after the file
+                    # lock is released so a committed disable still drains
+                    # existing schedules and callbacks immediately.
+                    await self.reconcile()
+                policy.pop("legacy_imported", None)
+                return policy
             await self.reconcile()
             policy.pop("legacy_imported", None)
             return policy

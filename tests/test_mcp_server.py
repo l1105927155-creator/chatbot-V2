@@ -209,6 +209,7 @@ async def test_history_search_tools_and_send_are_scoped_to_active_origin(tmp_pat
                     "qq_send_forward",
                     "game_list", "game_leaderboard", "game_my_scores",
                     "game_2048_start", "game_2048_state", "game_2048_move", "game_2048_finish",
+                    "bottle_throw",
                     "current_group_info", "current_group_members", "qq_prepare_reply",
                     "qq_send_origin", "qq_file_receive", "qq_file_send",
                     'meme_categories', 'meme_list', 'meme_send', 'plugin_status', 'bili_dynamics', 'bili_subscribe', 'bili_subscriptions', 'bili_unsubscribe', 'twitter_subscribe', 'twitter_subscriptions', 'twitter_unsubscribe',

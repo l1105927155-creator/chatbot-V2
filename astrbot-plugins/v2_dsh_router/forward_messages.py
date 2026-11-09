@@ -4,11 +4,24 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import re
 from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import Any
 from urllib.parse import urlsplit
+
+try:
+    from ..v2_journal.structured_content import normalize_structured_segment
+except ImportError:  # Also support top-level/path-based integration tests.
+    import importlib.util
+    from pathlib import Path
+    _content_spec = importlib.util.spec_from_file_location(
+        "v2_forward_structured_content", Path(__file__).resolve().parents[1] /
+        "v2_journal/structured_content.py")
+    _content_module = importlib.util.module_from_spec(_content_spec)
+    _content_spec.loader.exec_module(_content_module)
+    normalize_structured_segment = _content_module.normalize_structured_segment
 
 
 MAX_DEPTH = 6
@@ -246,6 +259,21 @@ class QQForwards:
                                        **({"truncated": True} if len(raw) > len(value) else {})})
                 continue
             item: dict[str, Any] = {"type": kind or "unknown", "segment_index": seg_index}
+            structured = normalize_structured_segment(kind, data.get("data") if kind == "json" else data)
+            if structured is not None:
+                cost = len(json.dumps(structured, ensure_ascii=False))
+                allowance = max(0, min(MAX_NODE_TEXT - local_text, text_budget[0]))
+                if cost > allowance:
+                    visible = [structured.get(key) for key in ("prompt", "title", "app")]
+                    for section in structured.get("meta", []):
+                        visible.extend(section.get(key) for key in ("title", "desc"))
+                    preview = "；".join(value for value in visible if isinstance(value, str))[:allowance]
+                    structured = {"type": kind, "status": "truncated", "truncated": True,
+                                  "display_text": preview, "untrusted": True}
+                    cost = len(preview)
+                local_text += cost
+                text_budget[0] -= cost
+                item.update(structured)
             if kind == "forward":
                 # Keep the route marker even for parseMultMsg inline-only subtrees.
                 item["node_path"] = path + [node_index, seg_index]

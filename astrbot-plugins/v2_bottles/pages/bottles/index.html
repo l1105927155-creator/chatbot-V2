@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>V2 漂流瓶后台</title>
+  <style>
+    :root { color-scheme: light dark; font: 14px system-ui, sans-serif; }
+    body { margin: 0; padding: 22px; background: Canvas; color: CanvasText; }
+    main { max-width: 1100px; margin: auto; }
+    header, .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    header { justify-content: space-between; }
+    section { border: 1px solid color-mix(in srgb, CanvasText 18%, transparent); border-radius: 8px; padding: 14px; margin: 14px 0; }
+    h1 { margin: 0; font-size: 21px; }
+    h2 { margin: 0 0 10px; font-size: 17px; }
+    button, input, select { font: inherit; padding: 7px 9px; }
+    button { cursor: pointer; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid color-mix(in srgb, CanvasText 12%, transparent); vertical-align: top; }
+    th { font-weight: 600; opacity: .8; }
+    .muted { opacity: .7; } .error { color: #d33; } .ok { color: #27843b; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+    .card { border: 1px solid color-mix(in srgb, CanvasText 14%, transparent); border-radius: 6px; padding: 10px; }
+    .card strong { display: block; font-size: 18px; margin-top: 4px; }
+    .content { max-width: 420px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .table-wrap { overflow-x: auto; }
+    .texts-grid { display: grid; gap: 10px; }
+    .field { display: flex; flex-direction: column; gap: 4px; }
+    .field span { font-weight: 600; }
+    .field small { opacity: .65; }
+    .field textarea { font: inherit; padding: 7px 9px; resize: vertical; width: 100%; box-sizing: border-box; }
+    .danger { color: #d33; font-weight: 600; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>V2 漂流瓶后台</h1>
+      <div id="notice" class="muted" role="status">正在读取…</div>
+    </div>
+    <button id="reload">刷新</button>
+  </header>
+
+  <section>
+    <h2>状态</h2>
+    <div id="status" class="grid"></div>
+    <p class="muted">投放记录只读；匿名漂流瓶会在这里显示真实来源，但公开捡取时不会显示。提示文本可由 Owner 编辑。仅 Dashboard Owner 可访问。</p>
+  </section>
+
+  <section>
+    <h2>运行设置</h2>
+    <p class="muted">保存后立即生效，不需要重载插件。</p>
+    <div id="settings" class="texts-grid"></div>
+    <div class="row" style="margin-top: 10px;">
+      <button id="save-settings">保存运行设置</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>提示文本</h2>
+    <p class="muted">保存后立即对下一次漂流瓶命令生效，不需要重载插件。花括号占位符保留原样才会被替换。</p>
+    <div id="texts" class="texts-grid"></div>
+    <div class="row" style="margin-top: 10px;">
+      <button id="save-texts">保存提示文本</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>投放记录</h2>
+    <div class="row">
+      <label>群号 <input id="group" placeholder="可选" size="14"></label>
+      <label>QQ <input id="qq" placeholder="可选" size="14"></label>
+      <label>条数
+        <select id="limit">
+          <option value="20">20</option>
+          <option value="50" selected>50</option>
+          <option value="100">100</option>
+        </select>
+      </label>
+      <button id="load">查询</button>
+      <button id="delete-selected">删除选中</button>
+    </div>
+    <p class="muted">删除会释放池容量，且不可恢复。第一次点“删除选中”会进入确认状态，再点一次才执行。</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th><input type="checkbox" id="select-all" aria-label="全选本页"></th><th>时间</th><th>群号</th><th>QQ</th><th>昵称</th><th>匿名</th><th>内容</th></tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+<script type="module" src="./app.js"></script>
+</body>
+</html>

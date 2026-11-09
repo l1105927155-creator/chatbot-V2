@@ -15,6 +15,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+try:
+    from .structured_content import normalize_structured_segment
+except ImportError:  # Standalone contract tests load this file by path.
+    import importlib.util
+    _content_spec = importlib.util.spec_from_file_location(
+        "v2_journal_structured_content", Path(__file__).with_name("structured_content.py"))
+    _content_module = importlib.util.module_from_spec(_content_spec)
+    _content_spec.loader.exec_module(_content_module)
+    normalize_structured_segment = _content_module.normalize_structured_segment
+
 
 MEDIA_METADATA_KEYS = frozenset({
     "busid", "cache", "c", "duration", "file", "file_id", "file_name",
@@ -138,6 +148,10 @@ def normalize_segments(segments: list[dict[str, Any]]) -> tuple[dict[str, Any], 
             if reference:
                 reply_to = reply_to or reference
             normalized.append({"type": "reply", "message_id": reference})
+            continue
+        structured = normalize_structured_segment(kind, data.get("data") if kind == "json" else data)
+        if structured is not None:
+            normalized.append(structured)
             continue
         item: dict[str, Any] = {"type": kind or "unknown"}
         # Keep the adapter's scalar metadata intact (including NapCat's busid),
@@ -505,6 +519,9 @@ class JournalStore:
                 );
                 CREATE UNIQUE INDEX IF NOT EXISTS journal_platform_message
                     ON journal(platform_id, bot_id, conversation_key, message_id)
+                    WHERE message_id IS NOT NULL;
+                CREATE INDEX IF NOT EXISTS journal_platform_bot_message
+                    ON journal(platform_id, bot_id, message_id)
                     WHERE message_id IS NOT NULL;
                 CREATE INDEX IF NOT EXISTS journal_conversation_cursor
                     ON journal(platform_id, bot_id, conversation_key, journal_id);

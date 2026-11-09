@@ -5,11 +5,11 @@ import asyncio
 try:
     from .delivery_error import owner_mentions
     from .reply_mentions import send_reply
-    from .model_failure import model_failure_notice
+    from .model_failure import model_failure_notice, normalize_model_failure_code
 except ImportError:  # Support contract tests loading the plugin modules directly.
     from delivery_error import owner_mentions
     from reply_mentions import send_reply
-    from model_failure import model_failure_notice
+    from model_failure import model_failure_notice, normalize_model_failure_code
 
 
 MESSAGES = {
@@ -25,10 +25,8 @@ MESSAGES = {
 }
 
 async def notify_turn_error(event, conversation, owners, kind, logger, *, code=None,
-                            tools_completed=False, recovery=None):
+                            tools_completed=False, recovery=None, render=None):
     """Attempt one short notice. Never expose exception details or retry a failed notice."""
-    from astrbot.api.event import MessageChain
-
     if kind not in MESSAGES:
         raise ValueError("unknown turn notice kind")
     chain = await owner_mentions(event, conversation, owners, logger)
@@ -37,6 +35,11 @@ async def notify_turn_error(event, conversation, owners, kind, logger, *, code=N
         message = "Agent 运行环境未能就绪，这次请求尚未进入模型执行。请 Owner 检查 Agent 服务；恢复后可重新提出请求。"
     if kind == "model" and tools_completed and recovery is None:
         message = message.replace("本轮已结束", "本轮已结束；已执行的工具不会自动重跑")
+    if render is not None:
+        notice_code = (normalize_model_failure_code(code) if kind == "model" else
+                       "INITIALIZATION_FAILED" if code == "INITIALIZATION_FAILED" else
+                       "TURN_" + kind.upper())
+        message = await render(conversation, notice_code, message)
     chain.message(message)
     try:
         await asyncio.wait_for(send_reply(event, chain), timeout=10)

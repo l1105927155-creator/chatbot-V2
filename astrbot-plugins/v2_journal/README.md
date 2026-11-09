@@ -34,3 +34,9 @@ Journal 在平台消息钩子处捕获，因此平台后续拒绝的消息也可
 仓库根目录运行 bash scripts/check-phase2.sh；MCP 历史与插件回复穿插可运行 bash scripts/check-phase4.sh。覆盖去重、会话隔离、顺序、取消/关闭写入及实际插件钩子。
 
 实现见 [main.py](main.py)、[journal.py](journal.py)；测试见 [test_journal.py](../../tests/test_journal.py)、[test_journal_plugin.py](../../tests/contracts/test_journal_plugin.py)。
+
+## 结构化内容与拍一拍
+
+JSON卡片只保留有界展示字段与安全链接，不保存整个卡片配置或钱包凭据；无法解析时记录明确降级状态。QQ红包的上游转换、补丁与验证限制见[当前阶段记录](../../docs/phases/message-recognition-2026-11-05.md)。
+
+同时在原始事件钩子采集`notice.notify.poke`，先成功落库再交给Router判断唤醒。拍一拍没有真实QQ消息ID，使用每次接收独立的synthetic引用，同秒连续事件不会合并；跨重连重复notice无法完美去重。拍Bot唤醒普通会话，群友互拍只入历史，合成引用不能作为QQ回复消息ID。

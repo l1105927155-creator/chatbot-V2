@@ -1,0 +1,27 @@
+{
+  "max_bottles": {
+    "description": "漂流瓶池总数上限",
+    "type": "int",
+    "default": 1000,
+    "hint": "达到上限后停止存入并提示，拾取不受影响。"
+  },
+  "max_chars": {
+    "description": "单条漂流瓶字数上限（初始默认）",
+    "type": "int",
+    "default": 200,
+    "hint": "初始默认值；运行时请在插件页“运行设置”修改，保存即时生效。"
+  },
+  "max_disk_mb": {
+    "description": "漂流瓶数据总占用上限（MB）",
+    "type": "int",
+    "default": 1024,
+    "hint": "按数据库、WAL 和 SHM 文件实际大小估算。"
+  },
+  "enabled_groups": {
+    "description": "启用漂流瓶的群号列表",
+    "type": "list",
+    "items": {"type": "string"},
+    "default": [],
+    "hint": "留空时所有群都不启用；试点先填测试群 1055300305。未列出的群不响应漂流瓶命令。"
+  }
+}

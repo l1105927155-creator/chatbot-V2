@@ -24,12 +24,13 @@ def error_summary(error):
     return summary
 
 
-async def notify_delivery_error(event, conversation, owners, error, logger, log_location=None):
-    from astrbot.api.event import MessageChain
-
+async def notify_delivery_error(event, conversation, owners, error, logger, log_location=None, *, render=None):
     chain = await owner_mentions(event, conversation, owners, logger)
-    chain.message(f"发送失败，错误信息：{error_summary(error)}。\n"
-                  f"错误记录位置：{log_location or 'Bot 服务运行日志'}\n不影响后续消息处理。")
+    message = (f"发送失败，错误信息：{error_summary(error)}。\n"
+               f"错误记录位置：{log_location or 'Bot 服务运行日志'}\n不影响后续消息处理。")
+    if render is not None:
+        message = await render(conversation, "DELIVERY_FAILED", message)
+    chain.message(message)
     try:
         # Notification failure must not reopen the completed turn or trigger a retry loop.
         await asyncio.wait_for(send_reply(event, chain), timeout=10)

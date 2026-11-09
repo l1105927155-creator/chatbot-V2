@@ -70,7 +70,7 @@ class ScriptedCommandCheck(live_helpers.LiveOwner):
                               for row in self.rows()), "confirmed canonical Bot reply")
         return outputs[0]
 
-    def _deterministic(self, text, expected, *, key=None, sender=None):
+    def _deterministic(self, text, expected, *, key=None, sender=None, forward=False):
         key = key or self.key
         sender = sender or (self.owner if key == self.key or key.startswith("group:") else key.split(":", 1)[1])
         before_models = self.model_count()
@@ -88,7 +88,16 @@ class ScriptedCommandCheck(live_helpers.LiveOwner):
                    and row["conversation"] == event["conversation"]
                    and int(row["message_id"]) > int(event["message_id"])]
         assert len(outputs) == 1, ("command must produce exactly one reply", text, len(outputs))
-        assert expected in json.dumps(output, ensure_ascii=False), output
+        if forward:
+            segments = (output.get("event") or {}).get("message") or []
+            reference = next((segment for segment in segments
+                              if segment.get("type") == "forward"), None)
+            assert reference, ("command reply is not a merged forward", output)
+            nodes = self.http("/api/forward/" + str(reference.get("data", {}).get("id", ""))).get("message")
+            assert len(nodes) >= 2, ("merged forward must contain help paragraphs", nodes)
+            assert expected in json.dumps(nodes, ensure_ascii=False), nodes
+        else:
+            assert expected in json.dumps(output, ensure_ascii=False), output
         assert self.model_count() == before_models, "deterministic command invoked DSH"
         assert not any(row.get("event") == "dsh/dispatched" for row in self.trace(event))
         return event, output
@@ -281,20 +290,21 @@ class ScriptedCommandCheck(live_helpers.LiveOwner):
 
     def _check_command_surface(self):
         rows = []
-        for command, expected in (
-            ("/help", "V2 Agent 命令"),
-            ("/provider", "当前模型："),
-            ("/stats", "/stats 尚未接通 DSH"),
-            ("/set", "/set 尚未接通 DSH"),
-            ("/unset", "/unset 尚未接通 DSH"),
-            ("/sid", "UMO:"),
+        for command, expected, forward in (
+            ("/help", "canonical Journal", True),
+            ("/provider", "当前模型：", False),
+            ("/stats", "/stats 尚未接通 DSH", False),
+            ("/set", "/set 尚未接通 DSH", False),
+            ("/unset", "/unset 尚未接通 DSH", False),
+            ("/sid", "UMO:", False),
         ):
             before_state = self.state(self.key)
-            event, _ = self._deterministic(command, expected)
+            event, _ = self._deterministic(command, expected, forward=forward)
             assert self.state(self.key) == before_state, command + " changed DSH state"
             rows.append(event["message_id"])
         return {"one_reply_each": True, "no_dsh_calls": True,
-                "native_sid_command_preserved": True, "commands": rows}
+                "help_is_merged_forward": True, "native_sid_command_preserved": True,
+                "commands": rows}
 
     def _check_stop(self):
         ready_name = "command-stop-ready-" + uuid.uuid4().hex[:10] + ".txt"

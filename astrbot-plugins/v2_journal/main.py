@@ -17,8 +17,9 @@ from .journal import (
     message_from_group_upload,
     message_from_onebot,
 )
+from .poke_events import bind_poke_capture, message_from_poke_notice
 
-CAPTURE_EVENTS = ("message", "message_sent", "notice.group_upload")
+CAPTURE_EVENTS = ("message", "message_sent", "notice.group_upload", "notice.notify.poke")
 
 
 @star.register(
@@ -104,7 +105,9 @@ class V2Journal(star.Star):
                     raw.get("post_type") == "notice"
                     and raw.get("notice_type") == "group_upload"
                 )
-                if not (is_message or is_upload_notice):
+                is_poke = (raw.get("post_type") == "notice" and raw.get("notice_type") == "notify"
+                           and raw.get("sub_type") == "poke")
+                if not (is_message or is_upload_notice or is_poke):
                     return
                 if self._closing:
                     await self._mark_capture_failure("shutdown_rejection")
@@ -114,7 +117,9 @@ class V2Journal(star.Star):
                     )
                     return
                 try:
-                    if is_upload_notice:
+                    if is_poke:
+                        message = message_from_poke_notice(platform_id, raw)
+                    elif is_upload_notice:
                         message = message_from_group_upload(platform_id, raw)
                     else:
                         message = message_from_onebot(platform_id, raw)
@@ -129,7 +134,9 @@ class V2Journal(star.Star):
                 if bot_id:
                     self._bot_ids[platform_id] = bot_id
                 try:
-                    await self._append(message)
+                    row = await self._append(message)
+                    if is_poke:
+                        bind_poke_capture(raw, platform_id, row)
                 except Exception:
                     await self._mark_capture_failure("append_failure")
                     self.logger.exception(
@@ -307,7 +314,7 @@ class V2Journal(star.Star):
     async def bind_new_platform(self) -> None:
         self._bind_platforms()
 
-    async def _append(self, message) -> None:
+    async def _append(self, message):
         # Schedule the writer before the callback's first suspension. A task
         # cancelled while waiting for the lock must not make its row disappear.
         task = asyncio.create_task(self._write_ordered(message))
@@ -336,6 +343,7 @@ class V2Journal(star.Star):
                 message.conversation_key,
                 message.message_id,
             )
+        return _row
 
     async def _write_ordered(self, message):
         async with self._write_lock:

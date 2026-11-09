@@ -184,8 +184,39 @@ class V2Tasks(star.Star):
             }
         return result
 
+    def workspace_settings(self) -> list[dict]:
+        """Expose task policy as an editable workspace settings domain."""
+        manager = getattr(self, "manager", None)
+        if (manager is None or self._stopping or not self._started
+                or getattr(manager, "_closed", True)):
+            return []
+
+        async def after_sync(identity):
+            if (not self._stopping and not getattr(manager, "_closed", True)
+                    and manager._runtime(identity) is not None):
+                await manager.reconcile()
+
+        return [{
+            "name": "tasks",
+            "domain": "tasks",
+            "validate": manager._validate_group_settings,
+            "read": manager._read_group_settings,
+            "apply": manager._apply_group_settings,
+            "adapter": manager._settings_file,
+            "after_sync": after_sync,
+        }]
+
     async def terminate(self) -> None:
         self._stopping = True
+        try:
+            from ..v2_console.workspace_registry import detach_workspace_settings
+        except ImportError:
+            try:
+                from v2_console.workspace_registry import detach_workspace_settings
+            except ImportError:
+                detach_workspace_settings = None
+        if detach_workspace_settings is not None:
+            await detach_workspace_settings(self.context, self)
         manager = getattr(self, "manager", None)
         if manager is not None:
             await manager.close()

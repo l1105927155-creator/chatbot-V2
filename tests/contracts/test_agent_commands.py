@@ -53,11 +53,23 @@ async def check():
         current = NS(message_obj=NS(raw_message=raw), bot=None,
                      get_platform_id=lambda:'qq',get_platform_name=lambda:'aiocqhttp',
                      get_group=lambda:None,set_extra=lambda *args:None,stop_event=lambda:None)
+        def chain_text(chain):
+            parts = []
+            for component in chain.chain:
+                if isinstance(getattr(component, 'text', None), str):
+                    parts.append(component.text)
+                for node in getattr(component, 'nodes', []) or []:
+                    for item in node.content:
+                        if isinstance(getattr(item, 'text', None), str):
+                            parts.append(item.text)
+            return ''.join(parts)
         async def send(chain):
-            sent.append(''.join(getattr(component, 'text', '') for component in chain.chain))
+            chains.append(chain)
+            sent.append(chain_text(chain))
         current.send=send
         return current
     sent=[]
+    chains=[]
     await router.new_chat(event('43',role='owner'))
     assert not calls and '仅 Bot Owner' in sent[-1]
     await router.stop_chat(event('43',role='admin'))
@@ -89,6 +101,9 @@ async def check():
     assert len(calls)==n and '用法' in sent[-1]
     await router.agent_help(event('43'))
     assert len(calls)==n and '重置点' in sent[-1], sent[-1]
+    assert [type(component).__name__ for component in chains[-1].chain] == ['Nodes']
+    nodes = chains[-1].chain[0].nodes
+    assert len(nodes) >= 2 and all(node.content and node.uin == '1' for node in nodes)
     for action in ('stats','set','unset'):
         await router._agent_command(event('43'),action,'some ignored legacy parameters')
         assert '尚未接通 DSH' in sent[-1]

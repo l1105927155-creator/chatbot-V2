@@ -373,15 +373,16 @@ def _profile_model(profile: Path, provider: str, model: str) -> None:
     value = yaml.safe_load(profile.read_text(encoding="utf-8"))
     if not isinstance(value, list):
         raise ValueError("shared model profile is not a patch list")
-    default = next((entry.get("config") for entry in value
-                    if isinstance(entry, dict) and entry.get("id") == "agent-default-model"), None)
     llm = next((entry.get("config") for entry in value
                 if isinstance(entry, dict) and entry.get("id") == "llm-pi-ai"), None)
-    models = (((llm or {}).get("providers") or {}).get(provider) or {}).get("models")
+    providers = (llm or {}).get("providers") if isinstance(llm, dict) else None
+    selected = providers.get(provider) if isinstance(providers, dict) else None
+    models = selected.get("models") if isinstance(selected, dict) else None
     names = {row.get("id") for row in models or [] if isinstance(row, dict)}
-    if not (isinstance(default, dict) and default.get("provider") == provider
-            and isinstance(default.get("model"), str) and default["model"] in names
-            and model in names):
+    # The harness always passes an explicit provider/model to the memory call;
+    # the Web profile's agent-default-model may name a retired route and is not
+    # the Bot's per-session authority. Only the requested route must exist.
+    if model not in names:
         raise ValueError(f"profile does not expose requested route {provider}/{model}")
 
 

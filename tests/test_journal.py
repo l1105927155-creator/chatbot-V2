@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sqlite3
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -128,6 +129,18 @@ def test_private_self_feedback_uses_target_and_duplicate_id_is_scoped(tmp_path):
     collision = event(201, "other", conversation="private")
     with pytest.raises(ValueError, match="collided"):
         store.append(record(collision))
+
+
+def test_existing_database_gains_message_id_lookup_index(tmp_path):
+    path = tmp_path / "journal.sqlite3"
+    journal.JournalStore(path)
+    with sqlite3.connect(path) as conn:
+        conn.execute("DROP INDEX journal_platform_bot_message")
+    journal.JournalStore(path)
+    with sqlite3.connect(path) as conn:
+        names = {row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index'")}
+    assert "journal_platform_bot_message" in names
 
 
 def test_segmented_file_metadata_mentions_reply_and_inline_payload_is_excluded(tmp_path):

@@ -114,6 +114,42 @@ def group_upload(
     }
 
 
+@pytest.mark.asyncio
+async def test_poke_is_committed_before_notice_subscriber_and_same_second_events_are_distinct(tmp_path):
+    from v2_journal.poke_events import captured_poke_message
+    client = Client()
+    plugin = object.__new__(V2Journal)
+    plugin.context = SimpleNamespace(platform_manager=SimpleNamespace(get_insts=lambda: [Platform(client)]))
+    plugin.store = JournalStore(tmp_path / "poke.sqlite3")
+    plugin._write_lock = asyncio.Lock()
+    plugin._pending_writes = set()
+    plugin._bindings = {}
+    plugin.capture_errors = 0
+    plugin.capture_degraded = False
+    plugin.capture_status = {"failure_count": 0}
+    plugin._closing = False
+    plugin._initialized = True
+    plugin.logger = MagicMock()
+    plugin._bind_platforms()
+    seen = []
+    async def consume(event):
+        captured = captured_poke_message("v2-test", event)
+        assert captured is not None
+        rows = plugin.store.by_message_id("v2-test", "900001", captured.message_id)
+        assert len(rows) == 1 and rows[0].message == captured
+        assert "_v2_journal_poke" not in event
+        seen.append(captured)
+    client.bus.subscribe("notice", consume)
+    payload = {"post_type": "notice", "notice_type": "notify", "sub_type": "poke",
+               "self_id": 900001, "user_id": 900002, "target_id": 900001,
+               "group_id": 900003, "time": 1790669001}
+    await client.emit(payload)
+    await client.emit(payload)
+    assert len(seen) == 2 and seen[0].message_id != seen[1].message_id
+    assert len(plugin.store.recent(Conversation("v2-test", "900001", "group:900003"))) == 2
+    await plugin.terminate()
+
+
 def test_media_segment_metadata_is_retained_without_inline_payloads():
     payload = raw(80)
     payload["message"] = [
@@ -196,8 +232,8 @@ async def test_plugin_binds_once_captures_both_paths_and_unsubscribes(tmp_path):
     plugin._bind_platforms()
     plugin._bind_platforms()
     assert plugin.collector_health()["bindings_match"] is True
-    assert client.bind_calls == 3
-    assert set(client.hooks) == {"message", "message_sent", "notice.group_upload"}
+    assert client.bind_calls == 4
+    assert set(client.hooks) == {"message", "message_sent", "notice.group_upload", "notice.notify.poke"}
 
     await client.emit(raw(1))
     await client.emit(raw(2, outbound=True))
@@ -221,8 +257,8 @@ async def test_plugin_binds_once_captures_both_paths_and_unsubscribes(tmp_path):
     assert plugin.collector_health()["bindings_match"] is False
     plugin._bind_platforms()
     assert plugin.collector_health()["bindings_match"] is True
-    assert client.unbind_calls == 3
-    assert replacement.bind_calls == 3
+    assert client.unbind_calls == 4
+    assert replacement.bind_calls == 4
     replacement.action_result = {"message_id": 500}
     await replacement.call_action("send_group_msg", group_id=900003,
                                   message=[{"type": "file", "data": {"file": "stale.pdf"}}])
@@ -237,9 +273,9 @@ async def test_plugin_binds_once_captures_both_paths_and_unsubscribes(tmp_path):
     assert plugin.store.by_message_id("v2-test", "900099", "501")[0].message.source == "receipt"
     queued_callback = replacement.hooks["message"]
     await plugin.terminate()
-    assert replacement.unbind_calls == 3
+    assert replacement.unbind_calls == 4
     plugin._bind_platforms()  # A late platform-loaded hook must not rebind.
-    assert replacement.bind_calls == 3
+    assert replacement.bind_calls == 4
     # The bus may already have queued a callback when hooks are removed.
     await queued_callback(raw(4))
     assert plugin.capture_errors == 3
@@ -309,7 +345,7 @@ async def test_group_upload_notice_is_idempotent_scoped_and_not_a_message_id(tmp
     assert len(plugin.store.recent(Conversation("v2-test", "900001", "group:900003"))) == 3
 
     await plugin.terminate()
-    assert client.unbind_calls == 3
+    assert client.unbind_calls == 4
     await client.emit(group_upload(900003, busid="bus-after-close"))
     assert len(plugin.store.recent(Conversation("v2-test", "900001", "group:900003"))) == 3
 

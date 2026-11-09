@@ -4,6 +4,7 @@ import asyncio
 import os
 
 from astrbot.api import star
+from astrbot.api.event import filter
 from astrbot.api.web import request, error_response, stream_response
 from starlette.background import BackgroundTask
 
@@ -28,6 +29,26 @@ class V2Console(star.Star):
                                             RuntimeAdapter(self.context, repo))
         self.context.register_web_api("/v2_console/dispatch", self.dispatch, ["POST"], "V2 Owner 控制台")
         self.context.register_web_api("/v2_console/export", self.export, ["GET"], "导出会话工作区 ZIP")
+        from .workspace_registry import WorkspaceSettingsRegistry
+        self.workspace_registry = WorkspaceSettingsRegistry(self.context, root / "workspace-settings", self.logger)
+        await self.workspace_registry.start()
+
+    @filter.on_plugin_loaded()
+    async def refresh_workspace_settings(self, _metadata):
+        await self.workspace_registry.tick()
+
+    @filter.on_plugin_unloaded()
+    async def retire_workspace_settings(self, _metadata):
+        await self.workspace_registry.tick()
+
+    @filter.on_astrbot_loaded()
+    async def discover_workspace_settings(self):
+        await self.workspace_registry.tick()
+
+    async def terminate(self):
+        registry = getattr(self, "workspace_registry", None)
+        if registry is not None:
+            await registry.close()
 
     def _pipeline_reloader_for_current_request(self):
         """Resolve the pinned Dashboard lifecycle for the authenticated web API call."""
@@ -50,6 +71,9 @@ class V2Console(star.Star):
             dashboard = self.context.get_config().get("dashboard", {})
             authorize_dashboard(request.username, {"dashboard_owner_username": dashboard.get("username")})
             payload = await request.json()
+            if isinstance(payload, dict) and payload.get("action") == "settings.snapshot":
+                await self.workspace_registry.tick()
+                return {"status": "ok", "data": self.workspace_registry.snapshot(), "message": ""}
             kwargs = {}
             if isinstance(payload, dict) and payload.get("action") == "group.add":
                 kwargs["reload_pipeline_scheduler"] = self._pipeline_reloader_for_current_request()
@@ -63,6 +87,8 @@ class V2Console(star.Star):
                         and type(getattr(error, "expected_revision", None)) is int
                         and type(getattr(error, "actual_revision", None)) is int)):
                 message = "设置已被修改，请重新加载后再保存。"
+            elif type(error).__name__ == "SettingsConflict":
+                message = "工作区设置与后台设置发生冲突，未覆盖。请查看 settings 中的状态文件，重新载入当前设置后再保存。"
             elif isinstance(error, FileExistsError):
                 message = "文件已存在或已被修改，请重新打开后再操作。"
             elif isinstance(error, PermissionError):

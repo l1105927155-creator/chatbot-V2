@@ -89,6 +89,7 @@ asyncio.run(main())
 '''
     runtime = ROOT / ".runtime/astrbot"
     result = subprocess.run([str(runtime / ".venv/bin/python"), "-c", worker],
-                            cwd=runtime, env={**os.environ, "ASTRBOT_ROOT": str(tmp_path)},
+                            cwd=runtime, env={**os.environ, "ASTRBOT_ROOT": str(tmp_path),
+                                             "V2_PROFILE_TEST_PLUGIN_ROOT": str(ROOT / "astrbot-plugins")},
                             capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr

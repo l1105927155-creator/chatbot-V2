@@ -1,0 +1,7 @@
+{
+  "name": "napcat-plugin-v2-content",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.mjs",
+  "description": "Bounded display-only conversion of QQ wallet message content"
+}

@@ -48,6 +48,7 @@ class _Turn:
     source_message_id: str | None = None
     games: Any = None
     lifetime: Any = None
+    bottles: Any = None
 
 
 class JournalEntry(TypedDict):
@@ -885,6 +886,50 @@ class McpServer:
             """提前结束当前 Bot 2048 对局并按当前分数保存。"""
             return await game_call(ctx, "bot_finish", run_id)
 
+        def bottle_capability(ctx: Context | None):
+            turn = self._turn(ctx)
+            if turn.bottles is None:
+                raise ToolError("漂流瓶服务未启用。")
+            return turn.bottles
+
+        @server.tool(structured_output=True)
+        async def bottle_throw(
+            content: Annotated[str, Field(
+                min_length=1,
+                description="要投放的纯文本内容；受当前群的字数上限约束。",
+            )],
+            anonymous: bool = False,
+            ctx: Context | None = None,
+        ) -> dict[str, Any]:
+            """以当前群 Bot 身份向公共漂流瓶池投放一条文本。
+
+            只在已启用漂流瓶的群可用；content 只支持文本，不能放图片或文件。
+            anonymous=true 时不公开来源，默认显示当前群、Bot 昵称和 QQ。
+            每轮最多调用一次；工具只返回投放结果，不要让工具代替你发群消息。
+            """
+            capability_obj = bottle_capability(ctx)
+            try:
+                result = await asyncio.to_thread(
+                    capability_obj.throw, content, anonymous
+                )
+            except Exception as error:
+                message = getattr(error, "public_message", None)
+                self.logger.warning(
+                    "V2 bottle tool failed: %s", type(error).__name__
+                )
+                return {
+                    "ok": False,
+                    "error": "throw_failed",
+                    "message": message or "漂流瓶投放未完成。",
+                }
+            if not isinstance(result, dict):
+                return {
+                    "ok": False,
+                    "error": "throw_failed",
+                    "message": "漂流瓶投放未完成。",
+                }
+            return result
+
         @server.tool(structured_output=False)
         async def plugin_status(ctx: Context | None = None) -> dict:
             """查看已接入的Bilibili、Twitter插件能力是否可用。"""
@@ -1105,7 +1150,7 @@ class McpServer:
                    history_after: int = 0, messaging=None, memes=None, plugins=None, invoke=None,
                    vision=None, history_through: int | None = None,
                    execution_kind: str = "chat", actor_id: str | None = None,
-                   source_message_id: str | None = None, games=None
+                   source_message_id: str | None = None, games=None, bottles=None
                    ) -> AsyncIterator[list[dict[str, Any]]]:
         if self._task is None or self._task.done() or self._shutdown_task is not None:
             raise RuntimeError("MCP server is not running")
@@ -1125,7 +1170,8 @@ class McpServer:
                      self._tokens.setdefault(identity, secrets.token_urlsafe(32)))
             turn = _Turn(conversation, send, get_group, token, files, history_after, messaging,
                          memes, plugins, invoke, vision, history_through,
-                         execution_kind, actor_id, source_message_id, games)
+                         execution_kind, actor_id, source_message_id, games,
+                         bottles=bottles)
             if messaging is not None:
                 messaging.history_after = history_after
             if files is not None:

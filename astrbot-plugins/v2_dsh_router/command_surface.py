@@ -73,6 +73,13 @@ def help_text() -> str:
     return V2_COMMAND_HELP
 
 
+def help_sections() -> tuple[str, ...]:
+    """Return help paragraphs as separate merged-forward nodes."""
+
+    return tuple(section.strip() for section in V2_COMMAND_HELP.split("\n\n")
+                 if section.strip())
+
+
 async def install_command_surface(
     *, registry: Any | None = None, previous: CommandSurfaceInstallation | None = None
 ) -> CommandSurfaceInstallation:

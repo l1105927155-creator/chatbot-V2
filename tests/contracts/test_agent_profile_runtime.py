@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_real_router_profiles_and_control_without_model_or_qq():
     runtime = ROOT / ".runtime/astrbot"
     worker = textwrap.dedent(r'''
-        import asyncio, copy, hashlib, os, tempfile
+        import asyncio, copy, hashlib, json, os, tempfile
         from pathlib import Path
         from astrbot.core.config.default import DEFAULT_CONFIG
         from astrbot.core.star.star_manager import PluginManager
@@ -27,6 +27,7 @@ def test_real_router_profiles_and_control_without_model_or_qq():
             config['provider_settings']['enable']=False
             class Context:
                 conversation_manager=object()
+                platform_manager=type('Platforms', (), {'get_insts':lambda self:[]})()
                 def get_config(self, **_kwargs):return config
             with tempfile.TemporaryDirectory(prefix='router-profile-acceptance-',
                     dir=Path(os.environ['V2_REPO_ROOT'])/'.runtime') as directory:
@@ -85,6 +86,18 @@ def test_real_router_profiles_and_control_without_model_or_qq():
                     group_service=router.services[group_name]
                     group_client=router.clients[group_name]
                     assert set(router.clients)=={'chat','owner',group_name}
+                    assert all(service.error_notice == router.error_notice
+                               for service in router.services.values())
+                    from data.plugins.v2_journal.journal import Conversation
+                    for name, conversation, text in (
+                        ('owner', Conversation('contract','900001','private:900003'), 'Owner配置'),
+                        (group_name, Conversation('contract','900001','group:42'), '群配置')):
+                        workspace=Path(router.clients[name].settings['workspace'])
+                        config_file=workspace/'error-messages.json'
+                        config_file.write_text(json.dumps({'MODEL_TIMEOUT':text}),encoding='utf8')
+                        assert await router.services[name]._error_notice(
+                            conversation,'MODEL_TIMEOUT','默认')==text
+                        config_file.unlink()
                     assert not any(client._sessions for client in router.clients.values())
                     prior_allowed=router.allowed_conversations
                     router.allowed_conversations=frozenset((*prior_allowed,'group:43'))
@@ -159,6 +172,7 @@ def test_real_router_profiles_and_control_without_model_or_qq():
     result = subprocess.run(
         [str(runtime/".venv/bin/python"), "-c", worker], cwd=runtime,
         env={**os.environ, "ASTRBOT_ROOT":str(runtime), "V2_REPO_ROOT":str(ROOT),
+             "V2_PROFILE_TEST_PLUGIN_ROOT":str(ROOT/'astrbot-plugins'),
              "V2_DSH_PROVIDER":"deepseek-official", "V2_DSH_MODEL":"deepseek-v4-flash",
              "V2_QQ_OWNERS":'[{"platform_id":"contract","bot_id":"900001","user_id":"900003"}]',
              "V2_QQ_ALLOWED_CONVERSATIONS":"private:900003,group:42", "V2_MCP_PORT":"0",

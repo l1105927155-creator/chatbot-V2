@@ -6,11 +6,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_shutdown_waits_for_final_delivery_notification():
+def test_shutdown_waits_for_final_delivery_notification(tmp_path):
     worker = r'''
-import asyncio, logging
+import asyncio, logging, os
 from pathlib import Path
 from types import SimpleNamespace as NS
+import data.plugins
+data.plugins.__path__ = [os.environ['V2_PROFILE_TEST_PLUGIN_ROOT'], *data.plugins.__path__]
 import data.plugins.v2_dsh_router.main as m
 
 async def main():
@@ -32,7 +34,7 @@ async def main():
     async def handle(*args, **kwargs):
         raise m.FinalReplyDeliveryError(ConnectionError('test'))
     async def service(message): return NS(handle=handle)
-    async def notify(*args):
+    async def notify(*args, **kwargs):
         started.set()
         await release.wait()
     async def close(): closed.set()
@@ -59,6 +61,7 @@ asyncio.run(main())
 '''
     runtime = ROOT / ".runtime/astrbot"
     result = subprocess.run([str(runtime / ".venv/bin/python"), "-c", worker],
-                            cwd=runtime, env={**os.environ, "ASTRBOT_ROOT": str(runtime)},
+                            cwd=runtime, env={**os.environ, "ASTRBOT_ROOT": str(tmp_path),
+                                             "V2_PROFILE_TEST_PLUGIN_ROOT": str(ROOT / "astrbot-plugins")},
                             capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr

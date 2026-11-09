@@ -13,14 +13,14 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 try:
-    from .model_failure import model_failure_notice, recovery_notice, validate_recovery
+    from .model_failure import model_failure_notice, recovery_notice, validate_recovery, normalize_model_failure_code
     from .reply_safety import validate_reply, ReplyContentError
     from .runtime_audit import CURRENT_TRACE, trace_scope
     from .dsh_client import DshTurnCancelled, DshModelTurnFailure, DshTurnFailure
     from .background import BackgroundTask, validate_event, task_key
     from .console_settings import configured_store, session_settings
 except ImportError:
-    from model_failure import model_failure_notice, recovery_notice, validate_recovery
+    from model_failure import model_failure_notice, recovery_notice, validate_recovery, normalize_model_failure_code
     from reply_safety import validate_reply, ReplyContentError
     from runtime_audit import CURRENT_TRACE, trace_scope
     from dsh_client import DshTurnCancelled, DshModelTurnFailure, DshTurnFailure
@@ -49,6 +49,10 @@ class RecoveryError(RuntimeError):
 
 class ResetError(RuntimeError):
     """A clean conversation rotation could not be safely committed."""
+
+    def __init__(self, message, *, code="RESET_FAILED"):
+        super().__init__(message)
+        self.code = code
 
 
 class _ResetPreempted(Exception):
@@ -144,7 +148,8 @@ class ChatService:
 
     def __init__(self, journal: Any, state: Any, dsh: Any, mcp: Any = None,
                  trusted_sources: bool = False, audit=None, domain: str | None = None,
-                 execution_profile: str | None = None, prepare_memory_reset=None) -> None:
+                 execution_profile: str | None = None, prepare_memory_reset=None,
+                 error_notice=None) -> None:
         self.journal = journal
         self.state = state
         self.dsh = dsh
@@ -158,6 +163,7 @@ class ChatService:
         if self.execution_profile not in {"owner-host", "group-sandbox", "safe-chat"}:
             raise ValueError("unknown execution profile")
         self.prepare_memory_reset = prepare_memory_reset
+        self.error_notice = error_notice
         self._queued = 0
         self._locks: dict[tuple[str, str, str], asyncio.Lock] = {}
         self._active_runs: dict[tuple[str, str, str], _ActiveRun] = {}
@@ -173,6 +179,11 @@ class ChatService:
         self._background_delivery_tasks: set[asyncio.Task] = set()
         self._background_closing = False
         self.console_store = configured_store()
+
+    async def _error_notice(self, conversation, code, default):
+        if self.error_notice is None:
+            return default
+        return await self.error_notice(conversation, code, default)
 
     async def handle_background_event(self, raw_event: dict) -> Any:
         try:
@@ -462,12 +473,17 @@ class ChatService:
                         message = notice + "\n\n" + message
                 elif status == "cancelled":
                     message = text or "后台检索已停止。"
+                    code = "BACKGROUND_CANCELLED"
                 else:
                     message = (model_failure_notice(event["model_error"], event.get("recovery"),
                                                     subject="后台任务")
                                if event.get("model_error") else text or "后台检索遇到错误，未能完成。")
+                    code = (normalize_model_failure_code(event["model_error"])
+                            if event.get("model_error") else "BACKGROUND_FAILED")
                 if event.get("label") and not message.startswith(event["label"]):
                     message = f"{event['label']}：{message}"
+                if status != "completed":
+                    message = await self._error_notice(task.conversation, code, message)
                 target = task.delivery_messaging or task.messaging
                 prepared_mentions = getattr(target, "_mention_user_ids", [])
                 if getattr(target, "_v2_reply_prepared", False):
@@ -1116,8 +1132,10 @@ class ChatService:
                 except DshModelTurnFailure as error:
                     if send is not None:
                         try:
-                            await scheduled_send(model_failure_notice(error.code, error.recovery,
-                                                                       subject="定时任务"))
+                            notice = model_failure_notice(error.code, error.recovery, subject="定时任务")
+                            notice = await self._error_notice(
+                                conversation, normalize_model_failure_code(error.code), notice)
+                            await scheduled_send(notice)
                         except Exception as notice_error:
                             logging.getLogger(__name__).warning("Scheduled model failure notice failed: %s",
                                                 type(notice_error).__name__)
@@ -1368,7 +1386,7 @@ class ChatService:
                 provider = self.prepare_memory_reset
                 message = "记忆整理未完成，旧上下文未清空；如需跳过整理，请发送 /new skip_mem。"
                 if provider is None:
-                    raise ResetError(f"群聊{message}（记忆整理尚未接入）。")
+                    raise ResetError(f"群聊{message}（记忆整理尚未接入）。", code="RESET_MEMORY_UNAVAILABLE")
                 try:
                     prepared = await provider(
                         conversation=conversation,
@@ -1378,9 +1396,9 @@ class ChatService:
                 except asyncio.CancelledError:
                     raise
                 except BaseException as error:
-                    raise ResetError(message) from error
+                    raise ResetError(message, code="RESET_MEMORY_FAILED") from error
                 if prepared is not True:
-                    raise ResetError(message)
+                    raise ResetError(message, code="RESET_MEMORY_FAILED")
 
             old_persona = None
             old_scene = None
@@ -1597,6 +1615,16 @@ class ChatService:
             if isinstance(value, str):
                 payload[key] = value[:128]
         text = message.content.get("text", "")
+        if not text:
+            previews = []
+            for segment in message.content.get("segments", [])[:16]:
+                if segment.get("type") in {"json", "redbag"}:
+                    values = [segment.get(key) for key in ("prompt", "title", "app")]
+                    for section in segment.get("meta", [])[:2]:
+                        values.extend(section.get(key) for key in ("title", "desc"))
+                    previews.append("[QQ " + segment["type"] + "] " +
+                                    "；".join(v for v in values if isinstance(v, str)))
+            text = "\n".join(previews)
         payload["content"] = {
             "text": text[:1024] if isinstance(text, str) else "",
             "projection_truncated": True,
@@ -1637,6 +1665,12 @@ class ChatService:
                     "truncated_journal_ids": [row.journal_id for row, _, truncated in selected if truncated],
                 },
             }
+            wake = next((row.message for row in rows if row.journal_id == wake_id), None)
+            if wake is not None and wake.content.get("event_type") == "poke":
+                header["wake_event"] = {
+                    "type": "qq_poke", "actor_id": wake.actor_id,
+                    "instruction": "本轮由这位用户通过QQ poke拍你而唤醒；结合当前群聊语境自主决定如何回应。",
+                }
             if history_floor > 0:
                 header["history_access"] = {
                     "after_journal_id": history_floor,
@@ -1778,6 +1812,7 @@ class ChatService:
         memes=None,
         plugins=None,
         games=None,
+        bottles=None,
     ) -> str | None:
         """Run a turn once, then send through AstrBot while holding this chat's lock."""
         trace = self.audit.trace(conversation, inbound_message_id, self.domain) if self.audit else None
@@ -1859,6 +1894,8 @@ class ChatService:
                                 options.update(memes=memes, plugins=plugins, invoke=invoke_capability)
                             if games is not None:
                                 options['games'] = games
+                            if bottles is not None:
+                                options['bottles'] = bottles
                             current = await asyncio.to_thread(self.state.get, *identity)
                             history_after = max(0, getattr(current, "history_after_journal_id", 0))
                             if history_after:

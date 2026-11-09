@@ -65,6 +65,20 @@ def text(value):
     return {"type": "text", "data": {"text": value}}
 
 
+def test_forward_cards_keep_visible_fields_and_share_page_text_budget():
+    fwd, _, _ = harness()
+    card = {'type':'json','data':{'data':json.dumps({
+        'app':'com.tencent.miniapp_01','prompt':'分享视频','config':{'token':'PRIVATE'},
+        'meta':{'detail_1':{'title':'视频标题','desc':'说明'*1000}}
+    })}}
+    budget = [500]
+    content = fwd._normalize_content([card]*20, [], 0, budget)
+    assert len(content) == 20 and all(item['type']=='json' for item in content)
+    assert budget[0]>=0 and any(item.get('truncated') for item in content)
+    assert 'PRIVATE' not in json.dumps(content) and '视频' in json.dumps(content,ensure_ascii=False)
+    assert len(json.dumps(content,ensure_ascii=False).encode()) < 5000
+
+
 def test_read_pages_one_layer_and_does_not_fetch_nested_forward_automatically():
     async def run():
         nested = {"type": "forward", "data": {"id": "nested-id"}}

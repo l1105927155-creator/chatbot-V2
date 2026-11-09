@@ -6,6 +6,19 @@ from collections.abc import Mapping
 from typing import Any
 
 
+def _captured_bot_poke(raw: Mapping) -> bool:
+    if (raw.get("post_type") != "notice" or raw.get("notice_type") != "notify"
+            or raw.get("sub_type") != "poke"
+            or str(raw.get("target_id", "")) != str(raw.get("self_id", ""))
+            or str(raw.get("user_id", "")) == str(raw.get("self_id", ""))):
+        return False
+    try:
+        # An external JSON dictionary key cannot provide this Event attribute.
+        return object.__getattribute__(raw, "_v2_journal_poke") is not None
+    except (AttributeError, TypeError):
+        return False
+
+
 def _group_trigger(event: Any, raw: Mapping, segments: list) -> bool:
     """Use a real mention or AstrBot's platform-resolved reply sender.
 
@@ -48,6 +61,8 @@ def addresses_bot(event: Any, raw: Any) -> bool:
     """
     if not isinstance(raw, Mapping):
         return False
+    if _captured_bot_poke(raw):
+        return True
     segments = raw.get("message")
     return isinstance(segments, list) and _group_trigger(event, raw, segments)
 
@@ -63,7 +78,11 @@ def should_route(event: Any, raw: Any) -> bool:
     """
     if event.get_platform_name() != "aiocqhttp" or event.is_stopped():
         return False
-    if not isinstance(raw, Mapping) or raw.get("post_type") != "message":
+    if not isinstance(raw, Mapping):
+        return False
+    if raw.get("post_type") == "notice":
+        return _captured_bot_poke(raw) and not event.get_extra("v2_deterministic_handled", False)
+    if raw.get("post_type") != "message":
         return False
     if raw.get("message_type") not in ("group", "private"):
         return False
@@ -88,7 +107,7 @@ def should_route(event: Any, raw: Any) -> bool:
         return True
     # An attachment is itself a user message. Group messages still require the
     # real mention/resolved Bot reply checked above; upload notices stay passive.
-    if any(isinstance(segment, Mapping) and segment.get('type') in {'file', 'image', 'record', 'video', 'forward'}
+    if any(isinstance(segment, Mapping) and segment.get('type') in {'file', 'image', 'record', 'video', 'forward', 'json', 'redbag'}
            and isinstance(segment.get('data'), Mapping) for segment in segments):
         return True
     # Group addressing was already verified above. An actual Bot mention or

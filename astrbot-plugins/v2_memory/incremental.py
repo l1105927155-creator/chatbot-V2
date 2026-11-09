@@ -60,6 +60,18 @@ class IncrementalMemoryRunner:
             return
         for key, backend in tuple(self.manager._backends.items()):
             try:
+                sync_settings = getattr(self.manager, "sync_workspace_settings", None)
+                if callable(sync_settings):
+                    for domain in ("memory", "memory-enabled"):
+                        try:
+                            await sync_settings(key, domain)
+                        except Exception as error:
+                            # Keep the last-good store configuration active;
+                            # an invalid projection never turns into a disable.
+                            self.manager.logger.warning(
+                                "V2 memory workspace settings not applied for %s: %s",
+                                key, type(error).__name__,
+                            )
                 if not self._allowed(key, backend):
                     await self.cancel(key)
                     continue

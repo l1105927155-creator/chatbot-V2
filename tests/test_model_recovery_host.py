@@ -139,12 +139,25 @@ async def test_memory_tracks_chat_selection_on_each_new_consolidation(tmp_path):
 
 
 @pytest.mark.parametrize('failed', [False, True])
-def test_scheduled_model_notice_preserves_machine_readable_result_and_no_retry(tmp_path, failed):
+@pytest.mark.parametrize('custom', [False, True])
+def test_scheduled_model_notice_preserves_machine_readable_result_and_no_retry(tmp_path, failed, custom):
     from test_scheduled_agent import fixture, append as scheduled_append, service_module
     j, state, dsh, mcp, conv = fixture(tmp_path)
     scheduled_append(j, conv)
     svc = service_module.ChatService(j, state, dsh, mcp, trusted_sources=True,
                                     execution_profile='group-sandbox')
+    if custom:
+        from error_notices import load_overrides, render_notice
+        (tmp_path / 'error-messages.json').write_text(
+            json.dumps({'MODEL_UNAVAILABLE': '定时任务完整自定义'}), encoding='utf8')
+        async def render(conversation, code, default):
+            assert conversation == conv
+            descriptor = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                return render_notice(load_overrides(descriptor), code, default)
+            finally:
+                os.close(descriptor)
+        svc.error_notice = render
     calls, sent = [], []
     def run(*a, **k):
         calls.append(1)
@@ -166,7 +179,10 @@ def test_scheduled_model_notice_preserves_machine_readable_result_and_no_retry(t
             assert json.loads(result['reply'])['outcome'] == 'succeeded'
     asyncio.run(scenario())
     assert len(calls) == 1 and len(sent) == 1
-    assert ('主线路和备用线路' if failed else '备用模型') in sent[0]
+    if custom and failed:
+        assert sent == ['定时任务完整自定义']
+    else:
+        assert ('主线路和备用线路' if failed else '备用模型') in sent[0]
 
 
 @pytest.mark.asyncio

@@ -278,3 +278,20 @@ def test_review_source_audit_checks_exact_input_and_matches_store_quote_normaliz
     import pytest
     with pytest.raises(AssertionError, match="not present"):
         HARNESS._review_source_index(prompt, rows)
+
+
+def test_profile_route_check_accepts_explicit_model_despite_retired_default(tmp_path):
+    import pytest
+    import yaml
+    profile = tmp_path / "cordis.patch.yml"
+    profile.write_text(yaml.safe_dump([
+        {"id": "agent-default-model",
+         "config": {"provider": "wb", "model": "DeepSeek-V4-Flash"}},
+        {"id": "llm-pi-ai",
+         "config": {"providers": {"wb": {"models": [{"id": "deepseek-v4.1-flash"}]}}}},
+    ]), encoding="utf-8")
+    HARNESS._profile_model(profile, "wb", "deepseek-v4.1-flash")
+    with pytest.raises(ValueError, match="does not expose"):
+        HARNESS._profile_model(profile, "wb", "missing-model")
+    with pytest.raises(ValueError, match="does not expose"):
+        HARNESS._profile_model(profile, "missing-provider", "deepseek-v4.1-flash")

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -151,6 +152,33 @@ async def test_completion_callback_returns_while_foreground_holds_chat_lock_and_
             break
         await asyncio.sleep(.005)
     assert messaging.sent == [("核对完成。", ["1105927155"], None)]
+    await service.close_background()
+
+
+@pytest.mark.asyncio
+async def test_failed_callback_uses_workspace_override_without_label_or_state_changes(tmp_path):
+    from error_notices import load_overrides, render_notice
+    service, conversation, state, messaging, _dsh = setup_service()
+    before = vars(state).copy()
+    (tmp_path / "error-messages.json").write_text(
+        json.dumps({"MODEL_TIMEOUT": "后台完整错误提示"}), encoding="utf8")
+    async def render(current, code, default):
+        assert current == conversation
+        descriptor = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            return render_notice(load_overrides(descriptor), code, default)
+        finally:
+            os.close(descriptor)
+    service.error_notice = render
+    assert await service.handle_background_event(event())
+    terminal = event("settled", status="failed", model_error="MODEL_TIMEOUT", label="原任务标签")
+    assert await service.handle_background_event(terminal)
+    await asyncio.gather(*tuple(service._background_delivery_tasks))
+    assert messaging.sent == [("后台完整错误提示", ["1105927155"], None)]
+    assert vars(state) == before
+    assert service._background_tasks[("session-1", "research-1")].status == "failed"
+    assert await service.handle_background_event(terminal)
+    assert len(messaging.sent) == 1
     await service.close_background()
 
 

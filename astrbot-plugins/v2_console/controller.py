@@ -171,7 +171,12 @@ class ConsoleController:
             if action in {"files.read", "files.download"}:
                 data, meta = files.download(path)
                 if action == "files.read":
-                    return {**meta, "content": data.decode("utf-8")}
+                    try:
+                        content = data.decode("utf-8")
+                    except UnicodeDecodeError:
+                        # Binary files are not editable; the page offers download.
+                        content = None
+                    return {**meta, "content": content}
                 return {**meta, "data_base64": base64.b64encode(data).decode("ascii")}
             if action in {"files.save", "files.upload"}:
                 data = (payload["content"].encode("utf-8") if action == "files.save"

@@ -87,6 +87,13 @@ def test_help_explains_scope_and_historical_journal():
     assert "其他插件命令继续" in text
 
 
+def test_help_sections_preserve_help_text_and_skip_empty_nodes():
+    sections = command_surface.help_sections()
+    assert len(sections) >= 2
+    assert "\n\n".join(sections) == command_surface.help_text()
+    assert all(section.strip() == section and section for section in sections)
+
+
 @pytest.mark.asyncio
 async def test_repeated_install_and_reloaded_builtin_restore_only_current_objects():
     old = Handler(command_surface.BUILTIN_COMMAND_MODULE, 'new_conv', 'builtin_new')

@@ -18,7 +18,8 @@ from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.core.star.filter.command import GreedyStr
 
 from .dsh_client import DshTurnCancelled, MemoryModelError, start_client
-from .model_failure import model_failure_notice, recovery_notice
+from .model_failure import model_failure_notice, recovery_notice, normalize_model_failure_code
+from .error_notices import load_overrides, render_notice
 from .routing import addresses_bot, should_route
 from .service import ChatService, PendingTurnError, RecoveryError, ResetError, FinalReplyDeliveryError, ModelTurnError, AgentDisabledError
 from .delivery_error import notify_delivery_error
@@ -128,7 +129,7 @@ class V2DshRouter(star.Star):
             self.services["chat"] = ChatService(
                 journal, chat_state, self.clients["chat"], self.mcp,
                 audit=self.audit, domain="chat", execution_profile="safe-chat",
-                trusted_sources=True,
+                trusted_sources=True, error_notice=self.error_notice,
             )
             if self.owners:
                 self.clients["owner"] = await start_client(
@@ -147,6 +148,7 @@ class V2DshRouter(star.Star):
                     journal, owner_state, self.clients["owner"], self.mcp,
                     trusted_sources=True, audit=self.audit, domain="owner",
                     execution_profile="owner-host",
+                    error_notice=self.error_notice,
                 )
         except BaseException as startup_error:
             try:
@@ -244,6 +246,52 @@ class V2DshRouter(star.Star):
                 message.conversation, actor_id=getattr(message, "actor_id", None))
         except Exception as error:  # noqa: BLE001 - optional capability must fail closed
             self.logger.warning("V2 games capability unavailable: %s", type(error).__name__)
+            return None
+
+    async def _bot_nickname(self, event, bot_id: str) -> str:
+        """Resolve the Bot nickname once per bot, falling back to 小v."""
+        names = getattr(self, "_bot_names", None)
+        if not isinstance(names, dict):
+            names = self._bot_names = {}
+        key = str(bot_id or "")
+        cached = names.get(key)
+        if cached:
+            return cached
+        name = "小v"
+        try:
+            result = await event.bot.call_action("get_login_info")
+            data = result.get("data") if isinstance(result, dict) else None
+            if not isinstance(data, dict):
+                data = result if isinstance(result, dict) else {}
+            candidate = data.get("nickname")
+            if isinstance(candidate, str) and candidate.strip():
+                name = candidate.strip()
+        except Exception as error:  # noqa: BLE001 - nickname is optional context
+            self.logger.warning(
+                "V2 bottle nickname lookup failed: %s", type(error).__name__
+            )
+        names[key] = name
+        return name
+
+    async def _bottles_capability(self, message, event):
+        """Resolve the optional bottles plugin without making routing depend on it."""
+        try:
+            metadata = self.context.get_registered_star("v2_bottles")
+            plugin = getattr(metadata, "star_cls", None) if metadata else None
+            if plugin is None or not callable(getattr(plugin, "capability_for", None)):
+                return None
+            if callable(getattr(plugin, "ready", None)) and not plugin.ready():
+                return None
+            bot_name = await self._bot_nickname(event, message.conversation.bot_id)
+            return plugin.capability_for(
+                message.conversation,
+                actor_id=getattr(message, "actor_id", None),
+                bot_name=bot_name,
+            )
+        except Exception as error:  # noqa: BLE001 - optional capability must fail closed
+            self.logger.warning(
+                "V2 bottles capability unavailable: %s", type(error).__name__
+            )
             return None
 
     def _read_group_maintenance(self):
@@ -551,18 +599,52 @@ class V2DshRouter(star.Star):
         """说明 Agent 配置的实际管理入口。"""
         await self._agent_command(event, "unset", args)
 
+    async def error_notice(self, conversation, code, default):
+        """Read only the current conversation's existing, verified workspace."""
+        def read():
+            descriptor = -1
+            try:
+                if conversation.key.startswith("group:"):
+                    runtime, _group_id = self._scheduled_runtime(conversation)
+                    descriptor = runtime["volume_module"].verified_group_workspace(runtime["workspace"])
+                elif (conversation.key.startswith("private:") and
+                      Owner(conversation.platform_id, conversation.bot_id,
+                            conversation.key.removeprefix("private:")) in self.owners):
+                    service = self.services.get("owner")
+                    if service is None:
+                        return default
+                    descriptor = os.open(service.dsh.settings["workspace"],
+                                         os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+                else:
+                    return default
+                return render_notice(load_overrides(descriptor, logger=self.logger), code, default)
+            except Exception as error:
+                self.logger.warning("V2 error notice configuration unavailable: %s", type(error).__name__)
+                return default
+            finally:
+                if descriptor >= 0:
+                    os.close(descriptor)
+        return await asyncio.to_thread(read)
+
     async def _agent_command(self, event, action, args=""):
         event.set_extra("v2_deterministic_handled", True)
         task = asyncio.current_task()
         self._active.add(task)
         trace_token = None
         trace = None
+        message = None
 
-        async def reply(text):
+        async def reply(payload):
             async def native_send(value):
                 self.onebot_audit.bind(getattr(event, "bot", None))
-                await event.send(MessageChain().message(value))
-            return await trace.send(native_send, text, "control") if trace else await native_send(text)
+                await event.send(value if isinstance(value, MessageChain)
+                                 else MessageChain().message(value))
+            return await trace.send(native_send, payload, "control") if trace else await native_send(payload)
+
+        async def reply_error(code, text):
+            if message is not None:
+                text = await self.error_notice(message.conversation, code, text)
+            return await reply(text)
 
         try:
             if self._closing or not self._initialized or not self._commands_ready:
@@ -586,8 +668,13 @@ class V2DshRouter(star.Star):
             trace_token = CURRENT_TRACE.set(trace)
             trace.emit("control/request", control=action)
             if action == "help":
-                from .command_surface import help_text
-                await reply(help_text())
+                from astrbot.api.message_components import Node, Nodes, Plain
+                from .command_surface import help_sections
+                name = await self._bot_nickname(event, message.conversation.bot_id)
+                nodes = [Node(content=[Plain(text=section)], name=name,
+                              uin=str(message.conversation.bot_id))
+                         for section in help_sections()]
+                await reply(MessageChain([Nodes(nodes)]))
                 return
             if action == 'provider':
                 from .model_command import describe_model, select_route
@@ -635,7 +722,7 @@ class V2DshRouter(star.Star):
                 manager = getattr(self, "memory_manager", None)
                 backend = manager.for_conversation(message.conversation) if manager is not None else None
                 if backend is None:
-                    await reply("本群记忆服务尚未启用或暂不可用，未执行整理。")
+                    await reply_error("MEMORY_UNAVAILABLE", "本群记忆服务尚未启用或暂不可用，未执行整理。")
                     return
                 rows = await asyncio.to_thread(self.mcp.journal.by_message_id,
                                                message.platform_id, message.bot_id, message.message_id)
@@ -643,7 +730,7 @@ class V2DshRouter(star.Star):
                                 and row.message.direction == "inbound"
                                 and row.message.actor_id == message.actor_id), None)
                 if command is None:
-                    await reply("未找到本条命令的规范消息记录，未执行整理；上下文保留。")
+                    await reply_error("COMMAND_JOURNAL_MISSING", "未找到本条命令的规范消息记录，未执行整理；上下文保留。")
                     return
                 try:
                     async with backend.guard(message.conversation):
@@ -657,9 +744,10 @@ class V2DshRouter(star.Star):
                     self.logger.warning("V2 manual memory consolidation failed: %s", type(error).__name__)
                     if isinstance(error, MemoryModelError):
                         detail = model_failure_notice(error.error_code, error.recovery, subject="记忆整理")
-                        await reply(detail + " 当前对话上下文保留，未完成的批次未推进。")
+                        await reply_error(normalize_model_failure_code(error.error_code),
+                                          detail + " 当前对话上下文保留，未完成的批次未推进。")
                     else:
-                        await reply("记忆整理失败，当前对话上下文未重置；本次不自动重试。")
+                        await reply_error("MEMORY_FAILED", "记忆整理失败，当前对话上下文未重置；本次不自动重试。")
                 else:
                     notice = recovery_notice(getattr(backend, "last_model_recovery", None), subject="记忆整理")
                     await reply((notice + "\n" if notice else "") + "记忆整理完成，当前对话上下文已保留。")
@@ -694,14 +782,16 @@ class V2DshRouter(star.Star):
                 await reply("已请求停止当前 Agent 执行。已发生的操作会保留；Bot Owner 可用 /v2agent status 核对状态。"
                             if accepted else "当前没有可停止的模型执行。已有待核对结果仍需由 Bot Owner 核对恢复。")
         except PendingTurnError:
-            await reply("当前会话有结果待核对，本次未切换模型。请由 Bot Owner 使用 /v2agent status 核对后再继续。"
+            await reply_error("COMMAND_PENDING", "当前会话有结果待核对，本次未切换模型。请由 Bot Owner 使用 /v2agent status 核对后再继续。"
                         if action == 'provider' else
                         "当前会话有结果待核对，尚未重置。请由 Bot Owner 使用 /v2agent status 核对，再按提示恢复。")
         except ResetError as exc:
-            await reply(str(exc))
+            await reply_error(exc.code, str(exc))
         except Exception:
             self.logger.exception("V2 Agent command %s failed", action)
-            await reply("模型目录同步或切换尚未完成，请检查 DSH Web 模型设置或运行日志，再查询 /provider。"
+            await reply_error("MODEL_SELECTION_FAILED" if action == "provider" else
+                              "MEMORY_RECEIPT_FAILED" if action == "memory" else "COMMAND_FAILED",
+                        "模型目录同步或切换尚未完成，请检查 Bot 控制台的模型设置或运行日志，再查询 /provider。"
                         if action == 'provider' else
                         "记忆命令回执未能送达，请查看记忆管理页确认结果；当前上下文保留。"
                         if action == 'memory' else
@@ -841,7 +931,8 @@ class V2DshRouter(star.Star):
             )
             service = ChatService(self.mcp.journal, state, client, self.mcp,
                                   trusted_sources=True, audit=self.audit,
-                                  domain="chat", execution_profile="group-sandbox")
+                                  domain="chat", execution_profile="group-sandbox",
+                                  error_notice=self.error_notice)
             self.clients[name] = client
             self.services[name] = service
             if dynamic_migration:
@@ -924,7 +1015,10 @@ class V2DshRouter(star.Star):
                 text = "后台记忆整理：模型输出未符合整理协议。"
             else:
                 text = "后台记忆整理未完成，具体原因已记录。"
-            text += " 未完成的批次未推进，已暂停此范围，原消息保留供后续核查；正常聊天可以继续。"
+            text += " 失败记录保存在记忆管理页，原消息保留供后续核查；正常聊天可以继续。"
+            code = (normalize_model_failure_code(error.error_code)
+                    if isinstance(error, MemoryModelError) else "MEMORY_FAILED")
+            text = await self.error_notice(conversation, code, text)
         else:
             text = recovery_notice(recovery, subject="后台记忆整理")
         if text:
@@ -1062,6 +1156,7 @@ class V2DshRouter(star.Star):
         from data.plugins.v2_journal.journal import message_from_onebot
         trace = None
         trace_token = None
+        message = None
         task = asyncio.current_task()
         self._active.add(task)
 
@@ -1073,6 +1168,11 @@ class V2DshRouter(star.Star):
                 await trace.send(send, text, "control")
             else:
                 await send(text)
+
+        async def reply_error(code, text):
+            if message is not None:
+                text = await self.error_notice(message.conversation, code, text)
+            return await reply(text)
 
         try:
             raw = getattr(event.message_obj, "raw_message", None)
@@ -1179,12 +1279,12 @@ class V2DshRouter(star.Star):
                 message.conversation, kind, value, selected, get_group=event.get_group,
             )
         except RecoveryError as exc:
-            await reply(str(exc))
+            await reply_error("RECOVERY_FAILED", str(exc))
         except PendingTurnError:
-            await reply("当前会话有未确认的执行结果，请先恢复会话后再切换。")
+            await reply_error("COMMAND_PENDING", "当前会话有未确认的执行结果，请先恢复会话后再切换。")
         except Exception:
             self.logger.exception("V2 Agent control command failed")
-            await reply("Agent 命令未完成，请检查 Bot 运行日志。")
+            await reply_error("COMMAND_FAILED", "Agent 命令未完成，请检查 Bot 运行日志。")
         finally:
             if trace_token is not None:
                 CURRENT_TRACE.reset(trace_token)
@@ -1279,7 +1379,18 @@ class V2DshRouter(star.Star):
         message = None
         service = None
         try:
-            message = message_from_onebot(event.get_platform_id(), raw)
+            if raw.get("post_type") == "notice":
+                from data.plugins.v2_journal.poke_events import captured_poke_message
+                message = captured_poke_message(event.get_platform_id(), raw)
+                if message is None:
+                    return
+                rows = await asyncio.to_thread(self.mcp.journal.by_message_id,
+                                               message.platform_id, message.bot_id, message.message_id)
+                if not any(row.message == message for row in rows):
+                    self.logger.error("V2 poke has no matching canonical capture; input withheld")
+                    return
+            else:
+                message = message_from_onebot(event.get_platform_id(), raw)
             if not self._console_accepts(message):
                 return
             if not message.message_id:
@@ -1322,13 +1433,14 @@ class V2DshRouter(star.Star):
                 memes=MemeLibrary(self.runtime_root.parent / 'meme', send_meme),
                 plugins=PluginCapabilities(self.context, event),
                 games=self._games_capability(message),
+                bottles=await self._bottles_capability(message, event),
             )
         except AgentDisabledError:
             self.logger.info("V2 Agent input stopped by console disable barrier")
         except ReplyContentError as exc:
             self.logger.warning("V2 withheld invalid model reply (code=%s)", exc.code)
             if turn_started and message is not None and self._console_accepts(message):
-                await notify_turn_error(event, message.conversation, self.owners, "invalid_reply", self.logger)
+                await notify_turn_error(event, message.conversation, self.owners, "invalid_reply", self.logger, render=self.error_notice)
         except FinalReplyDeliveryError as exc:
             self.logger.exception("V2 final reply delivery failed for QQ message %s; turn consumed, no replay",
                                   raw.get("message_id"))
@@ -1336,14 +1448,15 @@ class V2DshRouter(star.Star):
                             else "journalctl --user -u chatbot-v2-agent.service")
             if self._console_accepts(message):
                 await notify_delivery_error(event, message.conversation, self.owners, exc, self.logger,
-                                            log_location)
+                                            log_location, render=self.error_notice)
         except ModelTurnError as exc:
             self.logger.warning("V2 model turn terminated for QQ message %s (code=%s status=%s backup_attempted=%s tools_completed=%s)",
                                 raw.get("message_id"), exc.code, exc.status,
                                 bool(exc.recovery), exc.tools_completed)
             if turn_started and message is not None and self._console_accepts(message):
                 await notify_turn_error(event, message.conversation, self.owners, "model", self.logger,
-                                        code=exc.code, tools_completed=exc.tools_completed, recovery=exc.recovery)
+                                        code=exc.code, tools_completed=exc.tools_completed, recovery=exc.recovery,
+                                        render=self.error_notice)
         except DshTurnCancelled:
             self.logger.info("V2 DSH cancellation confirmed for QQ message %s; outcome pending review",
                              raw.get("message_id"))
@@ -1351,7 +1464,7 @@ class V2DshRouter(star.Star):
                             callable(getattr(service, "is_reset_cancellation", None)) and
                             service.is_reset_cancellation(message.conversation, message.message_id))
             if turn_started and message is not None and not reset_cancel and self._console_accepts(message):
-                await notify_turn_error(event, message.conversation, self.owners, "cancelled", self.logger)
+                await notify_turn_error(event, message.conversation, self.owners, "cancelled", self.logger, render=self.error_notice)
         except PendingTurnError as exc:
             self.logger.error("V2 DSH conversation paused: %s", exc)
             if turn_started and message is not None and self._console_accepts(message):
@@ -1387,7 +1500,7 @@ class V2DshRouter(star.Star):
                         self.logger.warning("V2 automatic skip evidence conversation=%s journal=%s kind=%s code=%s confirmed_tools=%s unknown_tools=%s",
                                             message.conversation.key, pending_cursor, fault_kind, code,
                                             safe_tools("confirmed_tools"), safe_tools("unknown_tools"))
-                        await notify_turn_error(event, message.conversation, self.owners, "auto_skip", self.logger)
+                        await notify_turn_error(event, message.conversation, self.owners, "auto_skip", self.logger, render=self.error_notice)
                         try:
                             await service.resolve_pending(message.conversation, pending_cursor, get_group=event.get_group,
                                                           wait_for_lock=True)
@@ -1395,16 +1508,17 @@ class V2DshRouter(star.Star):
                         except Exception:
                             self.logger.exception("V2 automatic skip failed for Journal %s; conversation remains paused", pending_cursor)
                             notices.discard(notice_key)
-                            await notify_turn_error(event, message.conversation, self.owners, "skip_failed", self.logger)
+                            await notify_turn_error(event, message.conversation, self.owners, "skip_failed", self.logger, render=self.error_notice)
                     else:
-                        await notify_turn_error(event, message.conversation, self.owners, "pending", self.logger)
+                        await notify_turn_error(event, message.conversation, self.owners, "pending", self.logger, render=self.error_notice)
         except Exception:
             self.logger.exception("V2 DSH turn failed for QQ message %s", raw.get("message_id"))
             if (message is not None and message.conversation_key in self.allowed_conversations
                     and self._console_accepts(message)):
                 kind = "infrastructure" if service is None else "failed"
                 await notify_turn_error(event, message.conversation, self.owners, kind, self.logger,
-                                        code="INITIALIZATION_FAILED" if service is None else None)
+                                        code="INITIALIZATION_FAILED" if service is None else None,
+                                        render=self.error_notice)
         finally:
             self._active.discard(task)
 

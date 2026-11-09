@@ -49,3 +49,11 @@
 真实 QQ 客户端的命令交互仍需用户复测；本轮没有向生产群或私聊发测试消息。模拟器的群角色为普通成员，群主/管理员拒绝由原生路由合同覆盖，不冒充真实 QQ 角色测试。
 
 `/new` 是会话上下文和标准历史能力的边界；Owner 既有主机文件权限、保存的文件和模型知识保留，不能据此声称安全擦除。旧发送回执关联复用现有有界审计（活动 8MiB 加 7 个归档），没有无限期延迟观察的保证。发送观察故障时重置明确失败；不通过清空未知 pending 假造成功。正式长期稳定性仍按既有真实 QQ 验收及观察流程进行。
+
+## 2026-11-09 /help 合并转发
+
+群聊与准入私聊的 `/help` 回复改为 QQ 合并转发；帮助正文按空行段落拆成转发节点，经 AstrBot 原生 forward 发送，仍为确定性回复且不调用 DSH。其他命令保持普通消息。实现见 `main.py` 的回复分支和 `command_surface.py` 的 `help_sections()`，无上游 core 修改。
+
+聚焦测试 `test_command_surface.py`、`contracts/test_agent_commands.py`、`contracts/test_command_surface_native.py`、`test_agent_commands_acceptance.py` 共 11 项通过。完整模拟 QQ 命令验收使用真实固定版 AstrBot/DSH 与脚本化模型，6/6 场景通过；`/help` 场景额外核对了实际 outbound 为 forward、转发详情至少两个节点、节点包含完整帮助段落且没有 `dsh/dispatched`。结果 `.runtime/help-forward-deployment-20261109/isolated-acceptance/result.json`。
+
+生产服务以独立 release 副本 `.runtime/release-help-forward-20261109` 热修复，插件链接已从 incident-recovery 快照切换到该副本；重启前后健康检查均 `ready`，OneBot、Journal、ACP、Owner 主机与群沙箱就绪，状态库会话行和 pending 未变。Journal 在部署期间因正常收发由 60661/60693 增至 60663/60695（行数/最大 ID）。证据 `.runtime/help-forward-deployment-20261109/deployment.json`。真实 QQ 客户端展示仍需用户 @Bot 发送 `/help` 复测；未向生产群或私聊发测试消息。

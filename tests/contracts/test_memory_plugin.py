@@ -157,6 +157,15 @@ def test_api_dispatches_only_known_actions_and_hides_backend_errors(tmp_path):
             failed = await call({"action": "clear"})
             assert failed.status_code == 500
             assert b"private backend detail" not in failed.body
+            from v2_console.workspace_settings import SettingsConflict
+
+            async def conflicting(*_args):
+                raise SettingsConflict("private details")
+
+            manager.handle = conflicting
+            conflict = await call({"action": "enable", "enabled": False})
+            assert conflict.status_code == 409
+            assert b"private details" not in conflict.body
         finally:
             web.request.json = original_json
             await plugin.terminate()

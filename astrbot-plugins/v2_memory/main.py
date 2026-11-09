@@ -141,11 +141,28 @@ class V2Memory(star.Star):
         except PermissionError:
             return error_response("当前操作不被允许。", status_code=403)
         except Exception as error:
+            if type(error).__name__ == "SettingsConflict":
+                return error_response("工作区设置与后台发生冲突；请核对 settings 中的状态文件后重新保存。", status_code=409)
             self.logger.warning("V2 memory request failed: %s", type(error).__name__, exc_info=True)
             return error_response("群记忆操作未完成，请刷新状态并检查服务日志。", status_code=500)
 
+    def workspace_settings(self) -> list[dict]:
+        manager = self._manager
+        if manager is None or self._stopping:
+            return []
+        return manager.workspace_settings()
+
     async def terminate(self) -> None:
         self._stopping = True
+        try:
+            from ..v2_console.workspace_registry import detach_workspace_settings
+        except ImportError:
+            try:
+                from v2_console.workspace_registry import detach_workspace_settings
+            except ImportError:
+                detach_workspace_settings = None
+        if detach_workspace_settings is not None:
+            await detach_workspace_settings(self.context, self)
         async with self._start_lock:
             await self._close_manager()
 
