@@ -418,6 +418,8 @@ class WorkspaceTaskManager:
                 raise ValueError("task does not exist")
             current = tasks[task_id]
             registration = await asyncio.to_thread(self.run_store.registration, identity, current)
+            if registration is None:
+                raise PermissionError("task has no trusted creator registration")
             if not self._may_manage(identity, actor_id, registration):
                 raise PermissionError("only the task creator, a group editor, or Bot Owner may change it")
             if action == "delete":
@@ -441,13 +443,11 @@ class WorkspaceTaskManager:
                     task = dict(current)
                     task["enabled"] = action == "enable"
                 await asyncio.to_thread(store.put, task, expected_revision)
-                creator = (registration or {}).get("actor_id")
-                if creator == "system":
-                    await asyncio.to_thread(self.run_store.register, identity, task,
-                                            "system", "bootstrap")
-                else:
-                    await asyncio.to_thread(self.run_store.register, identity, task,
-                                            actor_id, source_message_id)
+                # Editing a task never transfers its creator or execution provenance.
+                await asyncio.to_thread(
+                    self.run_store.register, identity, task,
+                    registration["actor_id"], registration["source_message_id"],
+                )
         else:
             raise ValueError("unsupported task management action")
         await self.reconcile()

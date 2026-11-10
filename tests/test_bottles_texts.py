@@ -35,6 +35,22 @@ def test_unknown_key_and_oversize_are_rejected(tmp_path):
     assert texts.get("empty_pool") == DEFAULT_TEXTS["empty_pool"]
 
 
+def test_failed_text_save_does_not_change_runtime_or_disk(tmp_path, monkeypatch):
+    path = tmp_path / "texts.json"
+    texts = TextStore(path)
+    texts.update({"throw_success": "old text"})
+
+    def fail_replace(*_args):
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr("v2_bottles.texts.os.replace", fail_replace)
+    with pytest.raises(OSError, match="simulated"):
+        texts.update({"throw_success": "new text"})
+    assert texts.get("throw_success") == "old text"
+    assert json.loads(path.read_text(encoding="utf-8"))["throw_success"] == "old text"
+    assert not path.with_suffix(".json.tmp").exists()
+
+
 def test_render_only_replaces_known_placeholders():
     assert _render("时间 {time}，未知 {other}", {"time": "T"}) == "时间 T，未知 {other}"
 

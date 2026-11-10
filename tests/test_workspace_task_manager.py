@@ -163,6 +163,40 @@ def test_manager_does_not_seed_builtin_memory_task_and_crud_is_creator_scoped(tm
     asyncio.run(scenario())
 
 
+def test_task_editor_does_not_replace_creator_or_execution_source(tmp_path):
+    async def scenario():
+        harness = Harness(tmp_path)
+        harness.router.owners = [SimpleNamespace(
+            platform_id="qq", bot_id="bot-1", user_id="10002"
+        )]
+        await harness.manager.start()
+        task = task_definition("4f276d3b-7e10-4b42-b7f0-9c4d13076f1a")
+        await harness.manager.manage(
+            harness.conversation, "create", definition=task,
+            expected_revision=0, actor_id="10001", source_message_id="msg-created-by-a",
+        )
+        changed = await harness.manager.manage(
+            harness.conversation, "update", task_id=task["id"],
+            definition={"prompt": "Edited by the owner."},
+            expected_revision=1, actor_id="10002", source_message_id="msg-edited-by-b",
+        )
+        updated = changed["tasks"][0]["task"]
+        registration = harness.run_store.registration(IDENTITY, updated)
+        assert registration["actor_id"] == "10001"
+        assert registration["source_message_id"] == "msg-created-by-a"
+        assert changed["tasks"][0]["registered"] is True
+        disabled = await harness.manager.manage(
+            harness.conversation, "disable", task_id=task["id"],
+            expected_revision=2, actor_id="10001", source_message_id="msg-a-disables",
+        )
+        registration = harness.run_store.registration(IDENTITY, disabled["tasks"][0]["task"])
+        assert registration["actor_id"] == "10001"
+        assert registration["source_message_id"] == "msg-created-by-a"
+        await harness.close()
+
+    asyncio.run(scenario())
+
+
 def test_ready_incremental_manager_retires_only_builtin_task_and_preserves_history(tmp_path):
     async def scenario():
         harness = Harness(tmp_path)

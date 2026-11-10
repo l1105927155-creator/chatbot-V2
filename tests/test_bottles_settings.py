@@ -37,6 +37,22 @@ def test_invalid_settings_are_rejected(tmp_path):
     assert settings.get("max_chars") == 200
 
 
+def test_failed_settings_save_does_not_change_runtime_or_disk(tmp_path, monkeypatch):
+    path = tmp_path / "settings.json"
+    settings = SettingsStore(path)
+    settings.update({"max_chars": 50})
+
+    def fail_replace(*_args):
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr("v2_bottles.settings.os.replace", fail_replace)
+    with pytest.raises(OSError, match="simulated"):
+        settings.update({"max_chars": 10})
+    assert settings.get("max_chars") == 50
+    assert json.loads(path.read_text(encoding="utf-8"))["max_chars"] == 50
+    assert not path.with_suffix(".json.tmp").exists()
+
+
 def test_service_uses_new_limit_immediately(tmp_path):
     store = BottleStore(tmp_path / "bottles.sqlite3")
     settings = SettingsStore(tmp_path / "settings.json")

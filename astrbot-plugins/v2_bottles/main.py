@@ -21,7 +21,7 @@ from .service import (
 )
 from .settings import SETTINGS_FIELDS, SettingsStore
 from .store import BottleStore
-from .texts import TEXT_FIELDS, TextStore
+from .texts import DEFAULT_TEXTS, TEXT_FIELDS, TextStore
 
 _MEDIA_SEGMENTS = frozenset(
     {"image", "record", "video", "file", "forward", "json", "redbag"}
@@ -191,7 +191,12 @@ class V2Bottles(star.Star):
         action, content = parsed if parsed is not None else (None, "")
         if not self.ready():
             event.set_extra("v2_deterministic_handled", True)
-            yield event.plain_result(self._service.text("not_ready"))
+            notice = (
+                self._texts.get("not_ready")
+                if self._texts is not None
+                else DEFAULT_TEXTS["not_ready"]
+            )
+            yield event.plain_result(notice)
             return
         group_id = str(event.get_group_id() or "")
         if not self._service.group_enabled(group_id):

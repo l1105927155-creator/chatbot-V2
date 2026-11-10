@@ -124,6 +124,18 @@ def test_disk_cap_is_reported(tmp_path):
     store.close()
 
 
+def test_deleted_sqlite_pages_can_be_reused_near_disk_cap(tmp_path):
+    store = make_store(tmp_path)
+    first = add(store, content="a" * 20000)
+    add(store, content="b" * 20000)
+    assert store.delete([first["id"]]) == 1
+    assert store._conn.execute("PRAGMA freelist_count").fetchone()[0] > 0
+    cap = store.disk_bytes() + 512
+    add(store, content="c" * 16000, max_disk_bytes=cap)
+    assert store.count() == 2
+    store.close()
+
+
 def test_delete_selected_rows(tmp_path):
     store = make_store(tmp_path)
     first = add(store, content="first")

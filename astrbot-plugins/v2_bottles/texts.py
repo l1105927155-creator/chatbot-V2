@@ -128,24 +128,28 @@ class TextStore:
                 raise ValueError(f"text {key} is too long")
             validated[key] = value
         with self._lock:
-            self._values.update(validated)
-            self._write()
+            updated = {**self._values, **validated}
+            self._write(updated)
+            self._values = updated
         return sorted(validated)
 
-    def _write(self) -> None:
+    def _write(self, values: Mapping[str, str]) -> None:
         if self.path is None:
             return
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         temp = self.path.with_suffix(self.path.suffix + ".tmp")
-        temp.write_text(
-            json.dumps(self._values, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
         try:
-            temp.chmod(0o600)
-        except OSError:
-            pass
-        os.replace(temp, self.path)
+            temp.write_text(
+                json.dumps(values, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            try:
+                temp.chmod(0o600)
+            except OSError:
+                pass
+            os.replace(temp, self.path)
+        finally:
+            temp.unlink(missing_ok=True)
 
     def get(self, key: str, **fields: Any) -> str:
         with self._lock:

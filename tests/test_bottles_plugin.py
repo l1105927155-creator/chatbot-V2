@@ -12,7 +12,7 @@ from v2_bottles.main import BottleCommandFilter, V2Bottles  # noqa: E402
 from v2_bottles.service import BottleService  # noqa: E402
 from v2_bottles.settings import SettingsStore  # noqa: E402
 from v2_bottles.store import BottleStore  # noqa: E402
-from v2_bottles.texts import TextStore  # noqa: E402
+from v2_bottles.texts import DEFAULT_TEXTS, TextStore  # noqa: E402
 
 SELF_ID = "2869323076"
 GROUP_ID = "123"
@@ -110,6 +110,17 @@ async def collect(plugin, event):
     async for item in plugin.bottle_command(event):
         items.append(item)
     return items
+
+
+def test_uninitialized_bottle_command_does_not_access_missing_service():
+    async def scenario():
+        plugin = V2Bottles(SimpleNamespace(), {"enabled_groups": [GROUP_ID]})
+        event = FakeEvent("捡", make_raw("捡"))
+        replies = await collect(plugin, event)
+        assert replies == [{"kind": "text", "text": DEFAULT_TEXTS["not_ready"]}]
+        assert event.get_extra("v2_deterministic_handled") is True
+
+    asyncio.run(scenario())
 
 
 def test_filter_requires_group_at_bot_and_exact_command_shape():

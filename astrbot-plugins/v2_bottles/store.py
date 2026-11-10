@@ -94,6 +94,12 @@ class BottleStore:
                 pass
         return total
 
+    def _reusable_bytes(self) -> int:
+        """Bytes in SQLite freelist pages available to subsequent writes."""
+        page_size = int(self._conn.execute("PRAGMA page_size").fetchone()[0])
+        free_pages = int(self._conn.execute("PRAGMA freelist_count").fetchone()[0])
+        return page_size * free_pages
+
     def add(self, *, content: str, group_id: str, sender_qq: str, sender_name: str,
             anonymous: bool, max_count: int, max_disk_bytes: int,
             now: int | None = None) -> dict[str, Any]:
@@ -102,6 +108,10 @@ class BottleStore:
         display_time = format_bottle_time(now)
         estimate = len(content.encode("utf-8")) + 512
         with self._lock:
+            close_to_limit = self.disk_bytes() + estimate > max_disk_bytes
+            if close_to_limit:
+                # Release WAL space before estimating genuinely new pages.
+                self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             try:
                 self._conn.execute("BEGIN IMMEDIATE")
                 total = int(
@@ -109,7 +119,8 @@ class BottleStore:
                 )
                 if total >= max_count:
                     raise BottleLimitError("count")
-                if self.disk_bytes() + estimate > max_disk_bytes:
+                growth = max(0, estimate - self._reusable_bytes())
+                if self.disk_bytes() + growth > max_disk_bytes:
                     raise BottleLimitError("disk")
                 cursor = self._conn.execute(
                     "INSERT INTO bottles(content, group_id, sender_qq, sender_name, "
@@ -122,6 +133,12 @@ class BottleStore:
             except BaseException:
                 self._conn.rollback()
                 raise
+            if close_to_limit:
+                # Reuse may still write WAL frames; truncate after commit.
+                try:
+                    self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                except sqlite3.Error:
+                    pass  # Never report a committed bottle as a failed insert.
         return self._row_by_id(int(cursor.lastrowid))
 
     def _row_by_id(self, bottle_id: int) -> dict[str, Any]:
@@ -152,6 +169,12 @@ class BottleStore:
             except BaseException:
                 self._conn.rollback()
                 raise
+            if cursor.rowcount:
+                # Recycle freed pages and release any retained WAL file bytes.
+                try:
+                    self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                except sqlite3.Error:
+                    pass
         return int(cursor.rowcount)
 
     def random_one(self) -> dict[str, Any] | None:
